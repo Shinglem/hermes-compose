@@ -56,9 +56,13 @@ jobs:
           "TOOLCHAIN_VER=$v" >> $env:GITHUB_ENV
 
       # ⚠️ 不能用 actions/setup-java：它取的是 GitHub 预装（hostedtoolcache）的 Temurin，
-      # 那份被裁掉了 `jmods/`（省磁盘），于是 jlink 直接失败 —— 实测 run 41809831894。
-      # 自己从 Adoptium 下完整 JDK（含 jmods 与 jpackage）。
-      - name: 安装 Temurin JDK（含 jmods）
+      # 那份被裁得更狠，连 bin 都可能不全 —— 实测 run 41809831894 直接缺 jmods。
+      # 自己从 Adoptium 下完整 JDK（含 jpackage 与 lib/modules）。
+      #
+      # 注意：Adoptium 的 Temurin 27 Windows zip **不含 jmods**（实测 497 条目、无 jmods 目录）——
+      # 那是 JDK 24+ 的 JEP 493：jlink 直接从自己的 lib/modules 裁剪，不再需要 jmods。
+      # 所以这里只断言 lib/modules 与 jlink.exe，不断言 jmods。
+      - name: 安装 Temurin JDK
         run: |
           $ErrorActionPreference = 'Stop'
           $url = "https://api.adoptium.net/v3/binary/latest/$env:JDK_VERSION/ga/windows/x64/jdk/hotspot/normal/eclipse?project=jdk"
@@ -69,15 +73,13 @@ jobs:
           Write-Host ('{0:N0} MB' -f ((Get-Item $zip).Length / 1MB))
 
           New-Item -ItemType Directory -Force 'C:\jdk' | Out-Null
-          & 'C:\Program Files\7-Zip\7z.exe' x $zip '-oC:\jdk' -y | Out-Null
-          if ($LASTEXITCODE -gt 1) { throw "解压 JDK 失败，exit=$LASTEXITCODE" }
+          Expand-Archive -LiteralPath $zip -DestinationPath 'C:\jdk' -Force
+          if ($LASTEXITCODE -ne 0) { throw "解压 JDK 失败，exit=$LASTEXITCODE" }
           Remove-Item $zip -Force
 
           $home_ = (Get-ChildItem 'C:\jdk' -Directory | Select-Object -First 1).FullName
           if (-not $home_) { throw 'C:\jdk 下没有解出 JDK 目录' }
-          if (-not (Test-Path "$home_\jmods\java.base.jmod")) {
-            throw "$home_\jmods 缺失：这份 JDK 不完整，无法 jlink"
-          }
+          if (-not (Test-Path "$home_\lib\modules")) { throw "$home_\lib\modules 缺失：这份 JDK 不完整" }
           "JAVA_HOME=$home_" >> $env:GITHUB_ENV
           "$home_\bin" >> $env:GITHUB_PATH
           Write-Host "JAVA_HOME=$home_"
@@ -89,14 +91,13 @@ jobs:
             $p = Join-Path $env:JAVA_HOME "bin\$t.exe"
             if (-not (Test-Path $p)) { throw "缺少 $p（需要的是完整 JDK，不是 JRE）" }
           }
-          if (-not (Test-Path "$env:JAVA_HOME\jmods\java.base.jmod")) {
-            throw "缺少 $env:JAVA_HOME\jmods，无法 jlink 裁剪"
-          }
           & "$env:JAVA_HOME\bin\java.exe" -version
           & "$env:JAVA_HOME\bin\jpackage.exe" --version
           $impl = (Select-String -Path "$env:JAVA_HOME\release" -Pattern '^IMPLEMENTOR=').Line
           Write-Host "工具链：$impl"
           if ($impl -notmatch 'Adoptium') { throw "当前 JDK 不是 Adoptium Temurin：$impl" }
+          $hasJmods = Test-Path "$env:JAVA_HOME\jmods\java.base.jmod"
+          Write-Host "jmods：$hasJmods（false 时走 JEP 493，jlink 从 lib/modules 裁剪）"
 
       - uses: gradle/actions/setup-gradle@v5
 

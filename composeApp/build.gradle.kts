@@ -390,24 +390,25 @@ val jlinkRuntimeDir = layout.buildDirectory.dir("jlink-runtime")
  */
 val jlinkReleaseRuntime by tasks.registering(Exec::class) {
     group = "distribution"
-    description = "用 jmods jlink 出裁剪运行时（需 hermes.jmods.dir 指向含 jmods 的 JDK）"
+    description = "用 jlink 出裁剪运行时（JDK 有 jmods 用它，没有就走 JEP 493）"
 
     val jmods = hermesJmodsDir
-    val sdkHome = jmods?.parentFile
-    val jlinkExe = sdkHome?.let { File(it, "bin/jlink.exe") }
+    // jlink 自己来自 [hermesRtDir]（跑 Gradle 的那份 JDK，CI 里就是刚装的 Temurin）。
+    val jlinkExe = hermesRtDir?.let { File(it, "bin/jlink.exe") }
 
     onlyIf {
         when {
-            jmods == null || sdkHome == null || jlinkExe == null || !jlinkExe.isFile -> throw GradleException(
-                "找不到 jmods。裁剪 rt/ 需要一个**含 jmods 的 JDK**（JBR 要 `jbrsdk-*` 而不是 `jbr-*`）。\n" +
-                    "在 local.properties 里写 hermes.jmods.dir=<jbrsdk 目录>，或用 -Phermes.jmods.dir=<dir>。\n" +
-                    "不配也能出成品：会退回整目录拷贝（体积约 170 MB，约 3 倍于此）。",
+            jlinkExe == null || !jlinkExe.isFile -> throw GradleException(
+                "找不到 jlink：${hermesRtDir ?: "(未配置 hermes.rt.dir)"}\\bin\\jlink.exe。\n" +
+                    "在 .local/local.properties 里写 hermes.rt.dir=<JDK 目录>，或用 -Phermes.rt.dir=<dir>。\n" +
+                    "不配也能出成品：会退回整目录拷贝（体积大 2~3 倍）。",
             )
             else -> true
         }
     }
 
-    // 只比路径 + 模块列表：jmods 有 89 MB，逐文件算 hash 得不偿失。
+    // 只比路径 + 模块列表：jmods 有几十 MB，逐文件算 hash 得不偿失。
+    inputs.property("jlink", jlinkExe?.absolutePath.orEmpty())
     inputs.property("jmods", jmods?.absolutePath.orEmpty())
     inputs.property("modules", runtimeModules)
     outputs.dir(jlinkRuntimeDir)
@@ -415,18 +416,28 @@ val jlinkReleaseRuntime by tasks.registering(Exec::class) {
     doFirst {
         val out = jlinkRuntimeDir.get().asFile
         out.deleteRecursively()
-        logger.lifecycle("[release-test] jlink 裁剪运行时：${runtimeModules.size} 个模块 → $out")
+        // JDK 24+ 的 JEP 493：发行版不带 jmods 时，jlink 直接从 JDK 自己的 lib/modules 裁剪
+        // （`--module-path` 都不需要）。Adoptium 的 Temurin 27 Windows zip 就是这种（实测无 jmods）。
+        val useJmods = jmods != null
+        logger.lifecycle(
+            "[release-test] jlink 裁剪运行时：${runtimeModules.size} 个模块 → $out" +
+                if (useJmods) "（jmods 模式）" else "（JEP 493，无 jmods）",
+        )
         commandLine(
-            listOf(
-                jlinkExe!!.absolutePath,
-                "--module-path", jmods!!.absolutePath,
-                "--add-modules", runtimeModules.joinToString(","),
-                "--output", out.absolutePath,
-                // 去掉 class 调试信息、C 头文件、man 页；zip-6 压缩 jimage。
-                "--strip-debug", "--no-header-files", "--no-man-pages", "--compress=zip-6",
-                // 只带中英文 locale 数据（jdk.localedata 默认全带，能省 10 MB+）。
-                "--include-locales=en,zh",
-            ),
+            buildList {
+                add(jlinkExe!!.absolutePath)
+                if (useJmods) addAll(listOf("--module-path", jmods!!.absolutePath))
+                addAll(
+                    listOf(
+                        "--add-modules", runtimeModules.joinToString(","),
+                        "--output", out.absolutePath,
+                        // 去掉 class 调试信息、C 头文件、man 页；zip-6 压缩 jimage。
+                        "--strip-debug", "--no-header-files", "--no-man-pages", "--compress=zip-6",
+                        // 只带中英文 locale 数据（jdk.localedata 默认全带，能省 10 MB+）。
+                        "--include-locales=en,zh",
+                    ),
+                )
+            },
         )
     }
 
@@ -441,29 +452,31 @@ val jlinkReleaseRuntime by tasks.registering(Exec::class) {
  * 把运行时放进 `release-test/rt`。
  *
  * 两种模式：
- * - 配了 jmods → 依赖 [jlinkReleaseRuntime]，用 jlink 产物**覆盖** `rt/`（每次重建，保证是裁剪版）
- * - 没配 → 整目录拷贝 JDK/JBR（约 170 MB），只在缺失或 `-Phermes.rt.refresh` 时执行
+ * - [hermesRtDir] 里有 `bin/jlink.exe` → 依赖 [jlinkReleaseRuntime]，用 jlink 产物**覆盖** `rt/`
+ *   （每次重建，保证是裁剪版）。JDK 自带 jmods 就用 jmods，没有就走 JEP 493。
+ * - 否则 → 整目录拷贝 JDK（体积大 2~3 倍），只在缺失或 `-Phermes.rt.refresh` 时执行。
  *
- * 后者保留"用户可整体替换 rt/"的旧行为：老配置（`hermes.rt.dir` 指向 `jbr-*`）不受影响。
+ * 后者保留"用户可整体替换 rt/"的行为：CI 的 desktop-release 传的就是已经准备好的 `rt/`。
  */
 val syncReleaseRt by tasks.registering {
     group = "distribution"
-    description = "准备 release-test/rt（有 jmods 时 jlink 裁剪，否则整目录拷贝）"
+    description = "准备 release-test/rt（能 jlink 就裁剪，否则整目录拷贝）"
 
     val jmods = hermesJmodsDir
     val rtSource = hermesRtDir
+    val canJlink = rtSource?.let { File(it, "bin/jlink.exe").isFile } == true
     val target = releaseTestDir.dir("rt").asFile
     val refresh = providers.gradleProperty("hermes.rt.refresh").isPresent
 
-    if (jmods != null) dependsOn(jlinkReleaseRuntime)
+    if (canJlink) dependsOn(jlinkReleaseRuntime)
 
-    // 裁剪模式每次都重建（拷贝 60 MB，秒级）；拷贝模式沿用"缺失或 refresh 才动"。
+    // 裁剪模式每次都重建（拷贝几十 MB，秒级）；拷贝模式沿用"缺失或 refresh 才动"。
     outputs.upToDateWhen { false }
     onlyIf {
         when {
-            jmods != null -> true
+            canJlink -> true
             rtSource == null -> throw GradleException(
-                "未指定 JDK/JBR 目录。请在 local.properties 里写 hermes.rt.dir=<path>，" +
+                "未指定 JDK 目录。请在 .local/local.properties 里写 hermes.rt.dir=<path>，" +
                     "或用 -Phermes.rt.dir=<path>。",
             )
             else -> refresh || !File(target, "bin/java.exe").exists()
@@ -473,7 +486,7 @@ val syncReleaseRt by tasks.registering {
     doLast {
         target.deleteRecursively()
         target.mkdirs()
-        if (jmods != null) {
+        if (canJlink) {
             copy {
                 from(jlinkRuntimeDir)
                 into(target)
@@ -482,12 +495,12 @@ val syncReleaseRt by tasks.registering {
         } else {
             copy {
                 from(rtSource!!)
-                // `jmods/` 是 jlink 的输入，不是运行时的一部分：源指到 SDK（如 jbrsdk）时
-                // 别把 268 MB 的 jmod 拷进成品。
+                // `jmods/` 是 jlink 的输入，不是运行时的一部分：源指到完整 SDK 时
+                // 别把它拷进成品。
                 exclude("jmods/**")
                 into(target)
             }
-            logger.lifecycle("[release-test] rt/ ← $rtSource（未裁剪，缺 jmods）")
+            logger.lifecycle("[release-test] rt/ ← $rtSource（未裁剪：该目录里没有 bin/jlink.exe）")
         }
         val size = target.walkTopDown().filter { it.isFile }.sumOf { it.length() }
         val files = target.walkTopDown().count { it.isFile }
