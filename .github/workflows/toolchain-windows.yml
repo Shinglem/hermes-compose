@@ -261,11 +261,25 @@ jobs:
           gh release view $tag --repo $repo 2>$null
           if ($LASTEXITCODE -eq 0) { throw "$tag 已存在。工具链版本号只增不改，请用新的 version 重跑" }
 
-          gh release create $tag --repo $repo --target $env:GITHUB_SHA --title $title --notes-file $notesPath
-          if ($LASTEXITCODE -ne 0) { throw "gh release create 失败，exit=$LASTEXITCODE" }
+          # GitHub 的 releases API 偶发 500（本轮实测遇到过），重试几次再判失败。
+          $created = $false
+          for ($i = 1; $i -le 4 -and -not $created; $i++) {
+            gh release create $tag --repo $repo --target $env:GITHUB_SHA --title $title --notes-file $notesPath
+            if ($LASTEXITCODE -eq 0) { $created = $true; break }
+            Write-Warning "gh release create 第 $i 次失败（exit=$LASTEXITCODE），$($i * 5) 秒后重试"
+            Start-Sleep -Seconds ($i * 5)
+          }
+          if (-not $created) { throw "gh release create 连续失败" }
+
           $files = @(Get-ChildItem $dist -File | ForEach-Object { $_.FullName })
-          gh release upload $tag @files --repo $repo
-          if ($LASTEXITCODE -ne 0) { throw "gh release upload 失败，exit=$LASTEXITCODE" }
+          $uploaded = $false
+          for ($i = 1; $i -le 4 -and -not $uploaded; $i++) {
+            gh release upload $tag @files --repo $repo
+            if ($LASTEXITCODE -eq 0) { $uploaded = $true; break }
+            Write-Warning "gh release upload 第 $i 次失败（exit=$LASTEXITCODE），$($i * 5) 秒后重试"
+            Start-Sleep -Seconds ($i * 5)
+          }
+          if (-not $uploaded) { throw "gh release upload 连续失败" }
           Write-Host "已发布 https://github.com/$repo/releases/tag/$tag"
 
       - name: 清理
