@@ -1,0 +1,285 @@
+# 只发布**桌面端外壳**：不含 hermes payload，默认 local 模式（用户自己下载 bundle 放进去）。
+#
+# 三个输入：
+#   desktop_version   桌面版本，默认取 composeApp/build.gradle.kts 的 appVersion
+#   hermes_version    payload 版本（Shinglem/hermes-bundle 的 tag，例如 0.22.5）
+#   toolchain_version 工具链版本（toolchain-v<N>，见 toolchain-windows.yml）
+#
+# 产物：hermes-desktop-compose-<desktop>-<hermes>-windows-x64.7z.001
+#   Release tag = v<desktop>-<hermes>（例如 v0.4.0-0.22.5），标题不带平台 ——
+#   同一个 Release 以后要能放多个桌面平台的产物，平台只体现在文件名里。
+#
+# 组件从工具链 Release 取（不重跑 jpackage / jlink）：
+#   launcher-windows-x64.zip → 成品根目录
+#   runtime-windows-x64.zip  → 成品 rt/
+#   取件后 rt 里没有 jmods，syncReleaseRt 的 onlyIf 为 false，本地的 jlink 会被跳过。
+name: desktop-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      desktop_version:
+        description: 桌面版本（留空 = 取 build.gradle.kts 的 appVersion，例如 0.4.0）
+        type: string
+        default: ''
+      hermes_version:
+        description: payload 版本（hermes-bundle 的 tag，例如 0.22.5；留空 = 取该仓库 latest）
+        type: string
+        default: ''
+      toolchain_version:
+        description: 工具链版本号（toolchain-v<N> 里的 N，例如 1）
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+env:
+  PAYLOAD_REPO: Shinglem/hermes-bundle
+  JDK_VERSION: '27'
+  PLATFORM: windows-x64
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      # Markdown 渲染实现在 modules/markdown-one（submodule），不递归 checkout 会缺源码。
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: 预检
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path 'C:\Program Files\7-Zip\7z.exe')) { throw '缺少 7-Zip' }
+          Get-PSDrive C | Format-Table Name, @{ n = 'FreeGB'; e = { [math]::Round($_.Free / 1GB, 1) } } | Out-String | Write-Host
+          exit 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JDK_VERSION }}
+
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: 解析版本
+        id: ver
+        env:
+          WANT_DESKTOP: ${{ inputs.desktop_version }}
+          WANT_HERMES: ${{ inputs.hermes_version }}
+          WANT_TOOLCHAIN: ${{ inputs.toolchain_version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $desktop = if ($env:WANT_DESKTOP) { $env:WANT_DESKTOP.Trim() } else {
+            (Select-String -Path 'composeApp\build.gradle.kts' -Pattern '^val appVersion = "([^"]+)"' |
+              Select-Object -First 1).Matches[0].Groups[1].Value
+          }
+          if ($desktop -notmatch '^\d+\.\d+\.\d+$') { throw "desktop_version 必须形如 0.4.0，实际 '$desktop'" }
+
+          $toolchain = $env:WANT_TOOLCHAIN.Trim()
+          if ($toolchain -notmatch '^\d+$') { throw "toolchain_version 必须是纯数字，实际 '$toolchain'" }
+
+          # payload 版本：留空就取 bundle 仓库 latest；统一带上 v 前缀
+          $hermes = if ($env:WANT_HERMES) { $env:WANT_HERMES.Trim().TrimStart('v') } else { '' }
+          if (-not $hermes) {
+            $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:PAYLOAD_REPO/releases/latest" `
+                     -Headers @{ Accept = 'application/vnd.github+json' } -TimeoutSec 60
+            $hermes = $rel.tag_name.TrimStart('v')
+          }
+          if ($hermes -notmatch '^\d+\.\d+\.\d+$') { throw "hermes_version 解析失败：'$hermes'" }
+
+          $payloadUrl = "https://github.com/$env:PAYLOAD_REPO/releases/tag/v$hermes"
+          Write-Host "desktop=$desktop  hermes=$hermes  toolchain=$toolchain"
+          Write-Host "payload 页：$payloadUrl"
+
+          "desktop=$desktop" >> $env:GITHUB_OUTPUT
+          "hermes=$hermes" >> $env:GITHUB_OUTPUT
+          "toolchain=$toolchain" >> $env:GITHUB_OUTPUT
+          "tag=v$desktop-$hermes" >> $env:GITHUB_OUTPUT
+          "asset=hermes-desktop-compose-$desktop-$hermes-$env:PLATFORM" >> $env:GITHUB_OUTPUT
+          "payload_url=$payloadUrl" >> $env:GITHUB_OUTPUT
+
+      - name: 取工具链组件（启动器 + 运行时）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOOLCHAIN: ${{ steps.ver.outputs.toolchain }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = "toolchain-v$env:TOOLCHAIN"
+          $repo = $env:GITHUB_REPOSITORY
+          $work = 'C:\work'
+          New-Item -ItemType Directory -Force $work, 'packaging\launcher', 'release-test\rt' | Out-Null
+
+          Write-Host "--- $tag ---"
+          gh release download $tag --repo $repo --pattern 'launcher-windows-x64.zip' --dir $work --clobber
+          if ($LASTEXITCODE -ne 0) { throw "下载 launcher 失败（$tag），exit=$LASTEXITCODE" }
+          gh release download $tag --repo $repo --pattern 'runtime-windows-x64.zip' --dir $work --clobber
+          if ($LASTEXITCODE -ne 0) { throw "下载 runtime 失败（$tag），exit=$LASTEXITCODE" }
+
+          Expand-Archive -Path "$work\launcher-windows-x64.zip" -DestinationPath 'packaging\launcher' -Force
+          Expand-Archive -Path "$work\runtime-windows-x64.zip" -DestinationPath 'release-test\rt' -Force
+          Remove-Item "$work\launcher-windows-x64.zip", "$work\runtime-windows-x64.zip" -Force
+
+          foreach ($p in 'packaging\launcher\hermes-desktop-compose.exe', 'release-test\rt\bin\java.exe') {
+            if (-not (Test-Path $p)) { throw "缺少 $p（$tag 里没有预期内容？）" }
+          }
+          # rt 里不能有 jmods，否则 syncReleaseRt 会重新 jlink 并覆盖掉工具链那份
+          if (Test-Path 'release-test\rt\jmods') { throw 'release-test\rt 里出现了 jmods，会导致重新 jlink' }
+          $rtMb = [math]::Round((Get-ChildItem 'release-test\rt' -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 1)
+          Write-Host "launcher=$((Get-Item 'packaging\launcher\hermes-desktop-compose.exe').Length) B  rt=$rtMb MB"
+
+      - name: 编译外壳并组装 release-test
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rtPath = (Resolve-Path 'release-test\rt').Path
+          $gradleArgs = @(':composeApp:syncReleaseTest', "-Phermes.rt.dir=$rtPath")
+          Write-Host "gradlew $($gradleArgs -join ' ')"
+          & .\gradlew.bat @gradleArgs
+          if ($LASTEXITCODE -ne 0) { throw "gradle 失败，exit=$LASTEXITCODE" }
+
+          foreach ($p in 'hermes-desktop-compose.exe', 'app\hermes-desktop-compose.cfg', 'bin\App.jar', 'lib', 'rt\bin\java.exe', 'config\config.json') {
+            if (-not (Test-Path "release-test\$p")) { throw "缺少 release-test\$p" }
+          }
+          # 外壳形态：**不含** hermes/（payload 由用户自己下载放入）
+          if (Test-Path 'release-test\hermes') {
+            throw 'release-test\hermes 存在：本流程只产纯外壳，payload 应由用户自己放进安装目录'
+          }
+          $mb = [math]::Round((Get-ChildItem 'release-test' -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 1)
+          Write-Host "外壳合计 $mb MB"
+
+      - name: 组装产物
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dst = 'C:\work\dist'
+          Remove-Item $dst -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $dst | Out-Null
+          # 只取成品需要的部分，不复制 data/ logs/ hermes/
+          foreach ($item in 'hermes-desktop-compose.exe', 'app', 'bin', 'lib', 'rt', 'config') {
+            Copy-Item "release-test\$item" $dst -Recurse -Force
+          }
+
+          # 默认 local：模板就该是 local，这里只做断言（模板被改坏要立刻发现）
+          $cfg = Get-Content (Join-Path $dst 'config\config.json') -Raw | ConvertFrom-Json
+          if ($cfg.backend.mode -ne 'local') { throw "默认模式应为 local，实际 $($cfg.backend.mode)" }
+
+          foreach ($p in 'hermes-desktop-compose.exe', 'config\config.json', 'rt\bin\java.exe', 'app\hermes-desktop-compose.cfg') {
+            if (-not (Test-Path (Join-Path $dst $p))) { throw "产物缺少 $p" }
+          }
+          if (Test-Path (Join-Path $dst 'hermes')) { throw '产物里不应有 hermes/' }
+          Write-Host "产物就绪：$([math]::Round((Get-ChildItem $dst -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 1)) MB"
+
+      - name: 压缩并算摘要
+        env:
+          ASSET: ${{ steps.ver.outputs.asset }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sevenZip = 'C:\Program Files\7-Zip\7z.exe'
+          $dir = 'C:\work\dist'
+          $name = "$env:ASSET.7z"
+          $out = "C:\work\$name"
+          Remove-Item "$out*" -Force -ErrorAction SilentlyContinue
+          Push-Location $dir
+          try {
+            # 1900 MiB 分卷：GitHub 单文件上限 2 GiB
+            & $sevenZip a -t7z -mx=5 -mmt=on -v1900m "..\$name" .
+            if ($LASTEXITCODE -gt 1) { throw "7z 失败，exit=$LASTEXITCODE" }
+          } finally { Pop-Location }
+
+          $vols = Get-ChildItem "$out.*" | Sort-Object Name
+          if ($vols.Count -eq 0) { $vols = @(Get-Item $out) }
+          foreach ($v in $vols) { if ($v.Length -ge 2GB) { throw "$($v.Name) 超过 2 GiB" } }
+          Write-Host ("{0} 卷 / {1:N0} MB" -f $vols.Count, (($vols | Measure-Object Length -Sum).Sum / 1MB))
+
+          $vols.FullName | Set-Content 'C:\work\artifacts.txt'
+          $lines = foreach ($f in $vols) { '{0}  {1}' -f (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower(), $f.Name }
+          $lines | Set-Content 'C:\work\SHA256SUMS.txt' -Encoding ascii
+          $lines | ForEach-Object { Write-Host $_ }
+
+      - name: 发布 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DESKTOP: ${{ steps.ver.outputs.desktop }}
+          HERMES: ${{ steps.ver.outputs.hermes }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          ASSET: ${{ steps.ver.outputs.asset }}
+          PAYLOAD_URL: ${{ steps.ver.outputs.payload_url }}
+          TOOLCHAIN: ${{ steps.ver.outputs.toolchain }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = $env:GITHUB_REPOSITORY
+          # 标题不带平台：同一个 Release 以后要能放多个平台产物，平台只在文件名里
+          $title = "hermes-desktop-compose $env:DESKTOP (hermes $env:HERMES)"
+          $sizeMb = [math]::Round((Get-ChildItem 'C:\work\dist' -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 0)
+
+          $notes = @(
+            "桌面端 **$env:DESKTOP**，配套 Hermes payload **$env:HERMES**（Windows x64）。"
+            ''
+            "运行: https://github.com/$repo/actions/runs/$env:GITHUB_RUN_ID"
+            ''
+            '## 这一包是什么'
+            ''
+            '**只有桌面外壳**（约 ' + $sizeMb + ' MB）：不内置 payload、不需要另外的变体选择，'
+            '默认就是 `local` 模式。首次使用要自己补一份 payload，见下一节。'
+            ''
+            '## 首次使用：补 payload（local 模式）'
+            ''
+            '1. 打开 payload 页：' + $env:PAYLOAD_URL
+            '2. 下载那个 Release 的全部 `*.7z.001` 分卷（缺一卷就解不开），用 7-Zip 解压'
+            '3. 解压得到 `payload\` 目录 —— 把它**重命名成 `hermes`**，放到本客户端根目录，'
+            '   与 `hermes-desktop-compose.exe` 同级：'
+            ''
+            '   ```'
+            '   hermes-desktop-compose\'
+            '     hermes-desktop-compose.exe'
+            '     hermes\            ← 这一步必须有，否则起不来（会提示缺 payload）'
+            '       bin\hermes.exe'
+            '       manifest.json'
+            '       hermes-agent\…'
+            '     app\  bin\  lib\  rt\  config\'
+            '   ```'
+            ''
+            '4. 双击 `hermes-desktop-compose.exe`'
+            ''
+            '## 只想当纯前端（remote 模式）'
+            ''
+            '不用下 payload。把 `config\config.json` 的 `backend.mode` 改成 `remote`，'
+            '客户端会连本机 dashboard（默认 `http://127.0.0.1:9119`）。'
+            ''
+            '## 组件来源'
+            ''
+            "- 启动器与裁剪运行时：本仓库 ``toolchain-v$env:TOOLCHAIN``（Temurin $env:JDK_VERSION）"
+            "- payload：``Shinglem/hermes-bundle`` 的 ``v$env:HERMES``"
+          )
+          $notesPath = 'C:\work\RELEASE_NOTES.md'
+          Set-Content $notesPath ($notes -join "`n") -Encoding utf8NoBOM
+
+          gh release view $env:TAG --repo $repo 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Warning "$env:TAG 已存在，改为覆盖上传"
+            gh release edit $env:TAG --repo $repo --target $env:GITHUB_SHA --title $title --notes-file $notesPath
+          } else {
+            gh release create $env:TAG --repo $repo --target $env:GITHUB_SHA --title $title --notes-file $notesPath
+            if ($LASTEXITCODE -ne 0) { throw "gh release create 失败，exit=$LASTEXITCODE" }
+          }
+
+          $files = @(Get-Content 'C:\work\artifacts.txt')
+          $files += 'C:\work\SHA256SUMS.txt'
+          Write-Host "上传 $($files.Count) 个文件"
+          gh release upload $env:TAG @files --repo $repo --clobber
+          if ($LASTEXITCODE -ne 0) { throw "gh release upload 失败，exit=$LASTEXITCODE" }
+          Write-Host "已发布 https://github.com/$repo/releases/tag/$env:TAG"
+
+      - name: 清理
+        if: always()
+        run: |
+          Remove-Item 'C:\work\dist' -Recurse -Force -ErrorAction SilentlyContinue
+          exit 0

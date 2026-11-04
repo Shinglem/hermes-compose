@@ -1,0 +1,38 @@
+# ===========================================================================
+#  JVM 参数 —— 一行一个，# 开头为注释。
+#  构建时逐行写入 app/Hermes.cfg 的 [JavaOptions]，成品里只有那一个文件是事实源；
+#  App.bat（开发排障用，不随成品下发）也是读同一份 cfg。
+# ===========================================================================
+
+# 堆上限。Compose/Skiko 渲染大图时 512m 会 OOM。
+-Xmx1g
+
+# JDK 24+ 必须显式开 native access，否则 Skiko 加载 native 库会被告警拦截
+# （JEP 472；未来 JDK 会直接阻止，不是可选项）。
+--enable-native-access=ALL-UNNAMED
+
+# --- 字符编码统一 UTF-8 ---
+# file.encoding 在 JDK 18+（JEP 400）已默认 UTF-8，显式写出只为跨版本一致。
+-Dfile.encoding=UTF-8
+# stdout/stderr 的默认值是系统 ANSI 代码页（简中 Windows 上是 GBK），必须显式覆盖：
+# 否则重定向 / 管道拿到的字节是 GBK，按 UTF-8 读就是乱码（已实测）。
+-Dstdout.encoding=UTF-8
+-Dstderr.encoding=UTF-8
+-Dstdin.encoding=UTF-8
+
+# 注意：不要设 sun.jnu.encoding。Windows 上它决定文件名在 Java 与本地 API 之间的编码桥接，
+# 改成 UTF-8 会让中文路径打不开。保持系统默认值。
+
+# --- JCEF（内嵌 Chromium）---
+# Temurin 没有 jcef 模块：Java 侧靠 me.friwi:jcefmaven（传递 jcef-api），
+# native 由 me.friwi:jcef-natives-windows-amd64 在构建期解压到安装目录的 `cef/`
+# （见 .design/详细设计/工程与代码/11-JCEF集成.md）。
+#
+# 不需要 `-Djava.library.path`：markdown-one 启动时把 CEF 的加载器换成按绝对路径加载
+# （`SystemBootstrap.setLoader`），所以 `cef/` 在哪都行、也不需要 JVM 目录可写。
+#
+# JCEF 内部依赖 AWT 的 peer 实现，必须放开这两个包（缺了会在建浏览器时报 IllegalAccessError）。
+--add-opens=java.desktop/sun.awt=ALL-UNNAMED
+--add-opens=java.desktop/java.awt.peer=ALL-UNNAMED
+# JDK 24+ 加载 native 需要显式许可（上面已有 --enable-native-access=ALL-UNNAMED）：
+# 用 ALL-UNNAMED 而不是 jcef，因为 jcefmaven 不是命名模块。

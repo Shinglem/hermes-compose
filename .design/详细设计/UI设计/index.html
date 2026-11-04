@@ -1,0 +1,1343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Hermes 桌面端 · UI 视觉稿（非严格 M3 参考稿）</title>
+<style>
+/* ============================================================
+   M3 baseline 色彩 token（浅色）
+   ============================================================ */
+:root{
+  --primary:#6750A4;             --on-primary:#FFFFFF;
+  --primary-container:#EADDFF;   --on-primary-container:#21005D;
+  --secondary:#625B71;           --secondary-container:#E8DEF8;
+  --on-secondary-container:#1D192B;
+  --tertiary:#7D5260;            --tertiary-container:#FFD8E4;
+  --on-tertiary-container:#31111D;
+  --error:#B3261E;               --error-container:#F9DEDC;
+  --on-error-container:#410E0B;
+  --surface:#FEF7FF;
+  --surface-container-lowest:#FFFFFF;
+  --surface-container-low:#F7F2FA;
+  --surface-container:#F3EDF7;
+  --surface-container-high:#ECE6F0;
+  --surface-container-highest:#E6E0E9;
+  --on-surface:#1D1B20;
+  --on-surface-variant:#49454F;
+  --outline:#79747E;
+  --outline-variant:#CAC4D0;
+  --inverse-surface:#322F35;
+
+  --r-xs:4px; --r-s:8px; --r-m:12px; --r-l:16px; --r-xl:28px;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei UI","Microsoft YaHei","Noto Sans SC",sans-serif;
+  --mono:"Cascadia Mono","JetBrains Mono",Consolas,"Courier New",monospace;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:var(--font);
+  background:#CAC4D0;
+  color:var(--on-surface);
+  display:flex;flex-direction:column;align-items:center;
+  padding:24px 16px 40px;gap:16px;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ============================================================
+   设计稿切换条（不属于产品 UI）
+   ============================================================ */
+.spec-bar{
+  width:1280px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  background:var(--inverse-surface);color:#E6E0E9;
+  border-radius:var(--r-m);padding:10px 14px;font-size:12px;
+}
+.spec-bar strong{font-weight:600;font-size:12px;color:#fff;margin-right:4px}
+.spec-bar .hint{color:#CAC4D0;margin-left:auto;font-size:11px}
+.spec-bar .badge{
+  font-size:11px;font-weight:700;color:#31111D;background:#FFD8E4;
+  border-radius:999px;padding:3px 10px;letter-spacing:.3px;
+}
+.spec-bar button{
+  font:inherit;font-size:12px;color:#E6E0E9;background:transparent;
+  border:1px solid #49454F;border-radius:999px;padding:5px 12px;cursor:pointer;
+}
+.spec-bar button:hover{background:#49454F}
+.spec-bar button[aria-pressed="true"]{background:var(--primary-container);color:var(--on-primary-container);border-color:transparent;font-weight:600}
+
+/* 设计约定（页面级注释，不属于产品 UI） */
+.spec-note{
+  width:1280px;display:flex;gap:12px;align-items:flex-start;
+  background:#FFFFFF;border:1px dashed var(--outline);border-left:4px solid var(--primary);
+  border-radius:var(--r-s);padding:10px 14px;
+  font-size:12px;line-height:19px;color:var(--on-surface-variant);
+}
+.spec-note strong{color:var(--on-surface);font-size:12px;white-space:nowrap}
+.spec-note b{color:var(--on-surface);font-weight:600}
+
+/* ============================================================
+   窗口
+   ============================================================ */
+.window{
+  width:1280px;height:800px;background:var(--surface);
+  border-radius:var(--r-m);overflow:hidden;display:flex;flex-direction:column;
+  box-shadow:0 18px 48px rgba(0,0,0,.28),0 2px 6px rgba(0,0,0,.12);
+}
+.view{display:none;flex:1;min-height:0;flex-direction:column}
+.view.active{display:flex}
+.body{flex:1;min-height:0;display:flex}
+
+/* ============================================================
+   左 rail（64dp，自绘，不用 NavigationRail）
+   ============================================================ */
+.rail{
+  width:64px;flex:0 0 64px;background:var(--surface-container-low);
+  border-right:1px solid var(--outline-variant);
+  display:flex;flex-direction:column;align-items:center;
+  padding:10px 0;gap:6px;overflow-y:auto;scrollbar-width:none;
+}
+.rail::-webkit-scrollbar{display:none}
+.rail-item{
+  width:48px;height:48px;flex:0 0 48px;border:none;background:transparent;
+  display:grid;place-items:center;cursor:pointer;position:relative;padding:0;
+}
+.rail-frame{
+  width:44px;height:44px;border-radius:var(--r-l);
+  display:grid;place-items:center;position:relative;
+  transition:background .12s ease;
+}
+.rail-item:hover .rail-frame{background:var(--surface-container-high)}
+.rail-item[aria-current="true"] .rail-frame{background:var(--secondary-container)}
+.rail-item:focus-visible .rail-frame{outline:2px solid var(--primary);outline-offset:2px}
+
+.avatar{
+  width:36px;height:36px;border-radius:50%;display:grid;place-items:center;
+  font-size:14px;font-weight:600;letter-spacing:.2px;color:#fff;
+  user-select:none;
+}
+.avatar.global{
+  border-radius:var(--r-m);background:var(--primary);color:var(--on-primary);
+}
+.rail-dot{
+  position:absolute;right:5px;bottom:5px;width:9px;height:9px;border-radius:50%;
+  background:var(--tertiary);border:2px solid var(--surface-container-low);
+}
+.rail-sep{width:24px;height:1px;background:var(--outline-variant);margin:4px 0;flex:0 0 1px}
+.rail-spacer{flex:1 1 auto;min-height:8px}
+.rail svg{display:block}
+
+/* ============================================================
+   中栏 list pane（360dp）
+   ============================================================ */
+.list{
+  width:360px;flex:0 0 360px;background:var(--surface-container-low);
+  border-right:1px solid var(--outline-variant);
+  display:flex;flex-direction:column;min-height:0;
+}
+.list-head{padding:10px 12px 6px;display:flex;flex-direction:column;gap:8px}
+.searchbar{
+  height:44px;border-radius:var(--r-xl);background:var(--surface-container-high);
+  display:flex;align-items:center;gap:10px;padding:0 14px;color:var(--on-surface-variant);
+  font-size:14px;
+}
+.searchbar svg{flex:0 0 auto;opacity:.75}
+.searchbar .ph{flex:1}
+.searchbar .kbd{
+  font:600 11px/1 var(--font);color:var(--on-surface-variant);
+  border:1px solid var(--outline-variant);border-radius:var(--r-xs);padding:3px 5px;
+}
+.list-scroll{flex:1;min-height:0;overflow-y:auto;padding:0 8px 10px}
+.list-scroll::-webkit-scrollbar{width:10px}
+.list-scroll::-webkit-scrollbar-thumb{background:var(--outline-variant);border-radius:6px;border:3px solid var(--surface-container-low)}
+
+.section-label{
+  display:flex;align-items:center;gap:6px;
+  padding:14px 8px 6px;font-size:11px;font-weight:600;letter-spacing:.5px;
+  color:var(--on-surface-variant);text-transform:none;
+}
+.section-label .caret{transition:transform .12s}
+.section-label.collapsed .caret{transform:rotate(-90deg)}
+.section-label .count{margin-left:auto;font-weight:400;opacity:.7}
+
+.row{
+  display:flex;align-items:center;gap:8px;
+  height:52px;padding:0 10px;border-radius:var(--r-m);
+  cursor:pointer;position:relative;
+}
+.row:hover{background:var(--surface-container-high)}
+.row[aria-selected="true"]{background:var(--primary-container)}
+.row[aria-selected="true"] .row-title{color:var(--on-primary-container);font-weight:600}
+.row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.row-title{
+  font-size:14px;line-height:20px;font-weight:500;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.row-sub{font-size:12px;line-height:16px;color:var(--on-surface-variant);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row-meta{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.row-time{font-size:11px;color:var(--on-surface-variant)}
+.unread{width:8px;height:8px;border-radius:50%;background:var(--primary)}
+.row-more{
+  display:none;width:28px;height:28px;border-radius:50%;border:none;background:transparent;
+  color:var(--on-surface-variant);cursor:pointer;place-items:center;
+}
+.row:hover .row-more{display:grid}
+.row-pin{color:var(--on-surface-variant);opacity:.8;display:grid;place-items:center}
+
+.list-foot{padding:8px 12px 12px;border-top:1px solid var(--outline-variant)}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  height:40px;padding:0 18px;border-radius:999px;border:none;cursor:pointer;
+  font:500 14px/20px var(--font);text-decoration:none;
+}
+.btn-filled{background:var(--primary);color:var(--on-primary)}
+.btn-filled:hover{box-shadow:0 1px 3px rgba(0,0,0,.18)}
+.btn-tonal{background:var(--secondary-container);color:var(--on-secondary-container)}
+.btn-outlined{background:transparent;color:var(--primary);border:1px solid var(--outline)}
+.btn-text{background:transparent;color:var(--primary);padding:0 12px}
+.btn-block{width:100%}
+
+/* ============================================================
+   右栏 detail pane
+   ============================================================ */
+.detail{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--surface)}
+.detail-head{
+  height:48px;flex:0 0 48px;display:flex;align-items:center;gap:10px;
+  padding:0 14px;border-bottom:1px solid var(--outline-variant);
+}
+.detail-title{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.model-chip{
+  margin-left:auto;display:inline-flex;align-items:center;gap:6px;
+  height:28px;padding:0 10px;border-radius:var(--r-s);
+  background:var(--surface-container-high);color:var(--on-surface-variant);
+  font-size:12px;cursor:pointer;white-space:nowrap;
+}
+.icon-btn{
+  width:32px;height:32px;border-radius:50%;border:none;background:transparent;
+  color:var(--on-surface-variant);cursor:pointer;display:grid;place-items:center;flex:0 0 auto;
+}
+.icon-btn:hover{background:var(--surface-container-high)}
+
+.messages{flex:1;min-height:0;overflow-y:auto;padding:18px 22px 18px;display:flex;flex-direction:column;gap:18px}
+.messages::-webkit-scrollbar{width:10px}
+.messages::-webkit-scrollbar-thumb{background:var(--outline-variant);border-radius:6px;border:3px solid var(--surface)}
+
+.msg{display:flex;flex-direction:column;gap:6px;max-width:100%}
+.msg-head{display:flex;align-items:center;gap:8px}
+.msg-who{font-size:12px;font-weight:600;color:var(--on-surface-variant)}
+.msg-time{font-size:11px;color:var(--on-surface-variant);opacity:.8}
+.msg-body{font-size:14px;line-height:22px}
+.msg-body p+p{margin-top:10px}
+.msg-body code{
+  font-family:var(--mono);font-size:12.5px;background:var(--surface-container-high);
+  padding:1px 5px;border-radius:var(--r-xs);
+}
+.msg-body ul{margin:8px 0 0 20px}
+.msg-body li{margin-top:4px}
+
+.msg-user .bubble{
+  background:var(--surface-container-high);border-radius:var(--r-m);
+  padding:12px 14px;font-size:14px;line-height:22px;
+}
+.msg-user .msg-body{color:var(--on-surface)}
+
+pre.code{
+  margin:10px 0 0;background:var(--surface-container-lowest);
+  border:1px solid var(--outline-variant);border-radius:var(--r-m);
+  padding:12px 14px;overflow-x:auto;
+}
+pre.code code{background:none;padding:0;font-size:12.5px;line-height:20px;display:block;white-space:pre}
+.code-head{
+  display:flex;align-items:center;gap:8px;font-size:11px;color:var(--on-surface-variant);
+  border-bottom:1px solid var(--outline-variant);padding:8px 14px;margin:-12px -14px 10px;
+  background:var(--surface-container-low);
+}
+.code-head .btn-text{margin-left:auto;height:24px;font-size:11px}
+.tok-key{color:#6750A4}
+.tok-str{color:#116329}
+.tok-com{color:#79747E;font-style:italic}
+
+/* 工具调用卡片 */
+.tool-card{
+  border:1px solid var(--outline-variant);border-radius:var(--r-m);
+  background:var(--surface-container-lowest);overflow:hidden;
+}
+.tool-head{display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--surface-container-low)}
+.tool-name{font-family:var(--mono);font-size:12.5px;font-weight:600}
+.chip{
+  display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;
+  border-radius:var(--r-s);font-size:11px;font-weight:600;white-space:nowrap;
+}
+.chip-ok{background:var(--tertiary-container);color:var(--on-tertiary-container)}
+.chip-run{background:var(--secondary-container);color:var(--on-secondary-container)}
+.chip-err{background:var(--error-container);color:var(--on-error-container)}
+.chip-src{background:var(--surface-container-highest);color:var(--on-surface-variant);font-weight:500}
+.tool-body{padding:10px 12px;font-size:12.5px;line-height:20px;color:var(--on-surface-variant)}
+.tool-row{display:flex;gap:8px;font-family:var(--mono);font-size:12px}
+.tool-row .k{color:var(--on-surface-variant);min-width:64px}
+.tool-row .v{color:var(--on-surface);word-break:break-all}
+.tool-toggle{margin-left:auto;background:none;border:none;color:var(--primary);font:500 11px var(--font);cursor:pointer}
+
+.cursor{display:inline-block;width:7px;height:15px;background:var(--primary);vertical-align:-2px;animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:0}}
+
+/* 消息操作（hover 显示） */
+.msg-actions{display:flex;gap:2px;opacity:0;transition:opacity .12s}
+.msg:hover .msg-actions{opacity:1}
+.msg-actions button{
+  height:26px;padding:0 8px;border-radius:var(--r-s);border:none;background:transparent;
+  color:var(--on-surface-variant);font:500 11px var(--font);cursor:pointer;
+}
+.msg-actions button:hover{background:var(--surface-container-high)}
+
+/* ============================================================
+   composer
+   ============================================================ */
+.composer{border-top:1px solid var(--outline-variant);padding:10px 14px 12px;background:var(--surface)}
+.composer-box{
+  border:1px solid var(--outline-variant);border-radius:var(--r-l);
+  background:var(--surface-container-lowest);padding:10px 12px;
+  display:flex;flex-direction:column;gap:8px;
+}
+.composer-box:focus-within{border-color:var(--primary);box-shadow:0 0 0 1px var(--primary) inset}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip-file{
+  display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;
+  border-radius:var(--r-s);background:var(--secondary-container);
+  color:var(--on-secondary-container);font:500 12px var(--font);
+}
+.chip-file .x{opacity:.6;cursor:pointer}
+.composer-input{
+  font-size:14px;line-height:22px;min-height:22px;color:var(--on-surface);
+  outline:none;
+}
+.composer-input .pm{color:var(--on-surface-variant)}
+.composer-foot{display:flex;align-items:center;gap:4px}
+.composer-foot .right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.hint-text{font-size:11px;color:var(--on-surface-variant)}
+.send-btn{
+  width:36px;height:36px;border-radius:50%;border:none;background:var(--primary);
+  color:var(--on-primary);display:grid;place-items:center;cursor:pointer;flex:0 0 auto;
+}
+
+/* 终端收起条 */
+.terminal{
+  flex:0 0 32px;height:32px;display:flex;align-items:center;gap:8px;
+  padding:0 14px;border-top:1px solid var(--outline-variant);
+  background:var(--surface-container-low);cursor:pointer;
+  font-size:12px;color:var(--on-surface-variant);
+}
+.terminal .exp{margin-left:auto;opacity:.7}
+.term-dot{width:7px;height:7px;border-radius:50%;background:var(--tertiary)}
+.terminal .term-meta{font-size:11px;opacity:.8}
+
+/* ============================================================
+   状态条（28dp，通栏）
+   ============================================================ */
+.statusbar{
+  flex:0 0 28px;height:28px;display:flex;align-items:center;gap:14px;
+  padding:0 12px;background:var(--surface-container);
+  border-top:1px solid var(--outline-variant);
+  font-size:11px;color:var(--on-surface-variant);
+}
+.statusbar .dot{width:6px;height:6px;border-radius:50%;background:#2E7D32}
+.statusbar .dot.warn{background:#B3261E}
+.statusbar .sep{width:1px;height:12px;background:var(--outline-variant)}
+.statusbar .right{margin-left:auto;display:flex;align-items:center;gap:12px}
+.statusbar .item{display:flex;align-items:center;gap:5px;white-space:nowrap}
+
+/* 离线横幅 */
+.banner{
+  display:flex;align-items:center;gap:10px;
+  background:#FFF4D6;border-bottom:1px solid #E8C766;color:#4A3600;
+  padding:8px 14px;font-size:12.5px;
+}
+.banner .btn-text{color:#7A5C00;height:26px;font-size:12px}
+
+/* ============================================================
+   能力模式（设置页）
+   ============================================================ */
+.pane{padding:18px 22px;overflow-y:auto;flex:1;min-height:0;display:flex;flex-direction:column;gap:16px}
+.pane::-webkit-scrollbar{width:10px}
+.pane::-webkit-scrollbar-thumb{background:var(--outline-variant);border-radius:6px;border:3px solid var(--surface)}
+.pane-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.pane-title{font-size:20px;line-height:28px;font-weight:600}
+.pane-head .searchbar{width:320px;height:40px;margin-left:auto}
+
+.segmented{
+  display:inline-flex;border:1px solid var(--outline);border-radius:999px;overflow:hidden;
+}
+.segmented button{
+  border:none;background:transparent;color:var(--on-surface-variant);
+  font:500 13px var(--font);height:34px;padding:0 16px;cursor:pointer;
+}
+.segmented button[aria-pressed="true"]{background:var(--secondary-container);color:var(--on-secondary-container);font-weight:600}
+
+.setting-row{
+  display:flex;align-items:center;gap:14px;padding:12px 14px;
+  border:1px solid var(--outline-variant);border-radius:var(--r-m);
+  background:var(--surface-container-lowest);
+}
+.setting-row .col{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.setting-name{font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.setting-desc{font-size:12.5px;line-height:18px;color:var(--on-surface-variant)}
+.setting-expand{font-size:12.5px;line-height:19px;color:var(--on-surface-variant);border-top:1px solid var(--outline-variant);margin-top:8px;padding-top:8px}
+.setting-expand code{font-family:var(--mono);font-size:12px;background:var(--surface-container-high);padding:1px 4px;border-radius:var(--r-xs)}
+
+/* M3 Switch（纯 CSS） */
+.switch{
+  position:relative;width:52px;height:32px;flex:0 0 52px;border-radius:999px;
+  border:2px solid var(--outline);background:var(--surface-container-highest);
+  cursor:pointer;padding:0;
+}
+.switch .thumb{
+  position:absolute;top:50%;left:6px;transform:translateY(-50%);
+  width:16px;height:16px;border-radius:50%;background:var(--outline);
+  transition:all .14s ease;
+}
+.switch[aria-checked="true"]{background:var(--primary);border-color:var(--primary)}
+.switch[aria-checked="true"] .thumb{
+  left:26px;width:24px;height:24px;background:var(--on-primary);
+}
+
+/* 消息平台卡片 */
+.plat-card{border:1px solid var(--outline-variant);border-radius:var(--r-m);background:var(--surface-container-lowest);overflow:hidden}
+.plat-head{display:flex;align-items:center;gap:12px;padding:14px}
+.plat-logo{
+  width:38px;height:38px;border-radius:var(--r-m);display:grid;place-items:center;
+  font-size:15px;font-weight:700;color:#fff;flex:0 0 38px;
+}
+.plat-body{border-top:1px solid var(--outline-variant);padding:14px;display:flex;flex-direction:column;gap:12px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:11.5px;font-weight:600;color:var(--on-surface-variant)}
+.field input{
+  height:40px;border:1px solid var(--outline);border-radius:var(--r-s);
+  padding:0 12px;font:400 13px var(--font);background:var(--surface-container-lowest);
+  color:var(--on-surface);outline:none;
+}
+.field input:focus{border-color:var(--primary);box-shadow:0 0 0 1px var(--primary)}
+.field-row{display:flex;gap:12px}
+.field-row .field{flex:1}
+.card-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center}
+.card-actions .hint-text{margin-right:auto}
+
+/* 定时任务行 */
+.cron-row{
+  display:flex;align-items:center;gap:12px;padding:12px 14px;
+  border:1px solid var(--outline-variant);border-radius:var(--r-m);
+  background:var(--surface-container-lowest);
+}
+.cron-when{display:flex;flex-direction:column;gap:3px;flex:1;min-width:0}
+.cron-expr{font-family:var(--mono);font-size:12px;color:var(--on-surface-variant)}
+.cron-next{font-size:11.5px;color:var(--on-surface-variant)}
+.cron-hist{
+  font-size:11.5px;color:var(--on-surface-variant);text-align:right;
+  white-space:nowrap;flex:0 0 auto;min-width:118px;line-height:20px;
+}
+
+/* ============================================================
+   空状态 / 错误态
+   ============================================================ */
+.empty{
+  flex:1;display:grid;place-items:center;padding:32px;text-align:center;
+}
+.empty-inner{display:flex;flex-direction:column;align-items:center;gap:10px;max-width:380px}
+.empty-icon{
+  width:72px;height:72px;border-radius:50%;background:var(--surface-container-high);
+  display:grid;place-items:center;color:var(--on-surface-variant);margin-bottom:6px;
+}
+.empty-title{font-size:16px;font-weight:600}
+.empty-desc{font-size:13px;line-height:20px;color:var(--on-surface-variant)}
+.empty .btn{margin-top:8px}
+
+.diag{
+  margin:auto;max-width:520px;display:flex;flex-direction:column;gap:14px;
+  background:var(--surface-container-lowest);border:1px solid var(--outline-variant);
+  border-radius:var(--r-l);padding:24px;text-align:left;
+}
+.diag h2{font-size:17px;display:flex;align-items:center;gap:8px}
+.diag dl{display:grid;grid-template-columns:auto 1fr;gap:8px 14px;font-size:12.5px}
+.diag dt{color:var(--on-surface-variant)}
+.diag dd{font-family:var(--mono);font-size:12px}
+.diag .card-actions{justify-content:flex-start}
+</style>
+</head>
+<body>
+
+<nav class="spec-bar">
+  <strong>UI 视觉稿</strong>
+  <span class="badge">非严格 M3 · 允许实现差异</span>
+  <button data-view="session" aria-pressed="true">会话模式</button>
+  <button data-view="skills" aria-pressed="false">能力 · 技能与工具</button>
+  <button data-view="platforms" aria-pressed="false">能力 · 消息平台</button>
+  <button data-view="cron" aria-pressed="false">能力 · 定时任务</button>
+  <button data-view="empty" aria-pressed="false">空状态</button>
+  <button data-view="offline" aria-pressed="false">离线态</button>
+  <button data-view="crash" aria-pressed="false">启动失败</button>
+  <span class="hint">1280×800 · 仅视觉参考</span>
+</nav>
+
+<div class="spec-note">
+  <strong>设计约定</strong>
+  <span>
+    本稿<b>不严格遵循 Material 3 规范</b>：间距、圆角、密度、组件形态均为视觉参考，个别尺寸用的是近似值。
+    实现<b>一律使用 Material 3 + Compose 原生组件</b>，<b>允许与稿子存在差异</b> —— 以功能对等、原生观感、
+    适配窗口缩放为准，<b>不做像素对齐</b>。冲突时：布局口径看
+    <code style="font-family:var(--mono);font-size:11.5px">.design/草案/04-ui-spec.md</code>，
+    Compose 能否做到看组件能力，视觉以 M3 默认为准。
+  </span>
+</div>
+
+<div class="window">
+
+<!-- ============================ 会话模式 ============================ -->
+<section class="view active" id="view-session">
+  <div class="body">
+
+    <!-- rail -->
+    <div class="rail">
+      <button class="rail-item" aria-current="true" title="default（全局）">
+        <span class="rail-frame">
+          <span class="avatar global">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.6 3.5 7v10L12 21.4 20.5 17V7L12 2.6Zm0 2.3 6.5 3.1L12 11.1 5.5 8 12 4.9Z"/></svg>
+          </span>
+        </span>
+      </button>
+      <div class="rail-sep"></div>
+
+      <button class="rail-item" title="work">
+        <span class="rail-frame">
+          <span class="avatar" style="background:#6750A4">W</span>
+          <span class="rail-dot" title="有运行中任务"></span>
+        </span>
+      </button>
+      <button class="rail-item" title="research">
+        <span class="rail-frame"><span class="avatar" style="background:#386A20">R</span></span>
+      </button>
+      <button class="rail-item" title="personal">
+        <span class="rail-frame"><span class="avatar" style="background:#8E4585">P</span></span>
+      </button>
+      <button class="rail-item" title="staging">
+        <span class="rail-frame"><span class="avatar" style="background:#00639B">S</span></span>
+      </button>
+      <button class="rail-item" title="实验">
+        <span class="rail-frame"><span class="avatar" style="background:#7D5260">实</span></span>
+      </button>
+
+      <div class="rail-spacer"></div>
+
+      <button class="rail-item" title="切换 会话 / 能力">
+        <span class="rail-frame">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#49454F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.3-2-3.4-2.1 1a7.6 7.6 0 0 0-2.6-1.5L14.4 2h-4l-.3 2.3a7.6 7.6 0 0 0-2.6 1.5l-2.1-1-2 3.4 2 1.3a7.6 7.6 0 0 0 0 3l-2 1.3 2 3.4 2.1-1a7.6 7.6 0 0 0 2.6 1.5l.3 2.3h4l.3-2.3a7.6 7.6 0 0 0 2.6-1.5l2.1 1 2-3.4-2-1.3Z"/></svg>
+        </span>
+      </button>
+    </div>
+
+    <!-- list -->
+    <div class="list">
+      <div class="list-head">
+        <div class="searchbar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.2 4.2"/></svg>
+          <span class="ph">搜索会话</span>
+          <span class="kbd">Ctrl K</span>
+        </div>
+      </div>
+
+      <div class="list-scroll">
+        <!-- 置顶 -->
+        <div class="row" aria-selected="true">
+          <span class="row-pin">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M14.5 2.5 21.5 9.5l-2.4 2.4-1.6-1.6-4.6 4.6.5 3.2-1.7 1.7-3.6-3.6-4.4 4.4-1-1 4.4-4.4-3.6-3.6L5.2 11l3.2.5L13 6.9l-1.6-1.6 2.4-2.4Z"/></svg>
+          </span>
+          <span class="row-main">
+            <span class="row-title">重构 gateway 鉴权中间件</span>
+            <span class="row-sub">每次请求都重读配置，需要进程级缓存</span>
+          </span>
+          <span class="row-meta">
+            <span class="row-time">14:32</span>
+            <button class="row-more" title="更多">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+            </button>
+          </span>
+        </div>
+
+        <!-- 今天 -->
+        <div class="section-label">
+          <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="m12 15.5-6-6L7.4 8l4.6 4.6L16.6 8 18 9.5l-6 6Z"/></svg>
+          今天<span class="count">3</span>
+        </div>
+        <div class="row">
+          <span class="row-main">
+            <span class="row-title">SQLite 迁移脚本评审</span>
+            <span class="row-sub">外键约束在 WAL 模式下没生效</span>
+          </span>
+          <span class="row-meta"><span class="row-time">11:08</span><span class="unread"></span>
+            <button class="row-more"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+          </span>
+        </div>
+        <div class="row">
+          <span class="row-main">
+            <span class="row-title">会话列表分组标题闪烁</span>
+            <span class="row-sub">stickyHeader + 滚动条，CMP #3016</span>
+          </span>
+          <span class="row-meta"><span class="row-time">10:41</span>
+            <button class="row-more"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+          </span>
+        </div>
+        <div class="row">
+          <span class="row-main">
+            <span class="row-title">BossTerm 焦点丢失排查</span>
+            <span class="row-sub">点进终端后 Ctrl+W 被全局吃掉</span>
+          </span>
+          <span class="row-meta"><span class="row-time">09:15</span>
+            <button class="row-more"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+          </span>
+        </div>
+
+        <!-- 昨天 -->
+        <div class="section-label">
+          <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="m12 15.5-6-6L7.4 8l4.6 4.6L16.6 8 18 9.5l-6 6Z"/></svg>
+          昨天<span class="count">2</span>
+        </div>
+        <div class="row">
+          <span class="row-main">
+            <span class="row-title">Markdown 渲染器选型对比</span>
+            <span class="row-sub">mikepenz vs compose-markdown 的能力边界</span>
+          </span>
+          <span class="row-meta"><span class="row-time">昨天</span>
+            <button class="row-more"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+          </span>
+        </div>
+        <div class="row">
+          <span class="row-main">
+            <span class="row-title">打包 MSI 的签名流程</span>
+            <span class="row-sub">自签名证书 + 安装后首次启动校验</span>
+          </span>
+          <span class="row-meta"><span class="row-time">昨天</span>
+            <button class="row-more"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+          </span>
+        </div>
+
+        <!-- 7 天内（折叠） -->
+        <div class="section-label collapsed">
+          <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="m12 15.5-6-6L7.4 8l4.6 4.6L16.6 8 18 9.5l-6 6Z"/></svg>
+          7 天内<span class="count">4</span>
+        </div>
+
+        <!-- 更早 -->
+        <div class="section-label">
+          <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="m12 15.5-6-6L7.4 8l4.6 4.6L16.6 8 18 9.5l-6 6Z"/></svg>
+          更早<span class="count">12</span>
+        </div>
+        <div class="row">
+          <span class="row-main">
+            <span class="row-title">契约生成器：从 OpenAPI 到 Kotlin</span>
+            <span class="row-sub">30–50 个类型的手写退路</span>
+          </span>
+          <span class="row-meta"><span class="row-time">10月18日</span></span>
+        </div>
+        <div class="row">
+          <span class="row-main">
+            <span class="row-title">P0 骨架：Gradle 版本目录</span>
+            <span class="row-sub">libs.versions.toml 的依赖分组</span>
+          </span>
+          <span class="row-meta"><span class="row-time">10月15日</span></span>
+        </div>
+      </div>
+
+      <div class="list-foot">
+        <button class="btn btn-tonal btn-block">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M11 11V5h2v6h6v2h-6v6h-2v-6H5v-2h6Z"/></svg>
+          新建会话
+        </button>
+      </div>
+    </div>
+
+    <!-- detail -->
+    <div class="detail">
+      <div class="detail-head">
+        <span class="detail-title">重构 gateway 鉴权中间件</span>
+        <span class="model-chip">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 4 6v6c0 5 3.4 8.7 8 10 4.6-1.3 8-5 8-10V6l-8-4Z"/></svg>
+          claude-sonnet-4.5
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="m12 15.5-6-6L7.4 8l4.6 4.6L16.6 8 18 9.5l-6 6Z"/></svg>
+        </span>
+        <button class="icon-btn" title="更多">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+        </button>
+      </div>
+
+      <div class="messages">
+        <!-- 用户 -->
+        <div class="msg msg-user">
+          <div class="msg-head">
+            <span class="msg-who">你</span>
+            <span class="msg-time">14:28</span>
+            <span class="msg-actions"><button>复制整条</button><button>引用</button></span>
+          </div>
+          <div class="bubble">帮我看看 <code>gateway/auth.py</code> 里的 token 校验路径，是不是每次请求都重新读一遍配置文件？</div>
+        </div>
+
+        <!-- 助手 -->
+        <div class="msg">
+          <div class="msg-head">
+            <span class="msg-who">Hermes</span>
+            <span class="msg-time">14:28</span>
+            <span class="msg-actions"><button>复制整条</button><button>引用</button></span>
+          </div>
+          <div class="msg-body">
+            <p>是。`verify_token()` 每次都调 `load_config()`，而它内部是同步读盘再 `yaml.safe_load`：</p>
+            <pre class="code"><div class="code-head">gateway/auth.py<span>L88–L104</span><button class="btn-text">复制</button></div><code><span class="tok-key">def</span> verify_token(req):
+    <span class="tok-com"># 每个请求都走一次：约 0.4–1.2ms（SSD）</span>
+    cfg = load_config()          <span class="tok-com"># ← open + yaml.safe_load</span>
+    secret = cfg[<span class="tok-str">"jwt"</span>][<span class="tok-str">"secret"</span>]
+    <span class="tok-key">return</span> jwt.decode(req.headers[<span class="tok-str">"authorization"</span>], secret)</code></pre>
+            <p>两条路径可以分开处理：</p>
+            <ul>
+              <li><strong>热重载</strong>：保留 `load_config(force=True)`，只由 SIGHUP / 管理端触发。</li>
+              <li><strong>常规读取</strong>：进程级缓存 + mtime 校验，未变则直接返回。</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- 工具调用卡片 -->
+        <div class="msg">
+          <div class="tool-card">
+            <div class="tool-head">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#49454F" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h9M4 12h13M4 17h7"/></svg>
+              <span class="tool-name">read_file</span>
+              <span class="chip chip-ok">成功 · 42ms</span>
+              <button class="tool-toggle">收起参数</button>
+            </div>
+            <div class="tool-body">
+              <div class="tool-row"><span class="k">path</span><span class="v">gateway/auth.py</span></div>
+              <div class="tool-row"><span class="k">range</span><span class="v">88:104</span></div>
+              <div class="tool-row"><span class="k">result</span><span class="v">17 行 · 612 字节 · 已作为上下文附上</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 用户 -->
+        <div class="msg msg-user">
+          <div class="msg-head">
+            <span class="msg-who">你</span>
+            <span class="msg-time">14:31</span>
+            <span class="msg-actions"><button>复制整条</button><button>引用</button></span>
+          </div>
+          <div class="bubble">那就缓存到进程级，注意保留热重载；顺便把 mtime 校验加进去。</div>
+        </div>
+
+        <!-- 助手（流式） -->
+        <div class="msg">
+          <div class="msg-head">
+            <span class="msg-who">Hermes</span>
+            <span class="msg-time">14:32</span>
+            <span class="msg-actions"><button>复制整条</button><button>引用</button></span>
+          </div>
+          <div class="msg-body">
+            <p>改成 FIFO 缓存持有 `(cfg, mtime, size)`，命中时只 stat 一次：</p>
+            <pre class="code"><div class="code-head">gateway/config_cache.py<span>新增</span><button class="btn-text">复制</button></div><code>_cache: <span class="tok-key">tuple</span>[dict, <span class="tok-key">float</span>, <span class="tok-key">int</span>] | <span class="tok-key">None</span> = <span class="tok-key">None</span>
+
+<span class="tok-key">def</span> get_config() -&gt; dict:
+    <span class="tok-key">global</span> _cache
+    st = os.stat(CONFIG_PATH)      <span class="tok-com"># 只 stat，不读盘</span>
+    <span class="tok-key">if</span> _cache <span class="tok-key">and</span> _cache[1:] == (st.st_mtime, st.st_size):
+        <span class="tok-key">return</span> _cache[0]
+    cfg = load_config()
+    _cache = (cfg, st.st_mtime, st.st_size)
+    <span class="tok-key">return</span> cfg</code></pre>
+            <p>接线点还剩三处要改，先看 <span class="cursor"></span></p>
+          </div>
+        </div>
+      </div>
+
+      <!-- composer -->
+      <div class="composer">
+        <div class="composer-box">
+          <div class="chips">
+            <span class="chip-file">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6Zm4 18H6V4h7v5h5v11Z"/></svg>
+              @gateway/auth.py
+              <span class="x">×</span>
+            </span>
+            <span class="chip-file">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6Zm4 18H6V4h7v5h5v11Z"/></svg>
+              @gateway/config.py
+              <span class="x">×</span>
+            </span>
+          </div>
+          <div class="composer-input">把上面的改法直接整理成 patch<span class="pm">，并补一版 mtime 缓存的单测</span></div>
+          <div class="composer-foot">
+            <button class="icon-btn" title="附加文件">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <button class="icon-btn" title="插入图片">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m4.5 17.5 4.6-4.3 3.2 2.9 3-2.6 3.7 3.4"/></svg>
+            </button>
+            <span class="hint-text">Enter 发送 · Shift+Enter 换行 · Markdown 源码</span>
+            <div class="right">
+              <button class="send-btn" title="发送">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12 2-12 2v6.4Z"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 终端收起条 -->
+      <div class="terminal" title="Ctrl+` 展开">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>
+        终端
+        <span class="term-dot"></span>
+        <span class="term-meta">运行中 · 2 个进程</span>
+        <span class="exp">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12 8.5 6 6L16.6 16 12 11.4 7.4 16 6 14.5l6-6Z"/></svg>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 状态条（通栏） -->
+  <div class="statusbar">
+    <span class="item"><span class="dot"></span>default · 已连接</span>
+    <span class="sep"></span>
+    <span class="item">claude-sonnet-4.5</span>
+    <div class="right">
+      <span class="item">上下文 38.2k / 200k</span>
+      <span class="sep"></span>
+      <span class="item">本会话 12.4k tok</span>
+      <span class="sep"></span>
+      <span class="item">终端 2 进程</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 能力 · 技能与工具 ============================ -->
+<section class="view" id="view-skills">
+  <div class="body">
+    <div class="rail">
+      <button class="rail-item" title="default（全局）">
+        <span class="rail-frame">
+          <span class="avatar global">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.6 3.5 7v10L12 21.4 20.5 17V7L12 2.6Zm0 2.3 6.5 3.1L12 11.1 5.5 8 12 4.9Z"/></svg>
+          </span>
+        </span>
+      </button>
+      <div class="rail-sep"></div>
+      <button class="rail-item" title="work">
+        <span class="rail-frame"><span class="avatar" style="background:#6750A4">W</span><span class="rail-dot"></span></span>
+      </button>
+      <button class="rail-item" title="research">
+        <span class="rail-frame"><span class="avatar" style="background:#386A20">R</span></span>
+      </button>
+      <button class="rail-item" title="personal">
+        <span class="rail-frame"><span class="avatar" style="background:#8E4585">P</span></span>
+      </button>
+      <button class="rail-item" title="staging">
+        <span class="rail-frame"><span class="avatar" style="background:#00639B">S</span></span>
+      </button>
+      <div class="rail-spacer"></div>
+      <button class="rail-item" aria-current="true" title="切换 会话 / 能力">
+        <span class="rail-frame">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="#21005D"><path d="M4 5h7v2H4V5Zm0 6h11v2H4v-2Zm0 6h7v2H4v-2Zm15.6-3.4-4.2 4.2-2.1-2.1 1.4-1.4.7.7 2.8-2.8 1.4 1.4Z"/></svg>
+        </span>
+      </button>
+    </div>
+
+    <!-- 中栏：三个分类 -->
+    <div class="list">
+      <div class="list-head"><div class="section-label" style="padding:4px 8px">能力</div></div>
+      <div class="list-scroll">
+        <div class="row" aria-selected="true">
+          <span class="row-main">
+            <span class="row-title">技能与工具</span>
+            <span class="row-sub">14 个技能 · 6 个工具集</span>
+          </span>
+        </div>
+        <div class="row">
+          <span class="row-main">
+            <span class="row-title">消息平台</span>
+            <span class="row-sub">2 已连接 / 6</span>
+          </span>
+        </div>
+        <div class="row">
+          <span class="row-main">
+            <span class="row-title">定时任务</span>
+            <span class="row-sub">5 个任务 · 1 个失败</span>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右栏 -->
+    <div class="detail">
+      <div class="pane">
+        <div class="pane-head">
+          <span class="pane-title">技能与工具</span>
+          <div class="segmented">
+            <button aria-pressed="true">技能</button>
+            <button aria-pressed="false">工具集</button>
+          </div>
+          <div class="searchbar">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.2 4.2"/></svg>
+            <span class="ph">搜索技能</span>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="col">
+            <div class="setting-name">compose-multiplatform-desktop<span class="chip chip-src">内置</span></div>
+            <div class="setting-desc">用 Compose Multiplatform 写桌面客户端：选型与桌面端坑。</div>
+            <div class="setting-expand">
+              <strong>When to Use</strong> — 用 Kotlin / Compose Multiplatform 新写桌面客户端；把 Electron / Web 客户端迁到 Compose；
+              给 CMP 项目挑组件。<code>references/component-selection.md</code> 是逐功能域的组件候选表。
+            </div>
+          </div>
+          <button class="switch" aria-checked="true" role="switch"><span class="thumb"></span></button>
+        </div>
+
+        <div class="setting-row">
+          <div class="col">
+            <div class="setting-name">global-git-ops<span class="chip chip-src">用户</span></div>
+            <div class="setting-desc">代理探活、凭据自查、pull --rebase 流程与提交纪律。</div>
+          </div>
+          <button class="switch" aria-checked="true" role="switch"><span class="thumb"></span></button>
+        </div>
+
+        <div class="setting-row">
+          <div class="col">
+            <div class="setting-name">desktop-stack-rewrite-assessment<span class="chip chip-src">内置</span></div>
+            <div class="setting-desc">重写桌面客户端到另一套 UI 栈时：功能域映射、WebView 边界与档位。</div>
+          </div>
+          <button class="switch" aria-checked="false" role="switch"><span class="thumb"></span></button>
+        </div>
+
+        <div class="setting-row">
+          <div class="col">
+            <div class="setting-name">hermes-deploy<span class="chip chip-src">插件</span></div>
+            <div class="setting-desc">部署 Hermes 到测试环境：systemd、Caddy 路由、回滚。</div>
+          </div>
+          <button class="switch" aria-checked="false" role="switch"><span class="thumb"></span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="statusbar">
+    <span class="item"><span class="dot"></span>default · 已连接</span>
+    <span class="sep"></span><span class="item">claude-sonnet-4.5</span>
+    <div class="right"><span class="item">能力 · 技能与工具</span></div>
+  </div>
+</section>
+
+<!-- ============================ 能力 · 消息平台 ============================ -->
+<section class="view" id="view-platforms">
+  <div class="body">
+    <div class="rail">
+      <button class="rail-item" title="default（全局）">
+        <span class="rail-frame">
+          <span class="avatar global">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.6 3.5 7v10L12 21.4 20.5 17V7L12 2.6Zm0 2.3 6.5 3.1L12 11.1 5.5 8 12 4.9Z"/></svg>
+          </span>
+        </span>
+      </button>
+      <div class="rail-sep"></div>
+      <button class="rail-item" title="work">
+        <span class="rail-frame"><span class="avatar" style="background:#6750A4">W</span><span class="rail-dot"></span></span>
+      </button>
+      <button class="rail-item" title="research">
+        <span class="rail-frame"><span class="avatar" style="background:#386A20">R</span></span>
+      </button>
+      <button class="rail-item" title="personal">
+        <span class="rail-frame"><span class="avatar" style="background:#8E4585">P</span></span>
+      </button>
+      <div class="rail-spacer"></div>
+      <button class="rail-item" aria-current="true" title="切换 会话 / 能力">
+        <span class="rail-frame"><svg width="20" height="20" viewBox="0 0 24 24" fill="#21005D"><path d="M4 5h7v2H4V5Zm0 6h11v2H4v-2Zm0 6h7v2H4v-2Zm15.6-3.4-4.2 4.2-2.1-2.1 1.4-1.4.7.7 2.8-2.8 1.4 1.4Z"/></svg></span>
+      </button>
+    </div>
+
+    <div class="list">
+      <div class="list-head"><div class="section-label" style="padding:4px 8px">能力</div></div>
+      <div class="list-scroll">
+        <div class="row"><span class="row-main"><span class="row-title">技能与工具</span><span class="row-sub">14 个技能 · 6 个工具集</span></span></div>
+        <div class="row" aria-selected="true"><span class="row-main"><span class="row-title">消息平台</span><span class="row-sub">2 已连接 / 6</span></span></div>
+        <div class="row"><span class="row-main"><span class="row-title">定时任务</span><span class="row-sub">5 个任务 · 1 个失败</span></span></div>
+      </div>
+    </div>
+
+    <div class="detail">
+      <div class="pane">
+        <div class="pane-head"><span class="pane-title">消息平台</span></div>
+
+        <div class="plat-card">
+          <div class="plat-head">
+            <span class="plat-logo" style="background:#229ED9">T</span>
+            <div class="col" style="flex:1">
+              <div class="setting-name">Telegram<span class="chip chip-ok">已连接</span></div>
+              <div class="setting-desc">@hermes_work_bot · 最后活动 3 分钟前</div>
+            </div>
+            <button class="switch" aria-checked="true" role="switch"><span class="thumb"></span></button>
+          </div>
+          <div class="plat-body">
+            <div class="field-row">
+              <div class="field"><label>Bot Token</label><input value="•••••••••••••••••••••" readonly></div>
+              <div class="field"><label>允许的 Chat ID</label><input value="1023456789, -1002233445"></div>
+            </div>
+            <div class="card-actions">
+              <span class="hint-text">保存后立即重连长轮询</span>
+              <button class="btn btn-outlined">测试连接</button>
+              <button class="btn btn-filled">保存</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="plat-card">
+          <div class="plat-head">
+            <span class="plat-logo" style="background:#07C160">微</span>
+            <div class="col" style="flex:1">
+              <div class="setting-name">企业微信<span class="chip chip-err">错误</span></div>
+              <div class="setting-desc">回调地址不可达：<code style="font-family:var(--mono);font-size:11.5px">https://…/api/wecom/event</code> 返回 502</div>
+            </div>
+            <button class="switch" aria-checked="true" role="switch"><span class="thumb"></span></button>
+          </div>
+        </div>
+
+        <div class="plat-card">
+          <div class="plat-head">
+            <span class="plat-logo" style="background:#3370FF">飞</span>
+            <div class="col" style="flex:1">
+              <div class="setting-name">飞书<span class="chip chip-src">未配置</span></div>
+              <div class="setting-desc">填入 App ID / App Secret 后可接收事件。</div>
+            </div>
+            <button class="switch" aria-checked="false" role="switch"><span class="thumb"></span></button>
+          </div>
+        </div>
+
+        <div class="plat-card">
+          <div class="plat-head">
+            <span class="plat-logo" style="background:#4A154B">S</span>
+            <div class="col" style="flex:1">
+              <div class="setting-name">Slack<span class="chip chip-src">未配置</span></div>
+              <div class="setting-desc">Bot User OAuth Token + Signing Secret。</div>
+            </div>
+            <button class="switch" aria-checked="false" role="switch"><span class="thumb"></span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="statusbar">
+    <span class="item"><span class="dot"></span>default · 已连接</span>
+    <span class="sep"></span><span class="item">claude-sonnet-4.5</span>
+    <div class="right"><span class="item">能力 · 消息平台</span></div>
+  </div>
+</section>
+
+<!-- ============================ 能力 · 定时任务 ============================ -->
+<section class="view" id="view-cron">
+  <div class="body">
+    <div class="rail">
+      <button class="rail-item" title="default（全局）">
+        <span class="rail-frame">
+          <span class="avatar global">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.6 3.5 7v10L12 21.4 20.5 17V7L12 2.6Zm0 2.3 6.5 3.1L12 11.1 5.5 8 12 4.9Z"/></svg>
+          </span>
+        </span>
+      </button>
+      <div class="rail-sep"></div>
+      <button class="rail-item" title="work">
+        <span class="rail-frame"><span class="avatar" style="background:#6750A4">W</span><span class="rail-dot"></span></span>
+      </button>
+      <button class="rail-item" title="research">
+        <span class="rail-frame"><span class="avatar" style="background:#386A20">R</span></span>
+      </button>
+      <div class="rail-spacer"></div>
+      <button class="rail-item" aria-current="true" title="切换 会话 / 能力">
+        <span class="rail-frame"><svg width="20" height="20" viewBox="0 0 24 24" fill="#21005D"><path d="M4 5h7v2H4V5Zm0 6h11v2H4v-2Zm0 6h7v2H4v-2Zm15.6-3.4-4.2 4.2-2.1-2.1 1.4-1.4.7.7 2.8-2.8 1.4 1.4Z"/></svg></span>
+      </button>
+    </div>
+
+    <div class="list">
+      <div class="list-head"><div class="section-label" style="padding:4px 8px">能力</div></div>
+      <div class="list-scroll">
+        <div class="row"><span class="row-main"><span class="row-title">技能与工具</span><span class="row-sub">14 个技能 · 6 个工具集</span></span></div>
+        <div class="row"><span class="row-main"><span class="row-title">消息平台</span><span class="row-sub">2 已连接 / 6</span></span></div>
+        <div class="row" aria-selected="true"><span class="row-main"><span class="row-title">定时任务</span><span class="row-sub">5 个任务 · 1 个失败</span></span></div>
+      </div>
+    </div>
+
+    <div class="detail">
+      <div class="pane">
+        <div class="pane-head">
+          <span class="pane-title">定时任务</span>
+          <div class="searchbar" style="width:260px;margin-left:auto">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.2 4.2"/></svg>
+            <span class="ph">搜索任务</span>
+          </div>
+          <button class="btn btn-filled">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M11 11V5h2v6h6v2h-6v6h-2v-6H5v-2h6Z"/></svg>
+            新建
+          </button>
+        </div>
+
+        <div class="cron-row">
+          <div class="cron-when">
+            <div class="setting-name">每日站会摘要</div>
+            <div class="cron-expr">0 9 * * 1-5</div>
+            <div class="cron-next">每周一至周五 09:00 · 中文概览：工作日早上九点</div>
+          </div>
+          <div class="cron-hist">下次 明天 09:00<br>上次 <span class="chip chip-ok">成功</span></div>
+          <button class="switch" aria-checked="true" role="switch"><span class="thumb"></span></button>
+        </div>
+
+        <div class="cron-row">
+          <div class="cron-when">
+            <div class="setting-name">依赖漏洞巡检</div>
+            <div class="cron-expr">30 2 * * *</div>
+            <div class="cron-next">每天 02:30 · 中文概览：每天凌晨两点半</div>
+          </div>
+          <div class="cron-hist">下次 明天 02:30<br>上次 <span class="chip chip-err">失败</span></div>
+          <button class="switch" aria-checked="true" role="switch"><span class="thumb"></span></button>
+        </div>
+
+        <div class="cron-row">
+          <div class="cron-when">
+            <div class="setting-name">周报草稿</div>
+            <div class="cron-expr">0 18 * * 5</div>
+            <div class="cron-next">每周五 18:00 · 中文概览：周五下班前</div>
+          </div>
+          <div class="cron-hist">下次 本周五 18:00<br>上次 <span class="chip chip-ok">成功</span></div>
+          <button class="switch" aria-checked="true" role="switch"><span class="thumb"></span></button>
+        </div>
+
+        <div class="cron-row">
+          <div class="cron-when">
+            <div class="setting-name">日志清理</div>
+            <div class="cron-expr">0 4 1 * *</div>
+            <div class="cron-next">每月 1 日 04:00 · 中文概览：每月一号凌晨四点</div>
+          </div>
+          <div class="cron-hist">下次 11月1日 04:00<br>上次 <span class="chip chip-run">运行中</span></div>
+          <button class="switch" aria-checked="true" role="switch"><span class="thumb"></span></button>
+        </div>
+
+        <div class="cron-row">
+          <div class="cron-when">
+            <div class="setting-name">模型用量周报</div>
+            <div class="cron-expr">0 10 * * 1</div>
+            <div class="cron-next">每周一 10:00 · 中文概览：周一上午十点</div>
+          </div>
+          <div class="cron-hist">下次 下周一 10:00<br>上次 —</div>
+          <button class="switch" aria-checked="false" role="switch"><span class="thumb"></span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="statusbar">
+    <span class="item"><span class="dot"></span>default · 已连接</span>
+    <span class="sep"></span><span class="item">claude-sonnet-4.5</span>
+    <div class="right"><span class="item">能力 · 定时任务</span></div>
+  </div>
+</section>
+
+<!-- ============================ 空状态 ============================ -->
+<section class="view" id="view-empty">
+  <div class="body">
+    <div class="rail">
+      <button class="rail-item" aria-current="true">
+        <span class="rail-frame">
+          <span class="avatar global">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.6 3.5 7v10L12 21.4 20.5 17V7L12 2.6Zm0 2.3 6.5 3.1L12 11.1 5.5 8 12 4.9Z"/></svg>
+          </span>
+        </span>
+      </button>
+      <div class="rail-sep"></div>
+      <button class="rail-item"><span class="rail-frame"><span class="avatar" style="background:#6750A4">W</span></span></button>
+      <div class="rail-spacer"></div>
+      <button class="rail-item">
+        <span class="rail-frame"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#49454F" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.3-2-3.4-2.1 1a7.6 7.6 0 0 0-2.6-1.5L14.4 2h-4l-.3 2.3a7.6 7.6 0 0 0-2.6 1.5l-2.1-1-2 3.4 2 1.3a7.6 7.6 0 0 0 0 3l-2 1.3 2 3.4 2.1-1a7.6 7.6 0 0 0 2.6 1.5l.3 2.3h4l.3-2.3a7.6 7.6 0 0 0 2.6-1.5l2.1 1 2-3.4-2-1.3Z"/></svg></span>
+      </button>
+    </div>
+
+    <div class="list">
+      <div class="list-head">
+        <div class="searchbar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.2 4.2"/></svg>
+          <span class="ph">搜索会话</span><span class="kbd">Ctrl K</span>
+        </div>
+      </div>
+      <div class="empty">
+        <div class="empty-inner">
+          <span class="empty-icon">
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M20 15.5a2.5 2.5 0 0 1-2.5 2.5H8l-4 3V6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v9Z"/></svg>
+          </span>
+          <div class="empty-title">还没有会话</div>
+          <div class="empty-desc">新建一个会话开始对话，或在左侧切换 profile 查看其它工作区。</div>
+          <button class="btn btn-filled">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M11 11V5h2v6h6v2h-6v6h-2v-6H5v-2h6Z"/></svg>
+            新建会话
+          </button>
+        </div>
+      </div>
+      <div class="list-foot">
+        <button class="btn btn-tonal btn-block">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M11 11V5h2v6h6v2h-6v6h-2v-6H5v-2h6Z"/></svg>
+          新建会话
+        </button>
+      </div>
+    </div>
+
+    <div class="detail">
+      <div class="empty">
+        <div class="empty-inner">
+          <span class="empty-icon">
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M8 9.5h8M8 13h5"/></svg>
+          </span>
+          <div class="empty-title">选择左侧会话，或新建一个</div>
+          <div class="empty-desc">Ctrl+N 新建 · Ctrl+K 搜索 · Ctrl+` 打开终端</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="statusbar">
+    <span class="item"><span class="dot"></span>default · 已连接</span>
+    <span class="sep"></span><span class="item">claude-sonnet-4.5</span>
+    <div class="right"><span class="item">0 个会话</span></div>
+  </div>
+</section>
+
+<!-- ============================ 离线态 ============================ -->
+<section class="view" id="view-offline">
+  <div class="body" style="flex-direction:column">
+    <div class="banner">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 8v5M12 16.5v.5"/><path d="M10.3 3.9 2.6 17.3A1.6 1.6 0 0 0 4 19.7h16a1.6 1.6 0 0 0 1.4-2.4L13.7 3.9a1.6 1.6 0 0 0-2.8 0Z"/></svg>
+      与后端断开（127.0.0.1:9119）· 第 3 次重连，2s 后重试
+      <button class="btn-text" style="margin-left:auto;height:26px;font-size:12px">立即重试</button>
+      <button class="btn-text" style="height:26px;font-size:12px">查看日志</button>
+    </div>
+    <div class="body">
+      <div class="rail">
+        <button class="rail-item" aria-current="true">
+          <span class="rail-frame">
+            <span class="avatar global">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.6 3.5 7v10L12 21.4 20.5 17V7L12 2.6Zm0 2.3 6.5 3.1L12 11.1 5.5 8 12 4.9Z"/></svg>
+            </span>
+          </span>
+        </button>
+        <div class="rail-sep"></div>
+        <button class="rail-item"><span class="rail-frame"><span class="avatar" style="background:#6750A4">W</span></span></button>
+        <div class="rail-spacer"></div>
+      </div>
+
+      <div class="list">
+        <div class="list-head">
+          <div class="searchbar">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.2 4.2"/></svg>
+            <span class="ph">搜索会话</span><span class="kbd">Ctrl K</span>
+          </div>
+        </div>
+        <div class="list-scroll">
+          <!-- 骨架行 -->
+          <div style="padding:14px 8px 6px"><div style="height:11px;width:64px;background:var(--surface-container-highest);border-radius:6px"></div></div>
+          <div class="row" style="opacity:.55">
+            <span class="row-main">
+              <span style="height:12px;width:70%;background:var(--surface-container-highest);border-radius:6px"></span>
+              <span style="height:10px;width:45%;background:var(--surface-container-high);border-radius:6px;margin-top:6px"></span>
+            </span>
+          </div>
+          <div class="row" style="opacity:.45">
+            <span class="row-main">
+              <span style="height:12px;width:58%;background:var(--surface-container-highest);border-radius:6px"></span>
+              <span style="height:10px;width:38%;background:var(--surface-container-high);border-radius:6px;margin-top:6px"></span>
+            </span>
+          </div>
+          <div class="row" style="opacity:.35">
+            <span class="row-main">
+              <span style="height:12px;width:64%;background:var(--surface-container-highest);border-radius:6px"></span>
+              <span style="height:10px;width:42%;background:var(--surface-container-high);border-radius:6px;margin-top:6px"></span>
+            </span>
+          </div>
+          <p style="padding:16px 10px;font-size:12px;color:var(--on-surface-variant);line-height:18px">
+            缓存中的会话可离线阅读，发送与新会话需要恢复连接。
+          </p>
+        </div>
+      </div>
+
+      <div class="detail">
+        <div class="empty">
+          <div class="empty-inner">
+            <span class="empty-icon">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 3l18 18"/><path d="M8.5 5.2A9.6 9.6 0 0 1 12 4.5c4 0 7.4 2.4 9 6a14 14 0 0 1-2.2 3"/><path d="M6.3 7.3A14.6 14.6 0 0 0 3 10.5c1.6 3.6 5 6 9 6 1.1 0 2.2-.2 3.2-.6"/></svg>
+            </span>
+            <div class="empty-title">连接已断开</div>
+            <div class="empty-desc">正在自动重连；历史消息与草稿不会丢失，恢复后事件会按 replay 补齐。</div>
+            <button class="btn btn-outlined">查看日志</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="statusbar">
+    <span class="item"><span class="dot warn"></span>default · 重连中（3）</span>
+    <span class="sep"></span><span class="item">claude-sonnet-4.5</span>
+    <div class="right"><span class="item">离线 · 只读</span></div>
+  </div>
+</section>
+
+<!-- ============================ 启动失败 ============================ -->
+<section class="view" id="view-crash">
+  <div class="body" style="flex-direction:column">
+    <div class="detail" style="flex:1">
+      <div class="empty">
+        <div class="diag">
+          <h2>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="#B3261E"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm1 15h-2v-2h2v2Zm0-4h-2V7h2v6Z"/></svg>
+            无法连接后端
+          </h2>
+          <p style="font-size:13px;line-height:20px;color:var(--on-surface-variant)">
+            客户端已启动，但没有找到可用的 gateway / dashboard。请确认 Hermes 正在运行，或检查下面的诊断信息。
+          </p>
+          <dl>
+            <dt>期望地址</dt><dd>http://127.0.0.1:9119</dd>
+            <dt>探测结果</dt><dd>ECONNREFUSED（111）</dd>
+            <dt>最近错误</dt><dd>ws connect failed: handshake timeout (3000ms)</dd>
+            <dt>配置来源</dt><dd>~/.hermes/config.toml</dd>
+            <dt>日志目录</dt><dd>%LOCALAPPDATA%\hermes-compose\logs</dd>
+          </dl>
+          <div class="card-actions" style="justify-content:flex-start">
+            <button class="btn btn-filled">重试连接</button>
+            <button class="btn btn-outlined">打开日志目录</button>
+            <button class="btn btn-text">修改后端地址</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="statusbar">
+    <span class="item"><span class="dot warn"></span>未连接</span>
+    <span class="sep"></span><span class="item">—</span>
+    <div class="right"><span class="item">启动诊断</span></div>
+  </div>
+</section>
+
+</div>
+
+<script>
+const bar = document.querySelector('.spec-bar');
+
+// 消息区吸底：视觉稿默认展示最新一条
+function pinMessages(){
+  document.querySelectorAll('.messages').forEach(m => { m.scrollTop = m.scrollHeight; });
+}
+
+bar.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-view]');
+  if (!btn) return;
+  const id = 'view-' + btn.dataset.view;
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === id));
+  bar.querySelectorAll('button[data-view]').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+  pinMessages();
+});
+
+pinMessages();
+</script>
+</body>
+</html>

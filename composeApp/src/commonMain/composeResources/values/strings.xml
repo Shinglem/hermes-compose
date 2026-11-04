@@ -1,0 +1,277 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Hermes Desktop Compose</string>
+
+    <!-- 连接状态（状态条） -->
+    <string name="status_idle">待连接</string>
+    <string name="status_connecting">连接中</string>
+    <string name="status_connected">已连接</string>
+    <string name="status_reconnecting">重连中（第 %1$d 次）</string>
+    <string name="status_disconnected">未连接</string>
+    <string name="status_closed">已断开</string>
+    <string name="status_unelevated">普通权限</string>
+    <string name="status_backend_version">后端 %1$s</string>
+
+    <!-- 左 rail -->
+    <string name="common_back">返回</string>
+    <string name="rail_default_profile">全局</string>
+    <string name="rail_switch_mode">切换模式</string>
+    <string name="rail_settings">设置</string>
+    <string name="mode_sessions">会话</string>
+    <string name="mode_capabilities">能力</string>
+
+    <!-- 会话列表 -->
+    <string name="sessions_search_hint">搜索会话</string>
+    <string name="sessions_group_today">今天</string>
+    <string name="sessions_group_yesterday">昨天</string>
+    <string name="sessions_group_last7">7 天内</string>
+    <string name="sessions_group_earlier">更早</string>
+    <string name="sessions_time_yesterday">昨天</string>
+    <string name="sessions_empty_title">还没有会话</string>
+    <string name="sessions_empty_body">在 %1$s 里开始一轮对话后，会话会出现在这里。</string>
+    <string name="sessions_no_match_title">没有匹配的会话</string>
+    <string name="sessions_no_match_body">换个关键词试试。</string>
+    <string name="sessions_loading">加载会话…</string>
+    <string name="sessions_new">新建会话</string>
+    <string name="sessions_creating">正在新建会话…</string>
+    <string name="chat_untitled">新会话</string>
+    <string name="sessions_group_pinned">置顶</string>
+    <string name="sessions_more">更多操作</string>
+    <string name="sessions_pin">置顶</string>
+    <string name="sessions_unpin">取消置顶</string>
+    <string name="sessions_rename">重命名</string>
+    <string name="sessions_delete">删除</string>
+    <string name="sessions_rename_title">重命名会话</string>
+    <string name="sessions_rename_hint">会话标题</string>
+    <string name="sessions_rename_ok">保存</string>
+    <string name="sessions_rename_cancel">取消</string>
+    <string name="sessions_delete_title">删除会话？</string>
+    <string name="sessions_delete_body">「%1$s」以及它的对话记录都会被删除，且无法恢复。</string>
+    <string name="sessions_delete_ok">删除</string>
+    <string name="sessions_delete_cancel">取消</string>
+    <string name="sessions_archive">归档</string>
+    <string name="sessions_archive_title">归档会话？</string>
+    <string name="sessions_archive_body">「%1$s」会从列表里移走，对话记录仍然保留，可在下方「已归档」里恢复。</string>
+    <string name="sessions_archive_ok">归档</string>
+    <string name="sessions_archive_cancel">取消</string>
+    <string name="sessions_archived_section">已归档（%1$d）</string>
+    <string name="sessions_archived_restore">恢复</string>
+
+    <!-- 对话消息操作 -->
+    <string name="chat_quote_message">引用到输入框</string>
+
+    <!-- 右栏空态 / 会话摘要 -->
+    <string name="detail_empty_title">选择一个会话</string>
+    <string name="detail_empty_body">从左侧列表中选一个会话，查看它的信息。</string>
+    <string name="detail_messages_count">%1$d 条消息</string>
+    <string name="detail_source">来源 %1$s</string>
+    <string name="detail_started_at">开始于 %1$s</string>
+    <string name="detail_session_id">会话 ID %1$s</string>
+
+    <!-- 模型选择（composer 底部） -->
+    <string name="model_pill_select">选择模型</string>
+    <string name="model_loading">正在读取模型列表…</string>
+    <string name="model_retry">模型列表不可用，点此重试</string>
+    <string name="model_empty">这个 profile 还没有可用的 provider</string>
+    <string name="model_confirm_title">切换到较贵的模型？</string>
+    <string name="model_confirm_body">%1$s 的单价较高，确认切换？</string>
+    <string name="model_confirm_ok">继续</string>
+    <string name="model_confirm_cancel">取消</string>
+
+    <!-- 能力模式 -->
+    <string name="capabilities_title">能力</string>
+    <string name="capabilities_skills">技能与工具</string>
+    <string name="capabilities_platforms">消息平台</string>
+    <string name="capabilities_cron">定时任务</string>
+    <string name="capabilities_empty_title">选择左侧分类</string>
+    <string name="capabilities_empty_body">技能、消息平台与定时任务的设置会显示在这里。</string>
+    <string name="capabilities_retry">重试</string>
+    <string name="capabilities_load_failed">加载失败</string>
+    <string name="capabilities_refresh">刷新</string>
+    <string name="capabilities_dismiss">知道了</string>
+
+    <string name="capability_tab_skills">技能</string>
+    <string name="capability_tab_toolsets">工具集</string>
+    <string name="capability_tab_discover">发现</string>
+    <string name="capability_catalog_subtitle">官方技能库 %1$d 项，已安装 %2$d 项</string>
+    <string name="capability_catalog_all">全部</string>
+    <string name="capability_catalog_install">安装</string>
+    <string name="capability_catalog_installed">已安装</string>
+    <string name="capability_catalog_empty">没有匹配的目录项</string>
+    <string name="capability_catalog_empty_body">换个关键词或分类；目录来自随包的后端 payload。</string>
+    <string name="capability_search_hint">搜索名称、说明或分类</string>
+    <string name="capability_skills_subtitle">%1$d 个技能，%2$d 个已启用</string>
+    <string name="capability_toolsets_subtitle">%1$d 个工具集，%2$d 个已启用</string>
+    <string name="capability_skills_empty">没有匹配的技能</string>
+    <string name="capability_skills_empty_body">换个关键词，或清空搜索框。</string>
+    <string name="capability_toolsets_empty">没有匹配的工具集</string>
+    <string name="capability_provenance_bundled">内置</string>
+    <string name="capability_provenance_agent">自建</string>
+    <string name="capability_usage">用过 %1$d 次</string>
+    <string name="capability_detail_show">查看 SKILL.md</string>
+    <string name="capability_detail_hide">收起</string>
+    <string name="capability_toolset_unavailable">当前不可用</string>
+    <string name="capability_toolset_unconfigured">未配置</string>
+    <string name="capability_toolset_tools">%1$d 个工具</string>
+
+    <string name="capability_platform_subtitle">%1$d 个平台，%2$d 个已连接</string>
+    <string name="capability_platform_configure">配置</string>
+    <string name="capability_platform_collapse">收起</string>
+    <string name="capability_platform_save">保存</string>
+    <string name="capability_platform_saving">保存中…</string>
+    <string name="capability_platform_test">测试连接</string>
+    <string name="capability_platform_testing">测试中…</string>
+    <string name="capability_platform_required">必填</string>
+    <string name="capability_platform_is_set">已设置</string>
+    <string name="capability_platform_home">主频道：%1$s</string>
+    <string name="capability_platform_state_connected">已连接</string>
+    <string name="capability_platform_state_disabled">未启用</string>
+    <string name="capability_platform_state_error">异常</string>
+    <string name="capability_platform_env_hint">已保存的值不回显；留空表示不修改。</string>
+    <string name="capability_platform_empty">还没有可用的消息平台</string>
+    <string name="capability_platform_empty_body">后端未返回任何平台定义。</string>
+
+    <string name="capability_cron_subtitle">%1$d 个任务，%2$d 个已暂停</string>
+    <string name="capability_cron_new">新建任务</string>
+    <string name="capability_cron_blueprint">用蓝图</string>
+    <string name="capability_cron_create">创建</string>
+    <string name="capability_cron_save_edit">保存修改</string>
+    <string name="capability_cron_edit">编辑</string>
+    <string name="capability_cron_profile_tag">profile：%1$s</string>
+    <string name="capability_cron_cancel">取消</string>
+    <string name="capability_cron_pause">暂停</string>
+    <string name="capability_cron_resume">恢复</string>
+    <string name="capability_cron_trigger">立即运行</string>
+    <string name="capability_cron_delete">删除</string>
+    <string name="capability_cron_delete_confirm">确认删除这个任务？</string>
+    <string name="capability_cron_runs">运行记录</string>
+    <string name="capability_cron_runs_empty">还没有运行记录</string>
+    <string name="capability_cron_empty">还没有定时任务</string>
+    <string name="capability_cron_empty_body">点右上角「新建任务」，或用蓝图快速创建。</string>
+    <string name="capability_cron_field_name">名称（可空）</string>
+    <string name="capability_cron_field_schedule">cron 表达式</string>
+    <string name="capability_cron_field_prompt">任务内容</string>
+    <string name="capability_cron_field_deliver">投递到</string>
+    <string name="capability_cron_schedule_hint">5 段，例如 0 9 * * *（每天 9 点）</string>
+    <string name="capability_cron_paused_tag">已暂停</string>
+    <string name="capability_cron_status_running">运行中</string>
+    <string name="capability_cron_status_completed">成功</string>
+    <string name="capability_cron_status_failed">失败</string>
+    <string name="capability_cron_status_unknown">未知</string>
+    <string name="capability_cron_last_run">最近：%1$s</string>
+    <string name="capability_cron_run_duration">用时 %1$s 秒</string>
+
+    <!-- 对话 -->
+    <string name="chat_role_user">你</string>
+    <string name="chat_role_assistant">Hermes</string>
+    <string name="chat_copy_message">复制整条</string>
+    <string name="chat_reload">刷新</string>
+    <string name="chat_loading">加载消息…</string>
+    <string name="chat_empty_title">这个会话还没有消息</string>
+    <string name="chat_empty_body">在 %1$s 里继续对话后，消息会显示在这里。</string>
+    <string name="chat_truncated">仅显示最近 %1$d 条消息</string>
+    <string name="chat_tool_args">参数</string>
+    <string name="chat_tool_result">结果</string>
+    <string name="chat_tool_status_done">已完成</string>
+    <string name="chat_tool_status_failed">失败</string>
+    <string name="chat_tool_orphan">历史被截断，未找到对应的调用</string>
+    <string name="chat_tool_truncated">结果过长，仅显示前 %1$d 个字符</string>
+    <string name="chat_tool_show_all">显示全部（%1$d 字符）</string>
+    <string name="chat_tool_show_less">收起</string>
+    <string name="chat_streaming">正在生成…</string>
+    <string name="chat_jump_to_latest">回到最新</string>
+    <string name="chat_mermaid_fallback">图表语法暂不支持，已按源码显示</string>
+
+    <!-- composer 与审批 -->
+    <string name="composer_placeholder">给 Hermes 发消息（Enter 发送，Shift+Enter 换行）</string>
+    <string name="composer_send">发送</string>
+    <string name="composer_stop">停止</string>
+    <string name="composer_attachment_prefix">已附加：%1$s</string>
+    <string name="composer_history_empty">没有历史输入</string>
+    <string name="composer_attach">附加文件</string>
+    <string name="composer_drop_hint">松开即可附加文件</string>
+    <string name="approval_title">需要你确认</string>
+    <string name="approval_choose_once">允许一次</string>
+    <string name="approval_choose_session">本会话允许</string>
+    <string name="approval_choose_always">总是允许</string>
+    <string name="approval_choose_deny">拒绝</string>
+
+    <!-- clarify：agent 反问用户 -->
+    <string name="clarify_title">需要你回答</string>
+    <string name="clarify_multi_hint">可多选</string>
+    <string name="clarify_other">其他（直接输入）</string>
+    <string name="clarify_submit">提交</string>
+    <string name="clarify_cancel">取消</string>
+
+    <!-- 错误 -->
+    <string name="error_title">出错了</string>
+    <string name="error_backend_unreachable">连不上后端，请确认 Hermes 已在运行。</string>
+    <string name="error_unauthorized">认证失败：token 缺失或不匹配。</string>
+    <string name="error_not_connected">尚未连接到后端。</string>
+    <string name="error_timeout">请求超时（%1$s）。</string>
+    <string name="error_protocol">协议错误：%1$s</string>
+    <string name="error_server">服务端错误 %1$d：%2$s</string>
+    <string name="error_unknown">未知错误：%1$s</string>
+    <string name="action_retry">重试</string>
+    <string name="common_close">关闭</string>
+
+    <!-- v0.3.0 · 历史分页 / 用量 / 重发 / 分支 -->
+    <string name="chat_load_older">加载更早的消息</string>
+    <string name="chat_loading_older">正在加载更早的消息…</string>
+    <string name="chat_load_older_retry">加载失败，点此重试</string>
+    <string name="chat_history_start">已经是最早的一条</string>
+    <string name="chat_usage_hint">点开查看上下文占用</string>
+    <string name="chat_usage_high">偏多</string>
+    <string name="chat_usage_unknown">已用 %1$s（上限未知）</string>
+    <string name="chat_usage_total">累计 %1$s</string>
+    <string name="chat_usage_total_detail">累计 %1$s tokens · %2$d 次调用</string>
+    <string name="chat_reasoning">思考过程</string>
+    <string name="chat_rewind_message">重发</string>
+    <string name="chat_branch_message">从这里分支</string>
+    <string name="chat_rewind_title">重发这条消息？</string>
+    <string name="chat_rewind_body">将删除这条消息之后的历史，然后重新发送。此操作不可撤销。</string>
+    <string name="chat_rewind_body_empty">这将清空当前会话的全部历史并重新发送。此操作不可撤销。</string>
+    <string name="chat_rewind_ok">重发</string>
+    <string name="chat_rewind_cancel">取消</string>
+    <string name="chat_branch_title">从这里分支</string>
+    <string name="chat_branch_body">将复制前 %1$d 条消息到一个新会话，原会话不受影响。</string>
+    <string name="chat_branch_ok">创建分支</string>
+    <string name="chat_branch_cancel">取消</string>
+    <string name="chat_subagents">子代理</string>
+
+    <!-- v0.3.0 · 会话列表：复制 / 导出 / 内容搜索 -->
+    <string name="sessions_duplicate">复制为新会话</string>
+    <string name="sessions_export_json">导出为 JSON</string>
+    <string name="sessions_export_markdown">导出为 Markdown</string>
+    <string name="sessions_search_content">搜索消息内容</string>
+    <string name="sessions_search_content_hint">在消息内容中搜索</string>
+    <string name="sessions_search_content_empty">没有匹配的消息内容</string>
+
+    <!-- v0.3.0 · 子代理面板 -->
+    <string name="subagent_title">子代理</string>
+    <string name="subagent_showing">%1$d 个子代理 · %2$d 个在跑</string>
+    <string name="subagent_refresh">刷新</string>
+    <string name="subagent_loading">正在读取子代理…</string>
+    <string name="subagent_empty">当前会话没有子代理</string>
+    <string name="subagent_unavailable">这个会话还没有活动运行时，先发一条消息再试。</string>
+    <string name="subagent_tools">%1$d 个工具</string>
+    <string name="subagent_tail_empty">读取最近输出</string>
+    <string name="subagent_steer">引导</string>
+    <string name="subagent_steer_cancel">收起</string>
+    <string name="subagent_steer_hint">给这个子代理一句指令</string>
+    <string name="subagent_steer_send">发送</string>
+    <string name="subagent_interrupt">中断</string>
+
+    <!-- v0.3.0 · 命令面板 -->
+    <string name="palette_hint">搜索会话或输入命令…</string>
+    <string name="palette_empty">没有匹配项</string>
+    <string name="palette_sessions">会话</string>
+
+    <!-- 后台任务（composer 上方状态条） -->
+    <string name="background_tasks_title">%1$d 个后台任务</string>
+    <string name="background_tasks_running">%1$d 个运行中</string>
+    <string name="background_task_kill">终止</string>
+    <string name="background_task_dismiss">隐藏这条</string>
+    <string name="background_task_exited">已退出（退出码 %1$d）</string>
+    <string name="background_task_no_output">还没有输出</string>
+</resources>

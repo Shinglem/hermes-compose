@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "ui": {
+    "theme": "system"
+  },
+  "network": {
+    "request_timeout_ms": 30000,
+    "write_timeout_ms": 45000,
+    "prompt_ack_timeout_ms": 1800000
+  }
+}

@@ -1,0 +1,30 @@
+# 行尾：文本一律 LF（见 AGENTS.md §6）
+# 覆盖各机的 core.autocrlf，避免 diff 整文件重写、脚本在 Linux 上执行报错
+* text=auto eol=lf
+
+# Windows 批处理必须 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Gradle Wrapper：脚本 LF，jar 按二进制
+gradlew text eol=lf
+*.jar binary
+
+# 二进制资源，不做行尾转换
+*.exe   binary
+*.dll   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.woff  binary
+*.woff2 binary
+*.zip   binary
+*.gz    binary
+*.7z    binary
+*.pdf   binary
+*.mp4   binary
+*.keystore binary
+*.jks   binary

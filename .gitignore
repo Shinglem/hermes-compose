@@ -1,0 +1,81 @@
+# Compiled class file
+*.class
+
+# Log file
+*.log
+
+# BlueJ files
+*.ctxt
+
+# Mobile Tools for Java (J2ME)
+.mtj.tmp/
+
+# Package Files #
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
+hs_err_pid*
+replay_pid*
+
+# Kotlin Gradle plugin data, see https://kotlinlang.org/docs/whatsnew20.html#new-directory-for-kotlin-data-in-gradle-projects
+.kotlin/
+
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+local.properties
+captures/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.fleet/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Runtime
+*.hprof
+logs/
+out/
+
+# Local secrets / env
+.env
+.env.local
+
+# 成品测试目录（打包产物，不进仓库）
+release-test/
+
+# 启动器 exe 由 CI 发布到工具链 Release（tag: toolchain-v<N>），不入库。
+# 原因：JBR 的 jpackage 在 .rsrc 版本信息里有约 0.5% 非确定字节，同一模板每次生成
+# sha256 都不同，入库只会制造无意义的二进制 diff。本机跑过 updateBundledLauncher
+# 后会出现在这里，供本机构建复用。
+/packaging/launcher/*.exe
+
+# 开发态运行产生的配置（`:composeApp:run` 的 user.dir 是模块目录，
+# 于是 <home> 回退到 composeApp/ 并在这里生成 config/，见 05-打包与配置.md §3）
+/composeApp/config/
+
+# IntelliJ 的模块输出目录（源码在 src/，这里只有 IDE 生成/镜像的副本）。
+# 注意：子模块里的 bin/ 由 `.gitmodules` 的 `ignore = untracked` 处理，
+# 不要在这里按名字忽略 bin/ —— modules/terminal-bossterm 的资源目录另有约定。
+/composeApp/bin/
+/modules/terminal/bin/
+# ---------------------------------------------------------------------------
+# 本机私有文件（不入库）：JDK 路径、启动器 exe、本机配置等
+#   .local/local.properties  — hermes.rt.dir / hermes.jmods.dir（见 05-打包与配置.md §6.1）
+#   .local/README.md         — 本机笔记，随便写，不会进仓库
+# 仓库里不许出现本机绝对路径 / 用户名 / 机器名，需要时写占位符（<JDK 目录>、<机器名>）。
+.local/

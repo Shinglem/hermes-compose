@@ -1,0 +1,255 @@
+# 在云端生成 Windows 工具链并打成一个 Release：
+#   1. 启动器（jpackage app-image）：hermes-desktop-compose.exe + console 变体
+#   2. 裁剪运行时（jlink）：rt/（bin lib release），约 60 MB
+#   3. 用 jdeps 校验运行时的模块闭包是否还够
+#
+# 基线是 **Temurin 27（官方 JDK，自带 jmods）**，不再用 JBR：
+#   * 触摸输入那批问题在 Temurin 上本就正常（见 10-Windows触屏输入.md）；
+#   * 字体由随包 Inter / JetBrains Mono 补，JCEF 由 me.friwi:jcefmaven 补（见 11-JCEF集成.md）。
+#
+# 版本号：Release tag = `toolchain-v<N>`，N 手工递增（v1、v2 …）。一次构建产出两个资产：
+#   launcher-windows-x64.zip   ← 解到成品根目录
+#   runtime-windows-x64.zip    ← 解成成品的 rt/
+# 桌面 CI（desktop-release.yml）按这个 tag 取件，不重跑 jpackage / jlink。
+name: toolchain-windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 工具链版本号（填 1 → Release tag 为 toolchain-v1）
+        type: string
+        required: true
+      launcher_refresh:
+        description: 强制用 jpackage 重新生成启动器
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: toolchain-windows
+  cancel-in-progress: false
+
+env:
+  # 官方 JDK 基线：Gradle / jpackage / jlink / 成品运行时全用它。本地用 jdk-27 对齐。
+  JDK_VERSION: '27'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: 校验输入
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $v = '${{ inputs.version }}'.Trim()
+          if ($v -notmatch '^\d+$') { throw "version 必须是纯数字（例如 1），实际 '$v'" }
+          "TOOLCHAIN_VER=$v" >> $env:GITHUB_ENV
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JDK_VERSION }}
+
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: 确认工具链
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($t in 'java', 'jpackage', 'jlink', 'jdeps') {
+            $p = Join-Path $env:JAVA_HOME "bin\$t.exe"
+            if (-not (Test-Path $p)) { throw "缺少 $p（需要的是完整 JDK，不是 JRE）" }
+          }
+          if (-not (Test-Path "$env:JAVA_HOME\jmods\java.base.jmod")) {
+            throw "缺少 $env:JAVA_HOME\jmods，无法 jlink 裁剪"
+          }
+          & "$env:JAVA_HOME\bin\java.exe" -version
+          & "$env:JAVA_HOME\bin\jpackage.exe" --version
+          $impl = (Select-String -Path "$env:JAVA_HOME\release" -Pattern '^IMPLEMENTOR=').Line
+          Write-Host "工具链：$impl"
+          if ($impl -notmatch 'Adoptium') { Write-Warning "当前 JDK 不是 Adoptium Temurin：$impl" }
+
+      - name: 生成启动器
+        env:
+          LAUNCHER_REFRESH: ${{ inputs.launcher_refresh }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $gradleArgs = @(
+            ':composeApp:updateBundledLauncher',
+            "-Phermes.rt.dir=$env:JAVA_HOME"
+          )
+          if ($env:LAUNCHER_REFRESH -ne 'false') { $gradleArgs += '-Phermes.launcher.refresh' }
+          Write-Host "gradlew $($gradleArgs -join ' ')"
+          & .\gradlew.bat @gradleArgs
+          if ($LASTEXITCODE -ne 0) { throw "gradle 失败，exit=$LASTEXITCODE" }
+
+      # 必须分两次调用：updateBundledLauncher 写 packaging/launcher，syncReleaseLauncher 读同一目录，
+      # 两者之间没有声明顺序依赖，Gradle 9 会以「隐式依赖」拒绝在同一次构建里同时跑。
+      - name: 组装 release-test 与裁剪运行时
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $gradleArgs = @(
+            ':composeApp:syncReleaseTest',
+            "-Phermes.jmods.dir=$env:JAVA_HOME",
+            "-Phermes.rt.dir=$env:JAVA_HOME"
+          )
+          Write-Host "gradlew $($gradleArgs -join ' ')"
+          & .\gradlew.bat @gradleArgs
+          if ($LASTEXITCODE -ne 0) { throw "gradle 失败，exit=$LASTEXITCODE" }
+
+      - name: 核对启动器
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = 'packaging\launcher'
+          foreach ($f in 'hermes-desktop-compose.exe', 'hermes-desktop-compose-console.exe') {
+            if (-not (Test-Path "$dir\$f")) { throw "缺少 $dir\$f" }
+            $fi = Get-Item "$dir\$f"
+            $hash = (Get-FileHash $fi.FullName -Algorithm SHA256).Hash.ToLower()
+            Write-Host ("{0,-34} {1,8:N0} B  {2}" -f $f, $fi.Length, $hash)
+          }
+          exit 0
+
+      - name: 核对裁剪运行时
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = 'composeApp\build\jlink-runtime'
+          if (-not (Test-Path "$out\bin\java.exe")) { throw "缺少 $out\bin\java.exe" }
+          & "$out\bin\java.exe" -version
+          $modules = @(& "$out\bin\java.exe" --list-modules)
+          Write-Host "模块数：$($modules.Count)"
+          $modules | ForEach-Object { Write-Host "  $_" }
+          $mb = [math]::Round((Get-ChildItem $out -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 1)
+          $files = (Get-ChildItem $out -Recurse -File).Count
+          Write-Host "体积：$mb MB / $files 文件"
+          if (-not (Test-Path "$out\bin\keytool.exe")) { Write-Warning '缺少 keytool.exe（jlink 默认会带）' }
+          exit 0
+
+      # jdeps 只看得见静态可达的模块；反射 / ServiceLoader 用到的模块必须手写在
+      # composeApp/build.gradle.kts 的 runtimeModules 里。这一步保证「代码里新引入的
+      # 模块不会悄悄跑出裁剪范围」—— 否则 jlink 照样成功，成品启动时才 NoClassDefFoundError。
+      - name: 用 jdeps 校验模块闭包
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = (Resolve-Path 'release-test\bin\App.jar').Path
+          $libDir = (Resolve-Path 'release-test\lib').Path
+          $cp = (Get-ChildItem $libDir -Filter *.jar | ForEach-Object { $_.FullName }) -join ';'
+          Write-Host "classpath: $((Get-ChildItem $libDir -Filter *.jar).Count) 个 jar"
+
+          $raw = & "$env:JAVA_HOME\bin\jdeps.exe" --print-module-deps --ignore-missing-deps `
+                   --multi-release 25 -cp $cp $app 2>&1
+          $found = ($raw | Where-Object { $_ -match '^[a-z][a-zA-Z0-9._]*(\s*,\s*[a-z][a-zA-Z0-9._]*)*$' } |
+                    Select-Object -Last 1) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+          if (-not $found) { throw "jdeps 没有输出模块列表：$($raw -join ' ')" }
+          Write-Host "jdeps 发现的模块：$($found -join ', ')"
+
+          # 从构建脚本里读 runtimeModules，避免 workflow 里再抄一份导致漂移
+          $src = Get-Content 'composeApp\build.gradle.kts' -Raw
+          $m = [regex]::Match($src, 'val runtimeModules = listOf\(([\s\S]*?)\)\s*\+')
+          if (-not $m.Success) { throw '无法从 build.gradle.kts 解析 runtimeModules' }
+          $declared = [regex]::Matches($m.Groups[1].Value, '"([a-z][a-zA-Z0-9._]*)"') |
+                      ForEach-Object { $_.Groups[1].Value }
+          Write-Host "runtimeModules 声明的模块数：$($declared.Count)"
+
+          $m2 = [regex]::Match($src, 'val runtimeModulesJdepsExempt = listOf\(([\s\S]*?)\)')
+          $exempt = if ($m2.Success) {
+            @([regex]::Matches($m2.Groups[1].Value, '"([a-z][a-zA-Z0-9._]*)"') |
+              ForEach-Object { $_.Groups[1].Value })
+          } else { @() }
+          if ($exempt.Count -gt 0) { Write-Host "jdeps 已知误报（豁免）：$($exempt -join ', ')" }
+
+          $missing = $found | Where-Object { $_ -notin $declared -and $_ -notin $exempt }
+          if ($missing) {
+            throw ("jdeps 发现 runtimeModules 没声明的模块：$($missing -join ', ')。" +
+                   "请把它们加进 composeApp/build.gradle.kts 的 runtimeModules；" +
+                   "确认是死代码就登记到 runtimeModulesJdepsExempt。")
+          }
+          Write-Host '模块闭包校验通过：裁剪范围覆盖了 jdeps 的全部静态依赖'
+          exit 0
+
+      - name: 打 zip 并算摘要
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sevenZip = 'C:\Program Files\7-Zip\7z.exe'
+          if (-not (Test-Path $sevenZip)) { throw '缺少 7-Zip' }
+          $dist = 'C:\work\toolchain'
+          Remove-Item $dist -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $dist | Out-Null
+
+          # 启动器：两个 exe 平铺（用户解到成品根目录）
+          & $sevenZip a -tzip -mx=5 "$dist\launcher-windows-x64.zip" '.\packaging\launcher\hermes-desktop-compose.exe' '.\packaging\launcher\hermes-desktop-compose-console.exe'
+          if ($LASTEXITCODE -gt 1) { throw "打包启动器失败，exit=$LASTEXITCODE" }
+
+          # 运行时：在目录内部打 `.`，解压后直接是 bin/ lib/ release/，可以当 rt/ 用
+          Push-Location 'composeApp\build\jlink-runtime'
+          try {
+            & $sevenZip a -tzip -mx=5 "$dist\runtime-windows-x64.zip" .
+            if ($LASTEXITCODE -gt 1) { throw "打包运行时失败，exit=$LASTEXITCODE" }
+          } finally { Pop-Location }
+
+          $lines = foreach ($f in (Get-ChildItem $dist -Filter *.zip | Sort-Object Name)) {
+            Write-Host ('{0,-30} {1,10:N1} MB' -f $f.Name, ($f.Length / 1MB))
+            '{0}  {1}' -f (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower(), $f.Name
+          }
+          $lines | Set-Content "$dist\SHA256SUMS.txt" -Encoding ascii
+          $lines | ForEach-Object { Write-Host $_ }
+
+      - name: 发布工具链 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = "toolchain-v$env:TOOLCHAIN_VER"
+          $repo = $env:GITHUB_REPOSITORY
+          $dist = 'C:\work\toolchain'
+          $title = "toolchain v$env:TOOLCHAIN_VER"
+
+          $notes = @(
+            "Windows 工具链 **v$env:TOOLCHAIN_VER**：启动器 + 裁剪运行时（同一版本一起出）。"
+            ''
+            "提交: https://github.com/$repo/commit/$env:GITHUB_SHA"
+            "运行: https://github.com/$repo/actions/runs/$env:GITHUB_RUN_ID"
+            ''
+            '## 资产'
+            ''
+            '| 文件 | 解到哪里 | 内容 |'
+            '|---|---|---|'
+            '| `launcher-windows-x64.zip` | 成品根目录 | `hermes-desktop-compose.exe` 与排障用的 `-console` 变体 |'
+            '| `runtime-windows-x64.zip` | 成品的 `rt\` | 里面直接是 `bin\ lib\ release` |'
+            '| `SHA256SUMS.txt` | — | 上面两个的摘要 |'
+            ''
+            '## 基线'
+            ''
+            "- JDK：**Temurin $env:JDK_VERSION**（官方 JDK，自带 jmods）"
+            '- 启动器由该 JDK 的 `jpackage` 生成；运行时由同一份 `jmods` 经 `jlink` 裁剪，'
+            '  模块列表见 `composeApp/build.gradle.kts` 的 `runtimeModules`，CI 每次用 jdeps 校验闭包。'
+            ''
+            '> 本 Release 只服务 `desktop-release` 取件，普通用户不需要下载；'
+            '> 桌面端请到最新桌面 Release 下载完整包。'
+          )
+          $notesPath = 'C:\work\TOOLCHAIN_NOTES.md'
+          Set-Content $notesPath ($notes -join "`n") -Encoding utf8NoBOM
+
+          gh release view $tag --repo $repo 2>$null
+          if ($LASTEXITCODE -eq 0) { throw "$tag 已存在。工具链版本号只增不改，请用新的 version 重跑" }
+
+          gh release create $tag --repo $repo --target $env:GITHUB_SHA --title $title --notes-file $notesPath
+          if ($LASTEXITCODE -ne 0) { throw "gh release create 失败，exit=$LASTEXITCODE" }
+          $files = @(Get-ChildItem $dist -File | ForEach-Object { $_.FullName })
+          gh release upload $tag @files --repo $repo
+          if ($LASTEXITCODE -ne 0) { throw "gh release upload 失败，exit=$LASTEXITCODE" }
+          Write-Host "已发布 https://github.com/$repo/releases/tag/$tag"
+
+      - name: 清理
+        if: always()
+        run: |
+          Remove-Item 'C:\work\toolchain' -Recurse -Force -ErrorAction SilentlyContinue
+          exit 0

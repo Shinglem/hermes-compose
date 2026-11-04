@@ -1,0 +1,114 @@
+# ============================================================================
+#  hermes-compose · 版本目录（唯一版本来源）
+#  ---------------------------------------------------------------------------
+#  规则（见 .design/详细设计/工程与代码/02-依赖与版本.md）：
+#   · 版本只在这里出现一次；模块脚本不写版本号
+#   · CMP 内部件（compose.runtime / material3 / desktop.currentOs / uiTest …）
+#     由 Compose 插件提供，**不进本文件**
+#   · 预览版（-alpha/-beta/-rc）不得进 [versions]，除非已有 ADR
+#   · 核对时间：2026-10-26，来源 repo1.maven.org maven-metadata.xml
+# ============================================================================
+
+[versions]
+# 语言与构建
+kotlin = "2.4.21"
+compose = "1.12.2"
+
+# 运行时
+lifecycle = "2.11.0"
+coroutines = "1.11.0"
+serialization = "1.12.0"
+# 注意：material3 1.9.0 传递依赖 kotlinx-datetime 0.7.1，与本项一起解析到
+# 官方 compat 变体 0.8.0-0.6.x-compat（保留 0.6 的 Instant 等 API）。
+# 这里直接写解析结果，避免"写的 0.8.0、跑的是别的"。
+datetime = "0.8.0-0.6.x-compat"
+settings = "1.3.0"
+
+# 网络
+ktor = "3.6.0"
+
+# 日志（AGENTS.md §2 允许的少量新增）：kotlin-logging 做门面，桌面端由 logback 落盘。
+# 版本核对时间：2026-10-28，来源 search.maven.org（kotlin-logging-jvm 7.0.7 / logback-classic 1.5.18）。
+kotlin-logging = "7.0.7"
+logback = "1.5.18"
+# Nucleus 通知模块：WinRT Toast（原生按钮）。核对 2026-11-04，repo1.maven.org；MIT。
+nucleus = "2.5.18"
+# JCEF（内嵌 Chromium）：Temurin 没有 jcef 模块，需自备。核对 2026-11-04，search.maven.org。
+jcefmaven = "135.0.20"
+# 与 jcefmaven 135.0.20 严格配套的 CEF native bundle。Maven Central 上有这个 artifact，
+# 所以不需要手工下载 tar.gz：构建期解压到 build/cef/bin（见 composeApp 的 extractCefBundle）。
+jcef-natives = "jcef-ca49ada+cef-135.0.20+ge7de5c3+chromium-135.0.7049.85"
+
+# 渲染与资源
+# Canvas 三窗格（M3 canonical list-detail）。
+# adaptive-layout 提供 ListDetailPaneScaffold（含 extraPane 第三槽）与 AnimatedPane；
+# adaptive-navigation 提供 rememberListDetailPaneScaffoldNavigator。
+# 两者都不依赖 material3，只依赖 foundation/ui/animation —— 与 material3 版本解耦。
+# 注意：NavigableListDetailPaneScaffold 只有 Android 侧有，CMP desktop 未移植，
+# 用 navigator + ListDetailPaneScaffold 等价实现（ADR-037）。
+adaptive = "1.3.0"
+coil = "3.6.3"
+
+# 终端：BossTerm 裁剪版以 git submodule + composite build 接入（modules/terminal-bossterm），
+# 不再从这里声明坐标；PTY 由它内部的 pty4j 负责。
+
+[libraries]
+# --- AndroidX Lifecycle（JetBrains 的 KMP 移植）---
+lifecycle-viewmodel-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+lifecycle-runtime-compose   = { module = "org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+
+# --- 协程 ---
+kotlinx-coroutines-core  = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
+
+# --- 序列化 / 时间 / 偏好 ---
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+kotlinx-datetime           = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "datetime" }
+multiplatform-settings     = { module = "com.russhwolf:multiplatform-settings", version.ref = "settings" }
+
+# --- Ktor（HTTP + WebSocket）---
+ktor-client-core                = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+ktor-client-cio                 = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
+ktor-client-websockets          = { module = "io.ktor:ktor-client-websockets", version.ref = "ktor" }
+ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
+ktor-serialization-json         = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
+
+# --- 日志 ---
+# commonMain 用 kotlin-logging 门面（multiplatform 变体，KMP 自动选 jvm）；
+# desktopMain 用 logback-classic 提供 SLF4J 后端与滚动文件。
+# Windows 原生通知（toast + 按钮）：native dll 打在 jar 里，由 core-runtime 的 NativeLibraryLoader 解压。
+# 依赖只有 kotlin-stdlib，不拖整个 nucleus 框架。见 详细设计/工程与代码/12-通知窗.md。
+nucleus-notification-windows = { module = "dev.nucleusframework:nucleus.notification-windows", version.ref = "nucleus" }
+# JCEF：提供 org.cef.* 类（见 详细设计/工程与代码/11-JCEF集成.md）。
+jcefmaven = { module = "me.friwi:jcefmaven", version.ref = "jcefmaven" }
+# CEF 的 native bundle（jar 内含一份 tar.gz，构建期解压）。仅 Windows x64。
+jcef-natives-windows = { module = "me.friwi:jcef-natives-windows-amd64", version.ref = "jcef-natives" }
+kotlin-logging  = { module = "io.github.oshai:kotlin-logging", version.ref = "kotlin-logging" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+
+# --- Canvas 三窗格（M3 canonical list-detail）---
+adaptive-layout     = { module = "org.jetbrains.compose.material3.adaptive:adaptive-layout", version.ref = "adaptive" }
+adaptive-navigation = { module = "org.jetbrains.compose.material3.adaptive:adaptive-navigation", version.ref = "adaptive" }
+
+# --- Markdown ---
+# 渲染实现来自 :modules:markdown-one（git submodule），依赖坐标写在它自己的
+# build.gradle.kts 里 —— 子模块挂载后读的是本 catalog，条目必须保持存在，
+# 但那边的依赖是字面量，所以这里不再登记 mikepenz / highlights / mermaid 的坐标。
+
+# --- 图片（注意：ktor 集成模块名带 3）---
+coil-compose       = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
+coil-svg           = { module = "io.coil-kt.coil3:coil-svg", version.ref = "coil" }
+coil-network-ktor3 = { module = "io.coil-kt.coil3:coil-network-ktor3", version.ref = "coil" }
+
+# --- 终端 ---
+# BossTerm 裁剪版（modules/terminal-bossterm）经 composite build 提供，坐标不在版本目录里。
+
+# --- Compose UI Test（显式坐标，避免 compose.uiTest 的实验性 opt-in）---
+compose-ui-test = { module = "org.jetbrains.compose.ui:ui-test", version.ref = "compose" }
+
+[plugins]
+kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlin-jvm           = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+compose-compiler     = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+compose              = { id = "org.jetbrains.compose", version.ref = "compose" }

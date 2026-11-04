@@ -1,0 +1,11 @@
+[submodule "modules/markdown-one"]
+	path = modules/markdown-one
+	url = https://github.com/Shinglem/markdown-one.git
+[submodule "modules/terminal-bossterm"]
+	path = modules/terminal-bossterm
+	url = https://github.com/Shinglem/BossTerm.git
+	branch = hermes
+	# IDE 会在子模块里生成 compose-ui/bin、hermes-example/bin 等未跟踪副本。
+	# 用 untracked（而不是 dirty）：只压住"未跟踪文件"的脏标记，
+	# 子模块里**已跟踪**文件被改动时仍会显示，便于发现误改。
+	ignore = untracked

@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  三个作用域 → 三个文件，各自滚动：每个最大 10 MB，最多保留 10 个（desktop.1.log … desktop.10.log）。
+
+  日志目录由 Logging.init() 通过系统属性 hermes.log.dir 注入（不再写死相对路径）。
+  级别由 init() 在运行时调整（config/app.log_level），这里只是默认值。
+-->
+<configuration>
+    <property name="LOG_DIR" value="${hermes.log.dir:-logs}"/>
+    <property name="PATTERN" value="%d{HH:mm:ss.SSS} %-5level %msg%n"/>
+
+    <appender name="DESKTOP" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DIR}/desktop.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/desktop.%i.log</fileNamePattern>
+            <minIndex>1</minIndex>
+            <maxIndex>10</maxIndex>
+        </rollingPolicy>
+        <triggeringPolicy class="ch.qos.logback.core.rolling.SizeBasedTriggeringPolicy">
+            <maxFileSize>10MB</maxFileSize>
+        </triggeringPolicy>
+        <encoder>
+            <pattern>${PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <appender name="GATEWAY" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DIR}/gateway.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/gateway.%i.log</fileNamePattern>
+            <minIndex>1</minIndex>
+            <maxIndex>10</maxIndex>
+        </rollingPolicy>
+        <triggeringPolicy class="ch.qos.logback.core.rolling.SizeBasedTriggeringPolicy">
+            <maxFileSize>10MB</maxFileSize>
+        </triggeringPolicy>
+        <encoder>
+            <pattern>${PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <appender name="DASHBOARD" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DIR}/dashboard.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/dashboard.%i.log</fileNamePattern>
+            <minIndex>1</minIndex>
+            <maxIndex>10</maxIndex>
+        </rollingPolicy>
+        <triggeringPolicy class="ch.qos.logback.core.rolling.SizeBasedTriggeringPolicy">
+            <maxFileSize>10MB</maxFileSize>
+        </triggeringPolicy>
+        <encoder>
+            <pattern>${PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- 后端子进程的输出按 logger 名分流；不进 root，否则会同时写进 desktop.log。 -->
+    <logger name="gateway" level="INFO" additivity="false">
+        <appender-ref ref="GATEWAY"/>
+    </logger>
+    <logger name="dashboard" level="INFO" additivity="false">
+        <appender-ref ref="DASHBOARD"/>
+    </logger>
+
+    <root level="INFO">
+        <appender-ref ref="DESKTOP"/>
+    </root>
+
+    <!-- logback 自身的启动诊断噪音很大，且与业务日志无关。 -->
+    <statusListener class="ch.qos.logback.core.status.NopStatusListener"/>
+</configuration>
