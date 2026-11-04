@@ -55,12 +55,32 @@ jobs:
           if ($v -notmatch '^\d+$') { throw "version 必须是纯数字（例如 1），实际 '$v'" }
           "TOOLCHAIN_VER=$v" >> $env:GITHUB_ENV
 
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: ${{ env.JDK_VERSION }}
+      # ⚠️ 不能用 actions/setup-java：它取的是 GitHub 预装（hostedtoolcache）的 Temurin，
+      # 那份被裁掉了 `jmods/`（省磁盘），于是 jlink 直接失败 —— 实测 run 41809831894。
+      # 自己从 Adoptium 下完整 JDK（含 jmods 与 jpackage）。
+      - name: 安装 Temurin JDK（含 jmods）
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = "https://api.adoptium.net/v3/binary/latest/$env:JDK_VERSION/ga/windows/x64/jdk/hotspot/normal/eclipse?project=jdk"
+          $zip = Join-Path $env:RUNNER_TEMP 'temurin-jdk.zip'
+          Write-Host "下载 $url"
+          curl.exe -fsSL --retry 3 --retry-delay 5 -o $zip $url
+          if ($LASTEXITCODE -ne 0) { throw "下载 JDK 失败，exit=$LASTEXITCODE" }
+          Write-Host ('{0:N0} MB' -f ((Get-Item $zip).Length / 1MB))
 
-      - uses: gradle/actions/setup-gradle@v5
+          New-Item -ItemType Directory -Force 'C:\jdk' | Out-Null
+          & 'C:\Program Files\7-Zip\7z.exe' x $zip '-oC:\jdk' -y | Out-Null
+          if ($LASTEXITCODE -gt 1) { throw "解压 JDK 失败，exit=$LASTEXITCODE" }
+          Remove-Item $zip -Force
+
+          $home_ = (Get-ChildItem 'C:\jdk' -Directory | Select-Object -First 1).FullName
+          if (-not $home_) { throw 'C:\jdk 下没有解出 JDK 目录' }
+          if (-not (Test-Path "$home_\jmods\java.base.jmod")) {
+            throw "$home_\jmods 缺失：这份 JDK 不完整，无法 jlink"
+          }
+          "JAVA_HOME=$home_" >> $env:GITHUB_ENV
+          "$home_\bin" >> $env:GITHUB_PATH
+          Write-Host "JAVA_HOME=$home_"
 
       - name: 确认工具链
         run: |
@@ -76,7 +96,9 @@ jobs:
           & "$env:JAVA_HOME\bin\jpackage.exe" --version
           $impl = (Select-String -Path "$env:JAVA_HOME\release" -Pattern '^IMPLEMENTOR=').Line
           Write-Host "工具链：$impl"
-          if ($impl -notmatch 'Adoptium') { Write-Warning "当前 JDK 不是 Adoptium Temurin：$impl" }
+          if ($impl -notmatch 'Adoptium') { throw "当前 JDK 不是 Adoptium Temurin：$impl" }
+
+      - uses: gradle/actions/setup-gradle@v5
 
       - name: 生成启动器
         env:
