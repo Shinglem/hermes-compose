@@ -1,11 +1,15 @@
 # 变更日志
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，用中文表述。
-版本号口径见文末「版本号说明」——**客户端里程碑版本**与**发布 tag** 是两套数字。
+版本号口径见文末「版本号说明」——桌面 Release tag 形如 `v<桌面版本>-<hermes版本>`。
 
 ---
 
-## [未发布]
+## [0.4.0] · 2026-11-04（hermes 0.22.5）
+
+> 首个按新规则发布的版本：tag `v0.4.0-0.22.5`，产物是**纯外壳**（不含 payload），
+> 默认 `local` 模式，payload 自己从 `Shinglem/hermes-bundle` 的 `v0.22.5` 下载后放进安装目录。
+> 运行时基线换成官方 **Temurin 27**。
 
 ### 新增
 
