@@ -146,7 +146,7 @@ jobs:
           & .\gradlew.bat @gradleArgs
           if ($LASTEXITCODE -ne 0) { throw "gradle 失败，exit=$LASTEXITCODE" }
 
-          foreach ($p in 'hermes-desktop-compose.exe', 'app\hermes-desktop-compose.cfg', 'bin\App.jar', 'lib', 'rt\bin\java.exe', 'config\config.json') {
+          foreach ($p in 'hermes-desktop-compose.exe', 'app\hermes-desktop-compose.cfg', 'bin\App.jar', 'lib', 'rt\bin\java.exe', 'config\config.json', 'cef\libcef.dll', 'cef\jcef_helper.exe') {
             if (-not (Test-Path "release-test\$p")) { throw "缺少 release-test\$p" }
           }
           # 外壳形态：**不含** hermes/（payload 由用户自己下载放入）
@@ -163,7 +163,9 @@ jobs:
           Remove-Item $dst -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $dst | Out-Null
           # 只取成品需要的部分，不复制 data/ logs/ hermes/
-          foreach ($item in 'hermes-desktop-compose.exe', 'app', 'bin', 'lib', 'rt', 'config') {
+          # `cef/` 必带：markdown-one 的 HTML 渲染走它（310 MB，libcef.dll 占 222 MB）。
+          # 漏掉不会崩，但 HTML 块会静默退化成源码 —— 用户明确要求集成 JCEF。
+          foreach ($item in 'hermes-desktop-compose.exe', 'app', 'bin', 'lib', 'rt', 'config', 'cef') {
             Copy-Item "release-test\$item" $dst -Recurse -Force
           }
 
@@ -171,7 +173,7 @@ jobs:
           $cfg = Get-Content (Join-Path $dst 'config\config.json') -Raw | ConvertFrom-Json
           if ($cfg.backend.mode -ne 'local') { throw "默认模式应为 local，实际 $($cfg.backend.mode)" }
 
-          foreach ($p in 'hermes-desktop-compose.exe', 'config\config.json', 'rt\bin\java.exe', 'app\hermes-desktop-compose.cfg') {
+          foreach ($p in 'hermes-desktop-compose.exe', 'config\config.json', 'rt\bin\java.exe', 'app\hermes-desktop-compose.cfg', 'cef\libcef.dll', 'cef\jcef_helper.exe') {
             if (-not (Test-Path (Join-Path $dst $p))) { throw "产物缺少 $p" }
           }
           if (Test-Path (Join-Path $dst 'hermes')) { throw '产物里不应有 hermes/' }
