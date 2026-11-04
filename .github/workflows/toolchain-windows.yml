@@ -151,19 +151,16 @@ jobs:
           if (-not $found) { throw "jdeps 没有输出模块列表：$($raw -join ' ')" }
           Write-Host "jdeps 发现的模块：$($found -join ', ')"
 
-          # 从构建脚本里读 runtimeModules，避免 workflow 里再抄一份导致漂移
-          $src = Get-Content 'composeApp\build.gradle.kts' -Raw
-          $m = [regex]::Match($src, 'val runtimeModules = listOf\(([\s\S]*?)\)\s*\+')
-          if (-not $m.Success) { throw '无法从 build.gradle.kts 解析 runtimeModules' }
-          $declared = [regex]::Matches($m.Groups[1].Value, '"([a-z][a-zA-Z0-9._]*)"') |
-                      ForEach-Object { $_.Groups[1].Value }
+          # 从构建脚本里取清单（不解析源码正则 —— 那种做法一旦匹配漂移就会假通过）
+          $props = & .\gradlew.bat :composeApp:printRuntimeModules --console=plain -q
+          if ($LASTEXITCODE -ne 0) { throw "读取 runtimeModules 失败，exit=$LASTEXITCODE" }
+          $declared = (($props | Select-String '^RUNTIME_MODULES=').Line -replace '^RUNTIME_MODULES=','') -split ',' |
+                      Where-Object { $_ }
+          $exempt = (($props | Select-String '^RUNTIME_MODULES_EXEMPT=').Line -replace '^RUNTIME_MODULES_EXEMPT=','') -split ',' |
+                    Where-Object { $_ }
+          if (-not $declared) { throw "runtimeModules 为空（解析 printRuntimeModules 输出失败）" }
           Write-Host "runtimeModules 声明的模块数：$($declared.Count)"
-
-          $m2 = [regex]::Match($src, 'val runtimeModulesJdepsExempt = listOf\(([\s\S]*?)\)')
-          $exempt = if ($m2.Success) {
-            @([regex]::Matches($m2.Groups[1].Value, '"([a-z][a-zA-Z0-9._]*)"') |
-              ForEach-Object { $_.Groups[1].Value })
-          } else { @() }
+          Write-Host "声明：$($declared -join ', ')"
           if ($exempt.Count -gt 0) { Write-Host "jdeps 已知误报（豁免）：$($exempt -join ', ')" }
 
           $missing = $found | Where-Object { $_ -notin $declared -and $_ -notin $exempt }

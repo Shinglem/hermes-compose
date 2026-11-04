@@ -223,6 +223,22 @@ val runtimeModulesJdepsExempt = listOf(
     "jdk.javadoc",
 )
 
+/**
+ * 把模块清单打给 CI 用（`toolchain-windows.yml` 的 jdeps 校验）。
+ *
+ * 为什么不让 CI 用正则去 `build.gradle.kts` 里抠：那个正则一旦匹配漂移（比如列表尾部
+ * 从 `) + if (…)` 改成纯 `)`），它会吞掉后面几十个字符串字面量，于是"声明集合"巨大、
+ * 校验**假通过** —— 护栏失效比没护栏更糟（实测踩到）。
+ */
+val printRuntimeModules by tasks.registering {
+    group = "verification"
+    description = "打印 runtimeModules / runtimeModulesJdepsExempt 清单（供 CI 校验模块闭包）"
+    doLast {
+        println("RUNTIME_MODULES=" + runtimeModules.joinToString(","))
+        println("RUNTIME_MODULES_EXEMPT=" + runtimeModulesJdepsExempt.joinToString(","))
+    }
+}
+
 /** 主类与版本号：`compose.desktop` 与启动器 cfg 共用，避免两处漂移。 */
 val appMainClass = "dev.shinglem.hermes.MainKt"
 
