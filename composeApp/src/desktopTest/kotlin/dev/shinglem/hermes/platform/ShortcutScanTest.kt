@@ -1,8 +1,12 @@
 package dev.shinglem.hermes.platform
 
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -55,123 +59,124 @@ class ShortcutScanTest {
     // ------------------------------------------------------------------
 
     private val exe = "C:\\app\\hermes\\hermes-desktop-compose.exe"
+    private val ownName = "Hermes Desktop Compose (abcd1234)"
+    private val ownAumid = "Shinglem.HermesDesktop.abcd1234"
 
-    private fun entry(name: String, target: String?, aumid: String?) =
-        ShortcutEntry(relativeName = name, targetPath = target, aumid = aumid)
+    private fun entry(
+        name: String,
+        target: String?,
+        aumid: String?,
+        pointsToTarget: Boolean = target != null && target.equals(exe, ignoreCase = true),
+    ) = ShortcutEntry(
+        relativeName = name,
+        targetPath = target,
+        aumid = aumid,
+        pointsToTarget = pointsToTarget,
+    )
 
     @Test
-    fun `自己那条名字还在就按文件名复用`() {
-        val plan = planShortcut(
-            ownName = "Hermes Desktop Compose (abcd1234)",
-            ownFileExists = true,
-            exePath = exe,
-            entries = listOf(entry("别人的", "C:\\other.exe", "X.Y")),
+    fun `自己那条名字还在就按文件名沿用`() {
+        val action = planShortcut(ownName, ownFileExists = true, ownAumid = ownAumid, entries = null)
+        assertEquals(
+            ShortcutAction.UseOwn(ownName, ownAumid, create = false, reason = "filename"),
+            action,
         )
-        assertEquals("Hermes Desktop Compose (abcd1234)", plan.appName)
-        assertTrue(!plan.create)
-        assertEquals("filename", plan.reason)
-        assertNull(plan.aumid)
     }
 
     @Test
-    fun `已有指向本程序且带 AUMID 的快捷方式就复用`() {
-        val plan = planShortcut(
-            ownName = "Hermes Desktop Compose (abcd1234)",
+    fun `已有指向本程序且带 AUMID 的快捷方式就复用它`() {
+        val action = planShortcut(
+            ownName = ownName,
             ownFileExists = false,
-            exePath = exe,
+            ownAumid = ownAumid,
             entries = listOf(
                 entry("我的 Hermes", exe, "Shinglem.HermesDesktop.deadbeef"),
-                entry("别的程序", "C:\\other.exe", "Other.App"),
+                entry("别的程序", "C:\\other\\other.exe", "Other.App"),
             ),
         )
-        assertEquals("我的 Hermes", plan.appName)
-        assertEquals("Shinglem.HermesDesktop.deadbeef", plan.aumid)
-        assertTrue(!plan.create)
-        assertEquals("target", plan.reason)
-        assertEquals("我的 Hermes", plan.reused)
+        assertEquals(
+            ShortcutAction.Reuse("我的 Hermes", "Shinglem.HermesDesktop.deadbeef", reason = "target"),
+            action,
+        )
     }
 
     @Test
-    fun `路径比较忽略大小写与斜杠方向`() {
-        val plan = planShortcut(
-            ownName = "own",
+    fun `指向本程序但没有 AUMID 时补写进这条而不是新建`() {
+        val action = planShortcut(
+            ownName = ownName,
             ownFileExists = false,
-            exePath = "c:/app/hermes/hermes-desktop-compose.exe",
-            entries = listOf(entry("Hermes", "C:\\APP\\Hermes\\hermes-desktop-compose.exe", "Shinglem.HermesDesktop.1")),
+            ownAumid = ownAumid,
+            entries = listOf(entry("Hermes", exe, aumid = null)),
         )
-        assertEquals("target", plan.reason)
+        val patch = assertIs<ShortcutAction.AddAumid>(action)
+        assertEquals("Hermes", patch.entry.relativeName)
+        assertEquals(ownAumid, patch.targetAumid)
+        assertEquals("target", patch.reason)
     }
 
     @Test
-    fun `命中的快捷方式没有 AUMID 时仍按老规矩新建`() {
-        val plan = planShortcut(
-            ownName = "Hermes Desktop Compose (abcd1234)",
+    fun `多条命中时优先用已经带 AUMID 的那条`() {
+        val action = planShortcut(
+            ownName = ownName,
             ownFileExists = false,
-            exePath = exe,
-            entries = listOf(entry("我的 Hermes", exe, aumid = null)),
+            ownAumid = ownAumid,
+            entries = listOf(
+                entry("a 用户自己建的", exe, aumid = null),
+                entry("b 旧版本留下的", exe, "Shinglem.HermesDesktop.oldhash"),
+            ),
         )
-        assertEquals("Hermes Desktop Compose (abcd1234)", plan.appName)
-        assertTrue(plan.create)
-        assertEquals("no-aumid", plan.reason)
+        assertEquals(
+            ShortcutAction.Reuse("b 旧版本留下的", "Shinglem.HermesDesktop.oldhash", reason = "target"),
+            action,
+        )
+    }
+
+    @Test
+    fun `多条都没 AUMID 时按名字排序取第一条补写`() {
+        val action = planShortcut(
+            ownName = ownName,
+            ownFileExists = false,
+            ownAumid = ownAumid,
+            entries = listOf(
+                entry("z 后来的", exe, aumid = null),
+                entry("a 先建的", exe, aumid = null),
+            ),
+        )
+        assertEquals("a 先建的", assertIs<ShortcutAction.AddAumid>(action).entry.relativeName)
     }
 
     @Test
     fun `只有嵌套目录里的命中时不复用`() {
-        val plan = planShortcut(
-            ownName = "own",
+        val action = planShortcut(
+            ownName = ownName,
             ownFileExists = false,
-            exePath = exe,
+            ownAumid = ownAumid,
             entries = listOf(entry("hermes\\我的 Hermes", exe, "Shinglem.HermesDesktop.1")),
         )
-        assertTrue(plan.create)
-        assertEquals("nested", plan.reason)
+        assertEquals(
+            ShortcutAction.UseOwn(ownName, ownAumid, create = true, reason = "created", note = "nested"),
+            action,
+        )
     }
 
     @Test
     fun `一条都没有时新建`() {
-        val plan = planShortcut(
-            ownName = "own",
+        val action = planShortcut(
+            ownName = ownName,
             ownFileExists = false,
-            exePath = exe,
-            entries = listOf(entry("别的", "C:\\other.exe", "Other.App")),
+            ownAumid = ownAumid,
+            entries = listOf(entry("别的", "C:\\other\\other.exe", "Other.App")),
         )
-        assertTrue(plan.create)
-        assertEquals("created", plan.reason)
-        assertNull(plan.reused)
+        assertEquals(ShortcutAction.UseOwn(ownName, ownAumid, create = true, reason = "created"), action)
     }
 
     @Test
-    fun `扫描失败退回按文件名判定`() {
-        val plan = planShortcut(ownName = "own", ownFileExists = false, exePath = exe, entries = null)
-        assertTrue(plan.create)
-        assertEquals("fallback", plan.reason)
-    }
-
-    @Test
-    fun `多条命中时优先用旧版本自己留下的那条`() {
-        val plan = planShortcut(
-            ownName = "own",
-            ownFileExists = false,
-            exePath = exe,
-            entries = listOf(
-                entry("a 用户自己建的", exe, "User.Made.This"),
-                entry("b 旧版本留下的", exe, "Shinglem.HermesDesktop.oldhash"),
-            ),
+    fun `扫描失败退回新建而不是不发通知`() {
+        val action = planShortcut(ownName, ownFileExists = false, ownAumid = ownAumid, entries = null)
+        assertEquals(
+            ShortcutAction.UseOwn(ownName, ownAumid, create = true, reason = "created", note = "scan-failed"),
+            action,
         )
-        assertEquals("b 旧版本留下的", plan.appName)
-        assertEquals("Shinglem.HermesDesktop.oldhash", plan.aumid)
-    }
-
-    @Test
-    fun `拿不到 exe 路径时不猜`() {
-        val plan = planShortcut(
-            ownName = "own",
-            ownFileExists = false,
-            exePath = null,
-            entries = listOf(entry("Hermes", exe, "Shinglem.HermesDesktop.1")),
-        )
-        assertTrue(plan.create)
-        assertEquals("created", plan.reason)
     }
 
     @Test
@@ -179,6 +184,60 @@ class ShortcutScanTest {
         assertTrue(entry("Hermes", null, null).isDirectChild)
         assertTrue(!entry("hermes\\\\Hermes", null, null).isDirectChild)
         assertTrue(!entry("hermes/Hermes", null, null).isDirectChild)
+    }
+
+    // ------------------------------------------------------------------
+    //  "这条快捷方式是否指向本程序"的字节判定
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `指向本程序按字节判定且忽略大小写`() {
+        assertTrue(pointsTo(buildLnk(target = exe, aumid = null), exe.uppercase()))
+        assertTrue(pointsTo(buildLnk(target = exe, aumid = null, unicodePaths = false), exe))
+        assertTrue(!pointsTo(buildLnk(target = "C:\\other\\other.exe", aumid = null), exe))
+    }
+
+    @Test
+    fun `拿不到 exe 路径时不认任何快捷方式`() {
+        val bytes = buildLnk(target = exe, aumid = null)
+        assertTrue(!pointsTo(bytes, null))
+        assertTrue(!pointsTo(bytes, "  "))
+    }
+
+    // ------------------------------------------------------------------
+    //  开始菜单扫描
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `扫描开始菜单递归标记相对名与目标`() {
+        val root = Files.createTempDirectory("hermes-shortcuts").toFile()
+        try {
+            File(root, "Hermes.lnk").writeBytes(buildLnk(target = exe, aumid = null))
+            File(root, "Tools").mkdirs()
+            File(root, "Tools").resolve("Idea.lnk")
+                .writeBytes(buildLnk(target = "C:\\idea\\idea64.exe", aumid = "JetBrains.Idea"))
+            File(root, "notes.txt").writeText("不是快捷方式")
+
+            val entries = assertNotNull(scanStartMenuShortcuts(root, exe)).sortedBy { it.relativeName }
+            assertEquals(2, entries.size)
+            assertEquals("Hermes", entries[0].relativeName)
+            assertTrue(entries[0].pointsToTarget)
+            assertEquals("Tools\\Idea", entries[1].relativeName)
+            assertTrue(!entries[1].pointsToTarget)
+            assertTrue(!entries[1].isDirectChild)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `开始菜单目录不存在时返回空表而不是失败`() {
+        val missing = File(Files.createTempDirectory("hermes-shortcuts").toFile(), "nope")
+        try {
+            assertTrue(scanStartMenuShortcuts(missing, exe)?.isEmpty() == true)
+        } finally {
+            missing.parentFile?.deleteRecursively()
+        }
     }
 
     // ------------------------------------------------------------------
@@ -258,15 +317,18 @@ class ShortcutScanTest {
      */
     private fun propertyStore(aumid: String): ByteArray {
         val value = aumid.toByteArray(Charsets.UTF_16LE) + byteArrayOf(0, 0)
+        val body = ByteArrayOutputStream()
+        body.writeU32(SERIALIZED_PROPERTY_STORE)
+        body.write(AUMID_FMTID)
+        body.writeU32(81) // valueSize
+        body.writeU32(5) // PKEY_AppUserModel_ID
+        body.writeU32(0x1F00) // 真实文件里 type 的位置差 1 字节，故意按原样构造
+        body.writeU32(0)
+        body.write(value)
+        val payload = body.toByteArray()
         val out = ByteArrayOutputStream()
-        out.writeU32(0x6D) // 序列化块自报的长度（解析不用，但要还原真实结构）
-        out.writeU32(SERIALIZED_PROPERTY_STORE)
-        out.write(AUMID_FMTID)
-        out.writeU32(81) // valueSize
-        out.writeU32(5) // PKEY_AppUserModel_ID
-        out.writeU32(0x1F00) // 真实文件里 type 的位置差 1 字节，故意按原样构造
-        out.writeU32(0)
-        out.write(value)
+        out.writeU32(payload.size + 4) // 序列化 store 自带的长度（含这 4 字节）
+        out.write(payload)
         return out.toByteArray()
     }
 

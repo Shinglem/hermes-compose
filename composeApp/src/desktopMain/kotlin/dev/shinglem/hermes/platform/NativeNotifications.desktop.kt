@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Windows 原生通知（WinRT toast + 按钮）。
@@ -72,7 +73,12 @@ actual object NativeNotifications {
     /** 当前是否真的能发原生 toast（设置页与 `SystemNotifications` 都用它判断）。 */
     val active: Boolean get() = _status.value.ready
 
+    /** 每次 `sync` 递增：异步补写回来时用它判断"这次结果还算不算数"。 */
+    private var syncGeneration = 0
+
     actual fun sync(requested: Boolean) {
+        syncGeneration++
+        val generation = syncGeneration
         val home = homeDir
         if (!requested || home == null) {
             if (initialized) {
@@ -103,25 +109,115 @@ actual object NativeNotifications {
 
         val id = instanceId(home)
         val ownName = "${ProductInfo.DISPLAY_NAME} ($id)"
-        val ownAumid = "Shinglem.HermesDesktop.$id"
+        val ownAumid = AUMID_PREFIX + id
         val ownFile = shortcutFile(ownName)
 
-        // 复用判定：自己那条在就沿用（老行为）；不在就看开始菜单里有没有**指向本程序**的快捷方式。
-        // 扫描只在这一刻做一次 —— 自己的名字在时不做任何 IO。
-        val plan = if (ownFile.isFile) {
-            planShortcut(ownName = ownName, ownFileExists = true, exePath = null, entries = null)
-        } else {
-            planShortcut(
-                ownName = ownName,
-                ownFileExists = false,
-                exePath = currentExePath(),
-                entries = scanShortcutEntries(),
-            )
+        // 复用判定：自己那条在就沿用（老行为，零 IO）；不在就看开始菜单里有没有**指向本程序**的快捷方式。
+        val entries = if (ownFile.isFile) null else scanShortcutEntries()
+        val action = planShortcut(
+            ownName = ownName,
+            ownFileExists = ownFile.isFile,
+            ownAumid = ownAumid,
+            entries = entries,
+        )
+
+        if (action is ShortcutAction.AddAumid) {
+            // 一次性修复：指向本程序但没有 AUMID（典型就是用户手工建的 `Hermes.lnk`）。
+            // 补写走 PowerShell + COM，实测 2.0–2.6 s —— **不能放在启动关键路径上**：
+            // 先回一个"不可用"状态（通知自动回退自绘窗），后台跑完再置为可用。
+            publishPendingPatch(action, generation)
+            return
         }
-        // 文件名带 id：两份便携包在开始菜单里并存、互不覆盖。复用时用那条已有的名字。
+
+        val plan = when (action) {
+            is ShortcutAction.UseOwn -> ShortcutPlan(
+                appName = action.appName,
+                aumid = action.aumid,
+                create = action.create,
+                reason = action.reason,
+                note = action.note,
+                reused = if (action.create) null else action.appName,
+            )
+
+            is ShortcutAction.Reuse -> ShortcutPlan(
+                appName = action.appName,
+                aumid = action.aumid,
+                create = false,
+                reason = action.reason,
+                note = action.note,
+                reused = action.appName,
+            )
+
+            is ShortcutAction.AddAumid -> error("AddAumid 已在上面处理")
+        }
+        val reusedEntry = (entries ?: emptyList()).firstOrNull { it.relativeName == plan.reused }
+        applyPlan(plan, generation, reusedEntry?.targetPath)
+    }
+
+    /**
+     * 后台把 AUMID 补写进已有的 `.lnk`，完后按结果继续初始化。
+     *
+     * 期间状态是 `ready=false`（消息写"正在写入通知身份"）—— `show()` 因此返回 false，
+     * 通知自动走应用内自绘窗，不会出现"没有通知"。
+     */
+    private fun publishPendingPatch(action: ShortcutAction.AddAumid, generation: Int) {
+        val lnk = shortcutFile(action.entry.relativeName)
+        appName = action.entry.relativeName
+        lastAppName = appName
+        aumidInUse = action.targetAumid
+        shortcutOwned = false
+        aumidRegistered = false
+        _status.value = NativeNotificationStatus(
+            requested = true,
+            ready = false,
+            shortcutPath = lnk.absolutePath,
+            message = "正在把通知身份写入已有快捷方式（首次一次性修复，约 2-3 秒）",
+        )
+        Log.info(
+            "native notifications: patching aumid into '${action.entry.relativeName}' in background " +
+                "(path=${lnk.absolutePath})",
+        )
+        mainScope.launch {
+            val home = homeDir ?: return@launch
+            val id = instanceId(home)
+            val ownName = "${ProductInfo.DISPLAY_NAME} ($id)"
+            val ownAumid = AUMID_PREFIX + id
+            val result = withContext(Dispatchers.IO) { ShortcutAumidWriter.patch(lnk, action.targetAumid) }
+            if (generation != syncGeneration) {
+                Log.info("native notifications: patch result ignored (sync 已重新执行)")
+                return@launch
+            }
+            val plan = if (result.ok) {
+                Log.info("native notifications: shortcut '${action.entry.relativeName}' aumid patched (backup .bak)")
+                ShortcutPlan(
+                    appName = action.entry.relativeName,
+                    aumid = action.targetAumid,
+                    create = false,
+                    reason = "target",
+                    reused = action.entry.relativeName,
+                )
+            } else {
+                Log.warn(
+                    "native notifications: aumid patch failed (${result.detail}); " +
+                        "creating a new shortcut instead",
+                )
+                ShortcutPlan(
+                    appName = ownName,
+                    aumid = ownAumid,
+                    create = true,
+                    reason = "patching-failed",
+                )
+            }
+            applyPlan(plan, generation, if (result.ok) action.entry.targetPath else null)
+        }
+    }
+
+    /** 真正初始化通知身份并落状态。补写成功 / 失败都从这里收口。 */
+    private fun applyPlan(plan: ShortcutPlan, generation: Int, reusedTarget: String?) {
+        if (generation != syncGeneration) return
         appName = plan.appName
         lastAppName = appName
-        val aumid = plan.aumid ?: ownAumid
+        val aumid = plan.aumid
         aumidInUse = aumid
         // 复用的用户快捷方式不能删；自己新建的、或沿用旧版本自己留下的都能删。
         shortcutOwned = plan.create || (plan.reused?.startsWith(ProductInfo.DISPLAY_NAME) == true)
@@ -130,7 +226,9 @@ actual object NativeNotifications {
         // 先注册 AUMID 的显示名与图标：`initialize` 会改进程的 AUMID，任务栏随后按它找图标，
         // 不注册就会退回 java.exe 的咖啡杯（实测）。
         // 复用的外来 AUMID 不动它的键（那是用户自己配的），免得覆盖 DisplayName / IconUri。
-        val shouldRegisterAumid = aumid == ownAumid || aumid.startsWith(DEFAULT_AUMID_PREFIX)
+        // 只要 AUMID 是我们的命名前缀（新建的 / 旧版本留下的 / 补写进去的）就注册显示名与图标；
+        // 用户自己配的其它 AUMID 不动它的键。
+        val shouldRegisterAumid = aumid.startsWith(AUMID_PREFIX)
         if (shouldRegisterAumid) {
             registerAumid(aumid, appName)
             aumidRegistered = true
@@ -168,6 +266,10 @@ actual object NativeNotifications {
                 !available -> "系统不支持通知（native 库不可用）"
                 !ok -> "通知子系统初始化失败"
                 !exists -> "开始菜单快捷方式未创建成功"
+                // ready=true 时也把补写失败这类"降级处理"写出来（设置页会显示非空 message）。
+                plan.reason == "patching-failed" ->
+                    "已有快捷方式写不进通知身份（只读 / 策略限制 / 超时），已新建一个带通知身份的条目"
+
                 else -> null
             },
         )
@@ -175,8 +277,10 @@ actual object NativeNotifications {
             "native notifications: aumid=$aumid ready=${_status.value.ready} " +
                 "shortcut=${shortcut.absolutePath} exists=$exists " +
                 "policy=${if (plan.create) "create" else "reuse"} " +
-                "reused=${plan.reused ?: "none"} reason=${plan.reason}",
+                "reused=${plan.reused ?: "none"} reason=${plan.reason}" +
+                (plan.note?.let { " note=$it" } ?: ""),
         )
+        reusedTarget?.let { Log.info("native notifications: reused shortcut target=$it") }
     }
 
     /**
@@ -273,8 +377,11 @@ actual object NativeNotifications {
 
     /** 扫描失败返回 null，由 [planShortcut] 退回"按文件名判定"的老逻辑。 */
     private fun scanShortcutEntries(): List<ShortcutEntry>? =
-        scanStartMenuShortcuts(programsDir())?.also { entries ->
-            Log.info("native notifications: scanned ${entries.size} start menu shortcuts")
+        scanStartMenuShortcuts(programsDir(), currentExePath())?.also { entries ->
+            Log.info(
+                "native notifications: scanned ${entries.size} start menu shortcuts " +
+                    "(matches exe: ${entries.count { it.pointsToTarget }})",
+            )
         }
 
     /**
@@ -345,7 +452,7 @@ actual object NativeNotifications {
 
     private fun appNameFor(home: File): String = "${ProductInfo.DISPLAY_NAME} (${instanceId(home)})"
 
-    private fun aumidFor(home: File): String = "Shinglem.HermesDesktop.${instanceId(home)}"
+    private fun aumidFor(home: File): String = AUMID_PREFIX + instanceId(home)
 
     /** 与 `SingleInstance` 的命名同源：同一个 home → 同一个 id。 */
     private fun instanceId(home: File): String {
@@ -362,4 +469,7 @@ actual object NativeNotifications {
     private const val BODY_TOKEN = "body"
 
     private const val AUMID_KEY_ROOT = "Software\\Classes\\AppUserModelId"
+
+    /** AUMID 命名空间：`Shinglem.HermesDesktop.<home 哈希>`（与快捷方式同源，多实例互不覆盖）。 */
+    private const val AUMID_PREFIX = "Shinglem.HermesDesktop."
 }

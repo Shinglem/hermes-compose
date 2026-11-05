@@ -85,14 +85,22 @@ fun NotificationsPage(
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
                 )
+                // ready 时也可能有话要说（"已有快捷方式补写失败，已新建"），别静默吞掉。
+                nativeStatus.message?.takeIf { nativeStatus.ready && it.isNotBlank() }?.let { message ->
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             Switch(checked = nativeEnabled, onCheckedChange = onNativeToggle)
         }
         if (nativeEnabled) {
             Text(
                 text = buildString {
-                    append("系统通知需要开始菜单里有一个快捷方式（Windows 的归属要求），")
-                    append("打开开关时会自动创建；删掉它通知就会失效。")
+                    append("系统通知需要开始菜单里有一个快捷方式（Windows 的归属要求）：打开开关时会优先")
+                    append("复用指向本程序的已有快捷方式（必要时把通知身份写进去），没有才新建；删掉它通知就会失效。")
                     nativeStatus.shortcutPath?.let { append("\n\n快捷方式：$it") }
                 },
                 style = MaterialTheme.typography.labelSmall,
