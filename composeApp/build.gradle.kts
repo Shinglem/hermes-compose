@@ -28,18 +28,12 @@ plugins {
 
 // 终端依赖不再走开关：已拆到 `:modules:terminal`（见 ADR-044），默认随应用构建。
 
-/**
- * CEF 的 native bundle：**普通 Maven 依赖**（jar 里包着一份 tar.gz），构建期解压到
- * `build/cef/bin`。坐标必须与 `libs.jcefmaven` 严格配套，混版本是 JNI 崩溃级别的错误。
- */
-val cefNatives: Configuration by configurations.creating {
-    isTransitive = false
-    isCanBeConsumed = false
-}
 
-dependencies {
-    // 只用来定位与解压，不参与编译（org.cef.* 由 jcefmaven 提供）。
-    cefNatives(libs.jcef.natives.windows)
+// diagram-render（图表引擎）传递依赖 material3 1.10.0-alpha05：版本号高于本仓库的稳定线，
+// 会赢下冲突并导致运行时崩溃。`modules/markdown-one` 已在自己的构建里 force 过一次，
+// 但那是子项目配置，覆盖不到宿主的解析 —— 这里必须再 force 一次。
+configurations.configureEach {
+    resolutionStrategy.force("org.jetbrains.compose.material3:material3:1.9.0")
 }
 
 kotlin {
@@ -98,8 +92,7 @@ kotlin {
             implementation(libs.logback.classic)
             // Windows 原生通知（WinRT toast + 按钮）：dll 在 jar 里，`--enable-native-access=ALL-UNNAMED` 已配。
             implementation(libs.nucleus.notification.windows)
-            // JCEF：Temurin 没有 jcef 模块，靠这个 jar 提供 org.cef.*（native bundle 另行准备）。
-            implementation(libs.jcefmaven)
+
             // ViewModel 的 viewModelScope 依赖 Dispatchers.Main.immediate，desktop 默认没有
             implementation(libs.kotlinx.coroutines.swing)
         }
@@ -139,7 +132,7 @@ val localProps: Properties by lazy {
  *
  * 两处消费者：`compose.desktop.application.javaHome`（开发态 `run`）与 `syncReleaseRt`（成品 `rt/`）。
  * 让两者指向同一份 JDK —— 否则会出现"开发跑 27、成品跑 25"的偏差，
- * 而这类偏差只在成品暴露（native access、字体/IME、CEF），最难查。
+ * 而这类偏差只在成品暴露（native access、字体/IME、native 库），最难查。
  */
 val hermesRtDir: String? =
     providers.gradleProperty("hermes.rt.dir").orNull?.takeIf { it.isNotBlank() }
@@ -182,8 +175,8 @@ val hermesJmodsDir: File? = run {
  * | `jdk.charsets` | GBK 等非 UTF-8 编码（后端子进程输出、旧文件名） |
  * | `jdk.localedata` | 中文 locale/日期格式；配合 `--include-locales=en,zh` 只带这两份 |
  *
- * 基线是**官方 Temurin 27**，不再有 JBR 专有模块（`jcef` / `gluegen.rt` / `jogl.all` 随 JBR 一起退役）：
- * 内嵌浏览器走 `me.friwi:jcefmaven` + 自带 CEF native，与 jmods 无关，见 `11-JCEF集成.md`。
+ * 基线是**官方 Temurin 27**，不再有 JBR 专有模块（浏览器 / OpenGL 那几个随 JBR 一起退役）。
+ * 公式引擎 `ratex` 的 native dll 走普通 Maven 依赖（`ratex-native-*`），与 jmods 无关。
  */
 val runtimeModules = listOf(
     "java.base",
@@ -270,63 +263,6 @@ val launcherIcon: File = providers.gradleProperty("hermes.icon")
     .map { rootProject.file(it) }
     .getOrElse(rootProject.file("packaging/icon.ico"))
 val launcherIconIsExplicit: Boolean = providers.gradleProperty("hermes.icon").isPresent
-
-// ============================================================================
-//  CEF 原生运行时（JCEF）
-//  ---------------------------------------------------------------------------
-//  Temurin 没有 jcef 模块（JBR 才有），`org.cef.*` 由 me.friwi:jcefmaven 提供，但 Chromium 的
-//  native（`libcef.dll` / `jcef.dll` / `jcef_helper.exe` / `resources.pak` / `locales/`）得自备。
-//
-//  为什么不能只靠 classpath：`jcef_helper.exe` 要能被 CreateProcess 拉起（GPU/renderer 子进程
-//  宿主），`libcef.dll` 要由 Windows 加载器按目录解析 —— jar 里的条目两者都做不到。
-//
-//  目录**故意不放在 java.home 下**：markdown-one 通过 `MarkdownConfig.cefNativeDir` 或
-//  `-Dmarkdown.cef.dir` 取路径，并自己 `System.load(绝对路径)`（见 CefNativeLocator），
-//  与 JDK 发行版、安装目录、是否可写全都没有关系。
-//
-//  开发态：`build/cef/bin`。成品：安装目录下的 `cef/`（见 syncReleaseTest）。
-// ============================================================================
-val cefBinDir: Provider<Directory> = layout.buildDirectory.dir("cef/bin")
-
-val extractCefBundle = tasks.register("extractCefBundle") {
-    group = "build"
-    description = "把 CEF native bundle（Maven 依赖里的 tar.gz）解压到 build/cef/bin"
-
-    val archives = cefNatives
-    val out = cefBinDir
-    inputs.files(archives)
-    outputs.dir(out)
-
-    doLast {
-        val jar = archives.singleFile
-        val target = out.get().asFile.apply {
-            deleteRecursively()
-            mkdirs()
-        }
-        val stage = layout.buildDirectory.dir("cef-stage").get().asFile
-        stage.deleteRecursively()
-        stage.mkdirs()
-        copy {
-            from(zipTree(jar)) { include("*.tar.gz") }
-            into(stage)
-        }
-        val bundle = stage.listFiles { file: File -> file.name.endsWith(".tar.gz") }?.singleOrNull()
-            ?: throw GradleException("CEF bundle 里没有 tar.gz：${jar.name}")
-        copy {
-            from(tarTree(resources.gzip(bundle)))
-            into(target)
-        }
-        stage.deleteRecursively()
-    }
-}
-
-tasks.matching { it.name == "run" }.configureEach {
-    dependsOn(extractCefBundle)
-    (this as org.gradle.api.tasks.JavaExec).doFirst {
-        val bin = cefBinDir.get().asFile
-        if (bin.isDirectory) systemProperty("markdown.cef.dir", bin.absolutePath)
-    }
-}
 
 compose.desktop {
     application {
@@ -776,7 +712,7 @@ val syncReleaseTest by tasks.registering(Sync::class) {
     group = "distribution"
     description = "组装 release-test 成品目录（原生启动器 + bin/App.jar + lib/*.jar）"
 
-    dependsOn("desktopJar", syncReleaseRt, syncReleaseConfig, syncReleaseLauncher, extractCefBundle)
+    dependsOn("desktopJar", syncReleaseRt, syncReleaseConfig, syncReleaseLauncher)
 
     into(releaseTestDir)
 
@@ -785,12 +721,6 @@ val syncReleaseTest by tasks.registering(Sync::class) {
     from(tasks.named("desktopJar")) {
         into("bin")
         rename { "App.jar" }
-    }
-    // CEF 原生运行时：成品从 `<home>/cef` 加载（启动时由 Main.kt 探测，见 markdown-one 的
-    // CefNativeLocator）。没跑过 extractCefBundle 时这里是空目录，
-    // 成品照常启动，HTML / 图表块回落到源码显示。
-    from(cefBinDir) {
-        into("cef")
     }
     from(configurations.named("desktopRuntimeClasspath").map { config ->
         // 同一 jar 可能经由不同坐标/变体解析到同一文件，按路径去重；

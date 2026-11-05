@@ -5,7 +5,7 @@
 #
 # 基线是 **Temurin 27（官方 JDK，自带 jmods）**，不再用 JBR：
 #   * 触摸输入那批问题在 Temurin 上本就正常（见 10-Windows触屏输入.md）；
-#   * 字体由随包 Inter / JetBrains Mono 补，JCEF 由 me.friwi:jcefmaven 补（见 11-JCEF集成.md）。
+#   * 字体由随包 Inter / JetBrains Mono 补；公式引擎的 native dll（ratex-native-*）由 Maven 依赖提供。
 #
 # 版本号：Release tag = `toolchain-v<N>`，N 手工递增（v1、v2 …）。一次构建产出两个资产：
 #   launcher-windows-x64.zip   ← 解到成品根目录

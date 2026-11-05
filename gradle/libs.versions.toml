@@ -33,11 +33,8 @@ kotlin-logging = "7.0.7"
 logback = "1.5.18"
 # Nucleus 通知模块：WinRT Toast（原生按钮）。核对 2026-11-04，repo1.maven.org；MIT。
 nucleus = "2.5.18"
-# JCEF（内嵌 Chromium）：Temurin 没有 jcef 模块，需自备。核对 2026-11-04，search.maven.org。
-jcefmaven = "135.0.20"
-# 与 jcefmaven 135.0.20 严格配套的 CEF native bundle。Maven Central 上有这个 artifact，
-# 所以不需要手工下载 tar.gz：构建期解压到 build/cef/bin（见 composeApp 的 extractCefBundle）。
-jcef-natives = "jcef-ca49ada+cef-135.0.20+ge7de5c3+chromium-135.0.7049.85"
+# 注：内嵌浏览器（CEF）已于 v0.4.1 移除，
+# HTML 块改由 markdown-one 的原生渲染（ksoup 清洗 + Compose 块树）处理。
 
 # 渲染与资源
 # Canvas 三窗格（M3 canonical list-detail）。
@@ -79,10 +76,6 @@ ktor-serialization-json         = { module = "io.ktor:ktor-serialization-kotlinx
 # Windows 原生通知（toast + 按钮）：native dll 打在 jar 里，由 core-runtime 的 NativeLibraryLoader 解压。
 # 依赖只有 kotlin-stdlib，不拖整个 nucleus 框架。见 详细设计/工程与代码/12-通知窗.md。
 nucleus-notification-windows = { module = "dev.nucleusframework:nucleus.notification-windows", version.ref = "nucleus" }
-# JCEF：提供 org.cef.* 类（见 详细设计/工程与代码/11-JCEF集成.md）。
-jcefmaven = { module = "me.friwi:jcefmaven", version.ref = "jcefmaven" }
-# CEF 的 native bundle（jar 内含一份 tar.gz，构建期解压）。仅 Windows x64。
-jcef-natives-windows = { module = "me.friwi:jcef-natives-windows-amd64", version.ref = "jcef-natives" }
 kotlin-logging  = { module = "io.github.oshai:kotlin-logging", version.ref = "kotlin-logging" }
 logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
 

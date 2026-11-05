@@ -119,8 +119,6 @@ private const val APP_NAME = "hermes-desktop-compose"
 /** 第二个实例：不算错误，但退出码要能与"正常退出"区分（便于脚本判断）。 */
 private const val EXIT_ALREADY_RUNNING = 0
 
-/** CEF 原生运行时目录的系统属性名（markdown-one 的 `CefNativeLocator` 读同一个键）。 */
-private const val CEF_DIR_PROPERTY = "markdown.cef.dir"
 
 fun main(args: Array<String>) {
     // BossTerm 的默认存储是 `~/.bossterm`（settings / 字体缓存 / 会话快照）。统一改到我们的数据目录，
@@ -136,20 +134,6 @@ fun main(args: Array<String>) {
     startup.info("args", args.joinToString(" ").ifBlank { "(none)" })
     startup.info("cwd", System.getProperty("user.dir").orEmpty())
     startup.info("home", startup.homePath)
-
-
-    // CEF 原生运行时（JCEF）：成品随包分发在 `<home>/cef`；开发态由 Gradle 的 run 任务传
-    // `-Dmarkdown.cef.dir`。markdown-one 只认这个属性（或 MarkdownConfig.cefNativeDir），
-    // 不再从 java.home 里找 —— 与 JDK 发行版/安装目录无关。
-    if (System.getProperty(CEF_DIR_PROPERTY).isNullOrBlank()) {
-        val cefDir = File(startup.homePath, "cef")
-        if (File(cefDir, "jcef_helper.exe").isFile) {
-            System.setProperty(CEF_DIR_PROPERTY, cefDir.absolutePath)
-            startup.info("cef", "native dir=${cefDir.absolutePath}")
-        } else {
-            startup.info("cef", "no native bundle at ${cefDir.absolutePath}; HTML blocks fall back to source")
-        }
-    }
 
     // 配置解析在 application{} 之外：失败时只该弹一个原生对话框然后退出，
     // 不要先起一个空窗口再报错。
