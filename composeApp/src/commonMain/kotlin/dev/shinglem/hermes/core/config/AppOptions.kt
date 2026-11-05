@@ -23,6 +23,8 @@ data class AppOptions(
     val version: Int = CURRENT_VERSION,
     val ui: UiOptions = UiOptions(),
     val network: NetworkOptions = NetworkOptions(),
+    /** 外部编辑器（点工具卡片旁的「打开」用哪个程序）。 */
+    val editors: EditorsOptions = EditorsOptions(),
 ) {
     companion object {
         const val CURRENT_VERSION = 1
@@ -92,6 +94,11 @@ object AppOptionsHolder {
 
     fun set(options: AppOptions) {
         _state.value = options
+    }
+
+    /** 局部更新（改一个字段不用整份重建）。 */
+    fun update(transform: (AppOptions) -> AppOptions) {
+        _state.value = transform(_state.value)
     }
 
     /** 测试用：恢复默认。 */

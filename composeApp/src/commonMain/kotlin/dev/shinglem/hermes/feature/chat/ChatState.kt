@@ -135,6 +135,8 @@ data class BranchDraft(val messageId: String, val count: Int, val title: String)
 
 data class ChatState(
     val key: SessionKey? = null,
+    /** 会话工作目录（`session.resume` 返回的 `cwd`）。相对路径的工具参数按它解析。 */
+    val cwd: String? = null,
     val load: Loadable<List<ChatItem>> = Loadable.Idle,
     /** 只取回最近一页，更早的消息没有加载。 */
     val truncated: Boolean = false,

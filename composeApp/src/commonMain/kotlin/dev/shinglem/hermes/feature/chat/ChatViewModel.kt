@@ -969,6 +969,7 @@ class ChatViewModel(
         _state.update { current ->
             if (current.key != key) return@update current
             current.copy(
+                cwd = resumed.cwd ?: current.cwd,
                 model = resumed.model ?: current.model,
                 provider = resumed.provider ?: current.provider,
                 reasoningEffort = resumed.reasoningEffort ?: current.reasoningEffort,

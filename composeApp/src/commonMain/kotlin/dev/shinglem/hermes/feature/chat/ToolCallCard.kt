@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.shinglem.hermes.resources.Res
+import dev.shinglem.hermes.feature.editors.EditorOpenButton
 import dev.shinglem.hermes.resources.chat_tool_args
 import dev.shinglem.hermes.resources.chat_tool_orphan
 import dev.shinglem.hermes.resources.chat_tool_result
@@ -108,6 +109,8 @@ fun ToolCallCard(
                     style = MaterialTheme.typography.labelSmall,
                     color = statusColor,
                 )
+                // 「用外部编辑器打开」：只有文件类工具 + 配了编辑器时才出现
+                EditorOpenButton(toolName = item.name, argumentsJson = item.arguments)
                 Icon(
                     imageVector = if (expanded) AppIcons.ExpandLess else AppIcons.ExpandMore,
                     contentDescription = null,

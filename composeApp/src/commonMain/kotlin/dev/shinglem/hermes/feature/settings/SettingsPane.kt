@@ -28,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import dev.shinglem.hermes.core.config.EditorsOptions
 import dev.shinglem.hermes.core.app.AutostartInfo
 import dev.shinglem.hermes.core.app.OrphanTaskInfo
 import dev.shinglem.hermes.feature.terminal.TerminalSettings
@@ -141,6 +142,8 @@ fun SettingsDetailPane(
     onNativeNotificationsToggle: (Boolean) -> Unit = {},
     browserHeaded: Boolean = false,
     onBrowserHeadedToggle: (Boolean) -> Unit = {},
+    editors: EditorsOptions = EditorsOptions(),
+    onEditorsSave: (EditorsOptions) -> Unit = {},
     updateState: UpdateState = UpdateState(),
     onCheckUpdate: () -> Unit = {},
     backendVersion: String = "",
@@ -169,6 +172,15 @@ fun SettingsDetailPane(
             BrowserPage(
                 headed = browserHeaded,
                 onHeadedToggle = onBrowserHeadedToggle,
+                modifier = modifier,
+            )
+            return
+        }
+
+        SettingsPage.Editors -> {
+            EditorsPage(
+                editors = editors,
+                onSave = onEditorsSave,
                 modifier = modifier,
             )
             return

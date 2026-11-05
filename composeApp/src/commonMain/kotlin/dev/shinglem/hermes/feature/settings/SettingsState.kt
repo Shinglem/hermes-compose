@@ -6,6 +6,7 @@ import dev.shinglem.hermes.core.app.AppRestarter
 import dev.shinglem.hermes.core.app.RestartSupport
 import dev.shinglem.hermes.core.config.AppConfig
 import dev.shinglem.hermes.core.config.AppOptionsHolder
+import dev.shinglem.hermes.core.config.EditorsOptions
 import dev.shinglem.hermes.core.config.SettingsStore
 import dev.shinglem.hermes.core.config.setJsonAt
 import dev.shinglem.hermes.core.log.Log
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -46,6 +48,8 @@ data class SettingsState(
     val nativeNotifications: Boolean = false,
     /** 内置后端的浏览器是否可见（`app.browser.headed`，改完要重启后端）。 */
     val browserHeaded: Boolean = false,
+    /** 外部编辑器配置（`options.json`）。 */
+    val editors: EditorsOptions = AppOptionsHolder.current.editors,
 ) {
     /** 选中项对应的字段组；选中的是自绘页时为 `null`。 */
     val currentGroup: SettingsGroup?
@@ -83,6 +87,7 @@ class SettingsViewModel(
             notificationsEnabled = preferences?.notificationsEnabled ?: true,
             nativeNotifications = preferences?.nativeNotifications ?: false,
             browserHeaded = config.app.browser.headed,
+            editors = AppOptionsHolder.current.editors,
         ),
     )
     val state: StateFlow<SettingsState> = _state.asStateFlow()
@@ -127,6 +132,28 @@ class SettingsViewModel(
     fun dismissSaved() {
         _state.update { it.copy(saved = null, error = null) }
     }
+
+    /**
+     * 外部编辑器配置（`options.json`，热生效）。
+     *
+     * 只存用户动过的整份 [EditorsOptions]：它是列表结构，逐键深合并没法表达删除。
+     */
+    fun setEditors(editors: EditorsOptions) {
+        runCatching {
+            store.saveOptionsPatch(
+                JsonObject(mapOf("editors" to editorsJson(editors))),
+            )
+        }.onFailure { error ->
+            Log.warn("保存外部编辑器配置失败：${error.message}")
+            _state.update { it.copy(error = "保存失败：${error.message}") }
+            return
+        }
+        AppOptionsHolder.update { it.copy(editors = editors) }
+        _state.update { it.copy(editors = editors, saved = SettingsSaved(restartRequired = false), error = null) }
+    }
+
+    private fun editorsJson(editors: EditorsOptions): JsonElement =
+        Json.encodeToJsonElement(EditorsOptions.serializer(), editors)
 
     /**
      * agent 浏览器是否可见（`app.browser.headed`）。

@@ -13,6 +13,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -50,6 +51,8 @@ import dev.shinglem.hermes.feature.chat.ChatPane
 import dev.shinglem.hermes.feature.chat.ChatViewModel
 import dev.shinglem.hermes.feature.chat.PendingApproval
 import dev.shinglem.hermes.feature.chat.SessionKey
+import dev.shinglem.hermes.feature.editors.EditorLaunchContext
+import dev.shinglem.hermes.feature.editors.LocalEditorLaunchContext
 import dev.shinglem.hermes.feature.composer.ComposerController
 import dev.shinglem.hermes.feature.composer.ComposerViewModel
 import dev.shinglem.hermes.feature.composer.ModelPill
@@ -684,6 +687,8 @@ fun AppShell(
                                 onNativeNotificationsToggle = settingsViewModel::setNativeNotifications,
                                 browserHeaded = settingsState.browserHeaded,
                                 onBrowserHeadedToggle = settingsViewModel::setBrowserHeaded,
+                                editors = settingsState.editors,
+                                onEditorsSave = settingsViewModel::setEditors,
                                 updateState = updateState,
                                 onCheckUpdate = { updaterViewModel.check() },
                                 backendVersion = shellState.health?.version.orEmpty(),
@@ -749,6 +754,13 @@ fun AppShell(
                                     onBack = onBack,
                                 )
                             }
+                            CompositionLocalProvider(
+                                LocalEditorLaunchContext provides EditorLaunchContext(
+                                    editors = settingsState.editors,
+                                    cwd = chatState.cwd,
+                                    userHome = remember { System.getProperty("user.home").orEmpty() },
+                                ),
+                            ) {
                             ChatPane(
                                 summary = selectedSession,
                                 state = chatState,
@@ -854,6 +866,7 @@ fun AppShell(
                                     }
                                 },
                             )
+                            }
                             TerminalPanel(
                                 state = terminalState,
                                 onToggle = container.terminalViewModel::toggle,

@@ -94,6 +94,9 @@ sealed interface SettingsPage {
     /** 内置后端的浏览器行为（`app.browser.headed`）。 */
     data object Browser : SettingsPage
 
+    /** 外部编辑器（点工具卡片旁的「打开」用哪个程序）。 */
+    data object Editors : SettingsPage
+
     /** 快捷键一览（只读）。 */
     data object Shortcuts : SettingsPage
 
@@ -316,6 +319,7 @@ object SettingsCatalog {
                 pages = listOf(
                     "通知" to SettingsPage.Notifications,
                     "浏览器" to SettingsPage.Browser,
+                    "外部编辑器" to SettingsPage.Editors,
                     "快捷键" to SettingsPage.Shortcuts,
                     "关于" to SettingsPage.About,
                 ),
