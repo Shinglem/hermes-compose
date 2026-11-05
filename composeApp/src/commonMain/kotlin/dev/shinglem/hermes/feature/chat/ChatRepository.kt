@@ -86,13 +86,28 @@ class ChatRepository(
         return collected
     }
 
-    /** `session.resume`：拿 runtime id（历史已由 REST 读过，不再回传 transcript）。 */
+    /**
+     * `session.resume`：拿 runtime id（历史已由 REST 读过，不再回传 transcript）。
+     *
+     * **必须显式传 `source = "cli"`**：我们拉起后端时设了 `HERMES_DESKTOP=1`（进程级语义，
+     * 见 `LocalBackendPlanner`），后端的 `_resolve_session_platform()` 会据此把会话判成
+     * `desktop`，进而把 `CLIENT_SURFACE_TOOLSETS`（含 `desktop_ui`）塞给 agent ——
+     * 那套工具要求客户端有 Electron 渲染进程里的预览面板，我们没有，于是
+     * `desktop_preview` 一律超时（实测：`preview.read` 45 秒后返回
+     * "No preview tab answered … the desktop app may be older than this backend"）。
+     * 而且 `desktop_ui` 在服务端**无法禁用**（`fold_in -= disabled - {"desktop_ui"}`）。
+     *
+     * 显式传 `cli` 后会话 platform 是 `cli`，只给 `project` 工具集，agent 走
+     * `browser_*`（agent-browser 驱动，`browser.headed` 才真正生效）。
+     */
     suspend fun resumeSession(profile: String?, storedSessionId: String): ResumedSession {
         val params = buildJsonObject {
             put("session_id", storedSessionId)
             profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
             put("omit_messages", true)
             put("cols", 100)
+            // 见上方 KDoc：不传的话后端会按 HERMES_DESKTOP=1 判成 desktop 并下发 desktop_ui 工具集
+            put("source", SESSION_SOURCE)
         }
         val result = try {
             gateway.call(RpcMethods.SESSION_RESUME, params, Timeouts.DEFAULT_MS)
@@ -482,3 +497,13 @@ private fun TranscriptRowDto.toRow(): ChatRow = ChatRow(
 )
 
 private const val HIDDEN_DISPLAY_KIND = "hidden"
+
+/**
+ * 会话面（`session.resume` 的 `source`）。
+ *
+ * 服务端的合法值见 `gateway/session_policy.py` 的 `SURFACES`：
+ * `cli` / `tui` / `gui` / `acp` / `tool` / `oneshot`。我们传 `cli` 的原因见
+ * [ChatRepository.resumeSession] 的 KDoc —— 关键是别让后端按 `HERMES_DESKTOP=1`
+ * 判成 `desktop`，那会下发我们无法应答的 `desktop_ui` 工具集。
+ */
+private const val SESSION_SOURCE = "cli"
