@@ -6,6 +6,7 @@ import dev.shinglem.hermes.core.contract.SessionListResultDto
 import dev.shinglem.hermes.core.contract.SessionListRowDto
 import dev.shinglem.hermes.core.contract.SessionSearchResponseDto
 import dev.shinglem.hermes.core.contract.SessionSearchResultDto
+import dev.shinglem.hermes.core.contract.SessionSurface
 import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.error.ErrorMapper
 import dev.shinglem.hermes.core.time.TimeFormat
@@ -76,7 +77,7 @@ class SessionRepository(
         val params = buildJsonObject {
             profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
             title?.takeIf { it.isNotBlank() }?.let { put("title", it) }
-            put("source", "desktop")
+            put("source", SessionSurface.CLIENT)
             // 草稿态在 composer 里选好的模型：`session.create` 的这三个参数是 per-session
             // override，不写 config.yaml（见 tui_gateway/methods_session.py::_create_overrides）。
             provider?.takeIf { it.isNotBlank() }?.let { put("provider", it) }
@@ -170,7 +171,7 @@ class SessionRepository(
         val params = buildJsonObject {
             profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
             put("parent_session_id", sessionId)
-            put("source", "desktop")
+            put("source", SessionSurface.CLIENT)
         }
         val element = try {
             gateway.call(RpcMethods.SESSION_BRANCH_STORED, params, Timeouts.WRITE_MS)
