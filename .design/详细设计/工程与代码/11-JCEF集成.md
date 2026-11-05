@@ -1,4 +1,11 @@
-# 11 · JCEF 集成（自备 Chromium）
+# 11 · JCEF 集成（已移除 · 历史决策）
+
+> ⚠️ **本文件是历史决策记录：JCEF 已于 v0.4.1 整体移除。**
+> 原始 HTML 块改由 markdown-one 的 `HtmlNativeAdapter` 原生渲染（ksoup 白名单 + Compose 块树），
+> 图表走 `diagram-render`、公式走 `ratex`，都不再需要内嵌浏览器。
+> 主仓库已删除 `jcefmaven` / `jcef-natives` 依赖、`extractCefBundle` 任务与打包/CI 里的 `cef/` 处理；
+> markdown-one 删除了 `web/` 8 个实现文件、`WebFallback`、`MarkdownConfig` 的 5 个相关字段与
+> `AdapterKind.Jcef`。下面内容仅用于理解"曾经怎么做的"与"为什么放弃"。
 
 > **回答"怎么做"**：Temurin 没有 `jcef` 模块，怎么让 markdown-one 的 JCEF 回落渲染跑起来。
 > 结论先行：**Java 侧走 Maven 依赖，native 走另一个 Maven 依赖 + 构建期解压，运行时目录随便放**

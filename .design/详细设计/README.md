@@ -38,7 +38,7 @@
 | [`工程与代码/07-提权与自启动.md`](工程与代码/07-提权与自启动.md) | 管理员权限（运行时 runas，不改 exe）+ 计划任务自启动（登录触发、最高权限、不弹 UAC）、任务命名与对账、V1–V12 验收 | 📐 设计稿（未实现） |
 | [`工程与代码/08-单实例与启动时序.md`](工程与代码/08-单实例与启动时序.md) | 命名内核对象（`Local\` 互斥量 + 事件）、唤醒语义与跨权限、**权威启动时序**、`startup.log` 早期日志、W1–W9 验收 | 📐 设计稿（未实现） |
 | [`工程与代码/10-Windows触屏输入.md`](工程与代码/10-Windows触屏输入.md) | 为什么 JBR 上 `scrollable`/`draggable` 都跟不了手、JBR 与 Temurin 的触摸事件对照、`WM_TOUCH` 子类化方案、区域分发、tap 放行、FFM 与 JNA 取舍、验收 | ✅ 已收敛（改用 Temurin 27 + 纯 Compose `Modifier.touchDragScroll`，`win-touch` 模块已删除） |
-| [`工程与代码/11-JCEF集成.md`](工程与代码/11-JCEF集成.md) | Temurin 无 `jcef` 模块后怎么自带 Chromium：两个 Maven 坐标、构建期两层解压、运行时目录解析（不碰 `java.home` / `java.library.path`）、实测加载链（`startup`→`getInstance`→`createClient`）、坑位 | ✅ 已落地（`extractCefBundle` + 冒烟测试通过） |
+| [`工程与代码/11-JCEF集成.md`](工程与代码/11-JCEF集成.md) | **历史决策（已移除）**：曾用自备 Chromium 做 HTML 回落；v0.4.1 起改由 markdown-one 原生渲染，本文件只留档 | ❌ 已移除（v0.4.1） |
 | [`工程与代码/12-通知窗.md`](工程与代码/12-通知窗.md) | 通知两条通路：应用内 M3 卡片（默认）与 Windows 原生 toast（可选）；AUMID/开始菜单的四组实测、多实例 id、开关与回退、依赖与限制 | ✅ 已落地 |
 | [`功能/00-功能域总览.md`](功能/00-功能域总览.md) | 7 个功能域、跨域约定、关键时序、功能→接口映射 | ✅ 成稿 |
 | `功能/01-壳与会话列表.md` | `shell` + `session` 域级设计 | ⬜ 待写 |

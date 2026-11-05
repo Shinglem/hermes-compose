@@ -47,10 +47,12 @@
 
 **后果**：AI 回答里的数学与图表显示为源码。验收口径明确接受（R10）。
 
-> **2026-10-31 修订（ADR-052 补充）**：本条已作废 —— 数学公式改由
-> `io.github.huarangmeng:latex-renderer`（纯 Compose 矢量绘制 + KaTeX 字体）在
-> `modules/markdown-one` 内排版，块级与行内都渲染；mermaid 由纯 Kotlin 引擎
-> `mermaid-compose` 绘制。**仍然不引 WebView/JCEF**（JCEF 只作为原始 HTML 的可选回落）。
+> **2026-10-31 修订（ADR-052 补充）**：本条已作废 —— 数学公式与图表改在
+> `modules/markdown-one` 内原生排版，块级与行内都渲染。
+>
+> **2026-11-05 修订（v0.4.1）**：引擎换成 `ratex`（公式）与 `diagram-render`（Mermaid / PlantUML / DOT）；
+> 原始 HTML 改由 ksoup 白名单原生渲染，**内嵌浏览器（JCEF）整体移除**。
+> 「不引 WebView」这条原则没有变，只是现在连"可选回落"也不需要了。
 
 ---
 
@@ -423,7 +425,7 @@ Session 0 是独立窗口站，**有自己孤立的剪贴板**，永远读不到
 ## ADR-028 · 基线运行时定为 JBR 25（字节码 25），`rt/` 可整体替换
 
 **决策**：`jvmTarget = JVM_25`，成品自带 JetBrains Runtime 25（`rt/`），开发态也指向同一份。
-`rt/` 是**可整体替换目录**：将来要用 JCEF 就换成 JBR with-JCEF，脚本与代码不用改。
+`rt/` 是**可整体替换目录**：换运行时只改这一处，脚本与代码不用改（公式引擎的 native dll 走 Maven 依赖，不在 `rt/` 里）。
 
 **理由**：
 1. 成品既然自带运行时，就没有"向下兼容旧 JDK"的必要——兼容 21 只会锁死语言与库的能力。
@@ -1141,13 +1143,13 @@ submodule 让「改渲染能力」和「改客户端」在同一个构建里编�
 > - **版本口径**：0.7.1–0.7.3 **不要求**前导空白（`时，$x$`、`a$x$b` 都是 `INLINE_MATH`），
 >   限制是 0.7.17 才加的；`build.gradle.kts` 原先声明 0.7.3 但被传递升级到
 >   0.7.17，现已改成 0.7.17，声明与实效一致。判断行为前先看实效版本，别按声明版本推断。
-> - **公式排版引擎已换成 `io.github.huarangmeng:latex-renderer:1.6.3`**（MIT，纯 Compose
->   矢量绘制 + KaTeX 字体），JLaTeXMath 与自建位图缓存（`MathImage` / `MathRenderCache`）已删除。
->   两个入口：行内走 `LatexMeasurerState.inlineContent()`（同步测量），块级走 `Latex()`
->   （异步解析，首帧可能空白）；颜色/字号统一由 `rememberLatexConfig(color, fontSize)` 提供，
->   参数显式传入是因为 `mathInlineContents` 在铺 `LocalMdColors` 之前就要算。
->   换引擎的直接收益：`\Omega` 正常（JLaTeXMath 在 JDK 25+ 渲染空白，opencollab/jlatexmath#111）、
->   高分屏矢量清晰、`pmatrix` / `align` / `mhchem` 等语法覆盖更全。
+> - **公式排版引擎（v0.4.1 起）：`io.github.darriousliu:ratex:0.1.15`**（MIT，Rust 核心 +
+>   Compose 矢量绘制），native 由 `ratex-native-windows-x86-64` 提供；此前的
+>   `latex-renderer` / JLaTeXMath 与自建位图缓存均已删除。
+>   两个入口：行内走 `rememberBlockingRaTeXDisplayList` + 自算占位尺寸（`DisplayList` 的宽高
+>   是排版单位，必须乘字号），块级走 `RaTeX(displayList, ...)`。
+>   换引擎的依据是 14 个高级用例的 A/B 实测：`\mathbb` / `\mathcal`、`\left\{`、
+>   `\operatorname` 正体、`\xrightarrow` 长度、align 逐行编号都更正确。
 > - **行内文本由自研构建器生成**（`text/MdInline.kt` 的 `buildMdInline`），一次走完 AST：
 >   不再依赖任何第三方 annotator。两条必须遵守的口径：
 >   ① `CODE_SPAN` 的子节点也是 `TEXT`，**不要**在里面做 `$…$` 扫描（行内代码里的公式会被误判）；

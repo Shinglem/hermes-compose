@@ -29,7 +29,7 @@
 | 机器人聊天窗口 / 群聊窗口 | 本期只做"会话"主窗口；IM 风格聊天留作后续独立窗口 |
 | 视觉 1:1 复刻 | 用 Material 3 原生组件与配色，功能对等即可 |
 | 多语言 | 只做简体中文 |
-| WebView 兜底渲染（HTML 预览） | 不渲染，显示为链接/源码；mermaid 走纯 Kotlin 引擎、数学公式走 latex-renderer，见硬约束 8 |
+| WebView 兜底渲染（HTML 预览） | 不渲染；HTML 块由 ksoup 白名单原生渲染，mermaid/PlantUML/DOT 走 `diagram-render`、数学公式走 `ratex`，见硬约束 8 |
 
 ---
 
@@ -109,10 +109,13 @@ hermes-compose/
    （`selectable` 开关控制）+「复制整条 / 引用」按钮。**调用方不要再在外面套一层**，
    嵌套会让选择链断开。不要试图修这个机制。
 7. **composer 发送的是 Markdown 源码**：不做 WYSIWYG 转换、不自动转义、不改写用户输入。
-8. **CSS/React 生态的能力不做等价复刻**：HTML 预览、社交卡片降级（显示源码或链接）。
-   两个例外都是**纯 Kotlin/Compose 实现，不引 WebView**：
-   - mermaid —— 用 `mermaid-compose` 引擎在 Compose 内直接绘制，画不出的图族回落「源码 + 一行提示」；
-   - 数学公式 —— 用 `latex-renderer` 原生排版（块级 `$$…$$` + 行内 `$…$`，行内走 `InlineTextContent`）。
+8. **CSS/React 生态的能力不做等价复刻**：社交卡片降级（显示源码或链接）。
+   HTML 块**按标签语义原生渲染**（`HtmlNativeAdapter` + ksoup，白名单照 GitHub sanitizer），
+   布局级 CSS、脚本、iframe 一律忽略 —— 全部是**纯 Kotlin/Compose 实现，不引 WebView**：
+   - 图表 —— `diagram-render` 在 Compose 内直接绘制（Mermaid / PlantUML / DOT），
+     画不出的图族回落「源码 + 一行提示」；
+   - 数学公式 —— `ratex` 原生排版（块级 `$$…$$` + 行内 `$…$`，行内走 `InlineTextContent`）；
+   - 原始 HTML —— ksoup 解析成 DOM，再按标签语义拼 Compose 块树（`<script>` 子树整棵丢弃）。
    `HTML_INLINE`（`<br>` / `<b>` / `<code>` / `<a>` / `<img>`）在解析前被改写成等价 Markdown 标记，
    `<div align=…>` 这类容器块剥壳后递归渲染 —— 都在 markdown-one 里，本仓库不改写用户的 Markdown。
    **渲染实现全部在 `modules/markdown-one`（git submodule）**：
@@ -204,7 +207,6 @@ git -c http.proxy=http://127.0.0.1:7890 submodule update --init --recursive
 | `.design/详细设计/` | 落地设计（工程结构、依赖、Compose 约定、功能域、UI 视觉稿） |
 | `modules/markdown-one/` | Markdown 渲染库本体（submodule，Apache-2.0）：`README.md` 与 `docs/` 是它自己的文档 |
 | `modules/markdown-one/docs/api.md` | 渲染库的 API（`MarkdownText` / `MarkdownConfig` / `BlockAdapter` / 视口） |
-| `modules/markdown-one/docs/jcef.md` | 需要内嵌浏览器时（KaTeX / 完整 mermaid / 任意 HTML）的接入与坑 |
 
 **工作前先读**：`00` → `03` → 与你任务相关的专题文档。
 

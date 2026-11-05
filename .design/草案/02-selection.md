@@ -87,8 +87,8 @@
 | `annotator` **不能凭空创造块级元素** | @ 引用 chip 走"预处理成链接 + annotator 染色"（ADR-006）；块级元素才用自定义 `MarkdownComponents` |
 | 高亮语言覆盖不全 | markdown-one 内置 8 组正则补丁；缺的在库里补，不在本仓库补 |
 | 表格无横向滚动策略 | **已解决**：`BlockViewportConfig` 给表格限高 + 双向滚动 + 缩放 |
-| 图（mermaid） | 纯 Kotlin 引擎在 Compose 内绘制，失败回落源码（ADR-035，边界已迁到 markdown-one） |
-| 数学 / 富嵌入 | 默认不渲染，显示源码或链接（ADR-004）；需要时可开 `webFallback = Jcef`（见 markdown-one `docs/jcef.md`） |
+| 图（Mermaid / PlantUML / DOT） | `diagram-render` 在 Compose 内绘制，失败回落源码（ADR-035 的边界已迁到 markdown-one） |
+| 数学 / 富嵌入 | 公式走 `ratex`、原始 HTML 走 ksoup 原生渲染（ADR-004 的"不引 WebView"仍然有效） |
 
 ---
 
