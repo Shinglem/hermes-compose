@@ -682,6 +682,8 @@ fun AppShell(
                                 onNotificationsToggle = settingsViewModel::setNotificationsEnabled,
                                 nativeNotifications = settingsState.nativeNotifications,
                                 onNativeNotificationsToggle = settingsViewModel::setNativeNotifications,
+                                browserHeaded = settingsState.browserHeaded,
+                                onBrowserHeadedToggle = settingsViewModel::setBrowserHeaded,
                                 updateState = updateState,
                                 onCheckUpdate = { updaterViewModel.check() },
                                 backendVersion = shellState.health?.version.orEmpty(),

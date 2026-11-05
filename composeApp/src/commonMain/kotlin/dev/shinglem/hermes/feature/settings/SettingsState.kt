@@ -44,6 +44,8 @@ data class SettingsState(
     val notificationsEnabled: Boolean = true,
     /** 用系统原生通知（Windows toast）；默认关 = 应用内自绘窗。 */
     val nativeNotifications: Boolean = false,
+    /** 内置后端的浏览器是否可见（`app.browser.headed`，改完要重启后端）。 */
+    val browserHeaded: Boolean = false,
 ) {
     /** 选中项对应的字段组；选中的是自绘页时为 `null`。 */
     val currentGroup: SettingsGroup?
@@ -80,6 +82,7 @@ class SettingsViewModel(
             collapsedSections = parseCollapsed(preferences?.settingsCollapsed),
             notificationsEnabled = preferences?.notificationsEnabled ?: true,
             nativeNotifications = preferences?.nativeNotifications ?: false,
+            browserHeaded = config.app.browser.headed,
         ),
     )
     val state: StateFlow<SettingsState> = _state.asStateFlow()
@@ -123,6 +126,25 @@ class SettingsViewModel(
 
     fun dismissSaved() {
         _state.update { it.copy(saved = null, error = null) }
+    }
+
+    /**
+     * agent 浏览器是否可见（`app.browser.headed`）。
+     *
+     * 写 `config_custom.json`：这个开关最终变成后端子进程的 `AGENT_BROWSER_HEADED` 环境变量，
+     * 而环境变量只在启动时注入 —— 所以**必须重启后端才生效**（提示用 `restartRequired`）。
+     */
+    fun setBrowserHeaded(enabled: Boolean) {
+        runCatching {
+            store.saveConfigPatch(
+                JsonObject(mapOf("app" to JsonObject(mapOf("browser" to JsonObject(mapOf("headed" to JsonPrimitive(enabled))))))),
+            )
+        }.onFailure { error ->
+            Log.warn("保存 browser.headed 失败：${error.message}")
+            _state.update { it.copy(error = "保存失败：${error.message}") }
+            return
+        }
+        _state.update { it.copy(browserHeaded = enabled, saved = SettingsSaved(restartRequired = true), error = null) }
     }
 
     /**

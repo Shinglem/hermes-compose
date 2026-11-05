@@ -153,6 +153,26 @@ data class AppSection(
     val autostart: AutostartMode = AutostartMode.OFF,
     /** 调试用（v0.2.0~，v1.0.0 移除）；见 ADR-045。 */
     val debug: DebugSection = DebugSection(),
+    /** 内置后端的浏览器行为。 */
+    val browser: BrowserSection = BrowserSection(),
+)
+
+/**
+ * 浏览器工具的行为（对应后端的 `browser.*` 配置，但用环境变量注入 —— 见 [headed]）。
+ *
+ * 为什么不直接改后端 `config.yaml`：`PUT /api/config/raw` 是**整篇 YAML 替换**
+ * （`web_routers/analytics.py` 明确写了 "never merge omitted sections back from disk"），
+ * 写坏就毁掉用户整份后端配置。环境变量是进程级的，出问题只影响本次启动。
+ */
+@Serializable
+data class BrowserSection(
+    /**
+     * 让 agent 操作的浏览器**可见**（`AGENT_BROWSER_HEADED=1`）。
+     *
+     * 打开后用户能看到 agent 在访问什么页面、点了哪里；代价是每轮不再自动清理浏览器窗口
+     * （空闲超时仍会回收）。**改完需要重启后端才生效**（环境变量是启动时注入的）。
+     */
+    val headed: Boolean = false,
 )
 
 /**

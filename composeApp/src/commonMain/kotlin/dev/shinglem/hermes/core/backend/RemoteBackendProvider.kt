@@ -13,8 +13,11 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 class RemoteBackendProvider(
     private val target: GatewayTarget,
+    private val token: String? = null,
 ) : BackendProvider {
     override val kind: BackendKind = BackendKind.REMOTE
+
+    override val sessionToken: String? get() = token?.takeIf { it.isNotBlank() }
 
     private val _state = MutableStateFlow<BackendBootState>(BackendBootState.Ready(target))
     override val state: StateFlow<BackendBootState> = _state.asStateFlow()

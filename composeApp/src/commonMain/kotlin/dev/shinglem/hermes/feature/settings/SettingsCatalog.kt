@@ -91,6 +91,9 @@ sealed interface SettingsPage {
     /** 桌面通知开关（客户端行为，存 `state.json`）。 */
     data object Notifications : SettingsPage
 
+    /** 内置后端的浏览器行为（`app.browser.headed`）。 */
+    data object Browser : SettingsPage
+
     /** 快捷键一览（只读）。 */
     data object Shortcuts : SettingsPage
 
@@ -312,6 +315,7 @@ object SettingsCatalog {
                 title = "桌面",
                 pages = listOf(
                     "通知" to SettingsPage.Notifications,
+                    "浏览器" to SettingsPage.Browser,
                     "快捷键" to SettingsPage.Shortcuts,
                     "关于" to SettingsPage.About,
                 ),

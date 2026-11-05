@@ -18,6 +18,15 @@ interface BackendProvider {
     /** 当前应连的地址；尚未 Ready 时返回配置里的占位目标。 */
     fun currentTarget(): GatewayTarget
 
+    /**
+     * 后端认的会话令牌（`X-Hermes-Session-Token`）。
+     *
+     * 只读用途：把同一个令牌交给需要直连本后端的**其它客户端**（如官方桌面端的
+     * `HERMES_DESKTOP_REMOTE_TOKEN`），否则它们只能落在"配置后端"向导里。
+     * LOCAL 模式返回我们注入子进程的那个值，REMOTE 返回配置里解析出的值。
+     */
+    val sessionToken: String? get() = null
+
     /** 幂等；已 Ready 立即返回，失败后再次调用等于重试。 */
     suspend fun start()
 

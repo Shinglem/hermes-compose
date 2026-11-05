@@ -40,9 +40,14 @@ class LocalBackendProvider(
     private val osEnv: Map<String, String>,
     private val logger: AppLogger,
     private val scope: CoroutineScope,
+    /** `config.app.browser.headed`：让 agent 操作的浏览器可见。 */
+    private val browserHeaded: Boolean = false,
 ) : BackendProvider {
 
     override val kind: BackendKind = BackendKind.LOCAL
+
+    /** 我们注入子进程的 `HERMES_DASHBOARD_SESSION_TOKEN`（官方桌面端直连时要用同一个）。 */
+    override val sessionToken: String? get() = token.takeIf { it.isNotBlank() }
 
     private val _state = MutableStateFlow<BackendBootState>(BackendBootState.Idle)
     override val state: StateFlow<BackendBootState> = _state.asStateFlow()
@@ -119,6 +124,7 @@ class LocalBackendProvider(
         }
         val spec = LocalBackendPlanner.backendSpec(
             payloadDir, homeDir, dataDir, token, nonce, parentPid, parentStartMarker, local, osEnv,
+            browserHeaded = browserHeaded,
         )
         val port = runProcess(spec, label = "backend") ?: return
         backend = lastLaunched

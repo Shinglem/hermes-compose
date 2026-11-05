@@ -10,7 +10,7 @@ import dev.shinglem.hermes.core.app.ProductInfo
 import dev.shinglem.hermes.core.log.Log
 import java.io.File
 import java.security.MessageDigest
-import java.util.concurrent.ConcurrentHashMap
+import java.util.Collections
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,8 +40,25 @@ actual object NativeNotifications {
     actual val status: StateFlow<NativeNotificationStatus> = _status.asStateFlow()
 
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val tokens = ConcurrentHashMap<String, () -> Unit>()
+
+    /**
+     * 每条 toast 的按钮回调，**按 tag 分桶**。
+     *
+     * 不能是一张全局表：WinRT 允许同时存在多条 toast，每条回调点回来时只带自己的 `tag`，
+     * 全局表在第二条 `show()` 时会清掉第一条的按钮（v0.4.1 前的实际缺陷）。
+     * 用 `LinkedHashMap` 的超限淘汰避免"用户既不点也不关"时无限增长。
+     */
+    private val tokens: MutableMap<String, MutableMap<String, () -> Unit>> =
+        Collections.synchronizedMap(
+            object : LinkedHashMap<String, MutableMap<String, () -> Unit>>() {
+                override fun removeEldestEntry(
+                    eldest: MutableMap.MutableEntry<String, MutableMap<String, () -> Unit>>,
+                ): Boolean = size > MAX_TRACKED_TOASTS
+            },
+        )
+
     private val seq = AtomicLong(0)
+    private val tagSeq = AtomicLong(0)
 
     private var homeDir: File? = null
     private var appName: String = ""
@@ -306,9 +323,12 @@ actual object NativeNotifications {
             Log.warn("native notifications: shortcut missing, fall back to in-app window")
             return false
         }
-        // 上一轮没被点的动作先清掉，别让 token 表无限长。
-        tokens.clear()
-        onBodyClick?.let { tokens[BODY_TOKEN] = it }
+        // 每条审批一个唯一 tag：WinRT 的语义是「同 tag + 同 group = 更新同一条 toast」，
+        // 用常量 tag 会让第二条审批直接顶掉第一条（v0.4.1 前的实际缺陷）。
+        // 无按钮的提示类（"本轮完成"）仍用固定 tag —— 同类重复替换是期望行为。
+        val tag = if (buttons.isEmpty()) NOTICE_TAG else nextTag()
+        val bucket = mutableMapOf<String, () -> Unit>()
+        onBodyClick?.let { bucket[BODY_TOKEN] = it }
 
         var failed = false
         val content = toast {
@@ -322,20 +342,32 @@ actual object NativeNotifications {
                     // 每个按钮一个 token：点击时能精确找回对应的 lambda（一条通知可能有 4 个按钮）。
                     buttons.forEach { action ->
                         val token = "a${seq.incrementAndGet()}"
-                        tokens[token] = action.onClick
+                        bucket[token] = action.onClick
                         button(action.label, arguments = token)
                     }
                 }
             }
         }
+        tokens[tag] = bucket
         WindowsNotificationCenter.show(
             content = content,
-            tag = TAG,
+            tag = tag,
             group = GROUP,
-            callback = { error -> if (error != null) failed = true },
+            callback = { error ->
+                if (error != null) {
+                    failed = true
+                    tokens.remove(tag)
+                }
+            },
         )
         return !failed
     }
+
+    /**
+     * 生成唯一 tag。WinRT 限 16 字符（见 [nativeToastTag]）；
+     * 进程内递增即可（重启后与旧通知撞 tag 只会替换掉那条过期通知，无害）。
+     */
+    private fun nextTag(): String = nativeToastTag(tagSeq.incrementAndGet())
 
     private fun installListener() {
         if (listenerInstalled) return
@@ -349,13 +381,15 @@ actual object NativeNotifications {
                     userInputs: Map<String, String>,
                 ) {
                     // 空 arguments = 点了通知主体（没有按钮的 arguments 时）。
-                    val action = tokens.remove(arguments.ifBlank { BODY_TOKEN }) ?: return
+                    // 只从**这一条**的桶里取，别条的动作不能被误用。
+                    val bucket = tokens[tag] ?: return
+                    val action = bucket.remove(arguments.ifBlank { BODY_TOKEN }) ?: return
                     mainScope.launch { runCatching { action() } }
                 }
 
                 override fun onDismissed(tag: String, group: String, reason: DismissalReason) {
-                    // 用户手动关掉 / 超时：主体动作不会再触发，清掉免得下次误用。
-                    if (reason != DismissalReason.APPLICATION_HIDDEN) tokens.remove(BODY_TOKEN)
+                    // 用户手动关掉 / 超时：这条的动作不会再触发，整桶删掉免得下次误用。
+                    if (reason != DismissalReason.APPLICATION_HIDDEN) tokens.remove(tag)
                 }
 
                 override fun onFailed(tag: String, group: String, errorCode: Int) {
@@ -461,9 +495,12 @@ actual object NativeNotifications {
         return digest.take(4).joinToString("") { "%02x".format(it) }
     }
 
-    /** tag / group 各限 16 字符（WinRT 限制）。 */
-    private const val TAG = "hermes"
+    /** tag / group 各限 16 字符（WinRT 限制）。`GROUP` 保持常量：同组的多条才会在通知中心堆叠。 */
+    private const val NOTICE_TAG = "notice"
     private const val GROUP = "approval"
+
+    /** 最多同时跟踪多少条 toast 的按钮回调（超出淘汰最旧的）。 */
+    private const val MAX_TRACKED_TOASTS = 32
 
     /** 点通知主体（不是按钮）时用的 token。 */
     private const val BODY_TOKEN = "body"
@@ -473,3 +510,16 @@ actual object NativeNotifications {
     /** AUMID 命名空间：`Shinglem.HermesDesktop.<home 哈希>`（与快捷方式同源，多实例互不覆盖）。 */
     private const val AUMID_PREFIX = "Shinglem.HermesDesktop."
 }
+
+/** WinRT 的 tag 上限是 16 字符；截到 52 bit 保证 `h` + 13 个十六进制位 = 14 字符。 */
+private const val TAG_SEQ_MASK = 0xFFFFFFFFFFFL
+
+/**
+ * 按请求序号生成 toast 的 `tag`。
+ *
+ * 必须**每条不同**：WinRT 把「同 `tag` + 同 `group`」当成对同一条的更新，
+ * 用常量 tag 会让后来的审批直接顶掉前一条（v0.4.1 前的实际缺陷）。
+ *
+ * 放在 object 外面是为了可单测（object 内部成员对测试不可见）。
+ */
+internal fun nativeToastTag(seq: Long): String = "h" + (seq and TAG_SEQ_MASK).toString(16)

@@ -77,6 +77,49 @@ class OfficialDesktopDetectTest {
         assertEquals(File(dataRoot, "hermes-home").absolutePath, env["HERMES_HOME"])
     }
 
+    @Test
+    fun `给了后端地址与会话令牌时注入 REMOTE_URL 与 REMOTE_TOKEN`() {
+        val dataRoot = File(root, "data${File.separator}official-desktop")
+        val env = officialDesktopEnv(dataRoot, "http://127.0.0.1:9119", "tok-abc")
+
+        // 两个必须成对出现：官方桌面只看到 URL 会直接抛错
+        assertEquals("http://127.0.0.1:9119", env["HERMES_DESKTOP_REMOTE_URL"])
+        assertEquals("tok-abc", env["HERMES_DESKTOP_REMOTE_TOKEN"])
+    }
+
+    @Test
+    fun `缺令牌或后端未就绪时不注入 REMOTE_ 两个变量`() {
+        val dataRoot = File(root, "data${File.separator}official-desktop")
+
+        // 只有 URL 没有 token
+        officialDesktopEnv(dataRoot, "http://127.0.0.1:9119", null).let { env ->
+            assertNull(env["HERMES_DESKTOP_REMOTE_URL"], "只有 URL 时不能注入")
+            assertNull(env["HERMES_DESKTOP_REMOTE_TOKEN"])
+        }
+        // 只有 token 没有 URL
+        officialDesktopEnv(dataRoot, null, "tok").let { env ->
+            assertNull(env["HERMES_DESKTOP_REMOTE_URL"])
+            assertNull(env["HERMES_DESKTOP_REMOTE_TOKEN"])
+        }
+        // 后端未就绪时的 `:0` 占位地址
+        officialDesktopEnv(dataRoot, "http://127.0.0.1:0", "tok").let { env ->
+            assertNull(env["HERMES_DESKTOP_REMOTE_URL"], "占位端口不能注入")
+            assertNull(env["HERMES_DESKTOP_REMOTE_TOKEN"])
+        }
+        // 隔离变量始终在
+        assertEquals(File(dataRoot, "userdata").absolutePath, officialDesktopEnv(dataRoot)["HERMES_DESKTOP_USER_DATA_DIR"])
+    }
+
+    @Test
+    fun `地址可用性判定`() {
+        assertEquals(true, isUsableBackendUrl("http://127.0.0.1:9119"))
+        assertEquals(true, isUsableBackendUrl("https://hermes.example.com:443/api"))
+        assertEquals(false, isUsableBackendUrl("http://127.0.0.1:0"), "未就绪的占位地址")
+        assertEquals(false, isUsableBackendUrl("http://127.0.0.1"), "缺端口")
+        assertEquals(false, isUsableBackendUrl(""), "空串")
+        assertEquals(false, isUsableBackendUrl("127.0.0.1:9119"), "缺 scheme")
+    }
+
     private fun config(officialDesktop: String? = null) = AppConfig(
         backend = BackendSection(local = LocalSection(hermesDir = "hermes")),
         app = AppSection(debug = DebugSection(officialDesktop = officialDesktop)),

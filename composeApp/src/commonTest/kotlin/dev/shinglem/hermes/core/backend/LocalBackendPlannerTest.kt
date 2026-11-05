@@ -14,17 +14,19 @@ class LocalBackendPlannerTest {
     private val data = "C:/Users/u/AppData/Local/hermes-compose"
     private val local = LocalSection()
 
-    private fun spec(overrides: LocalSection = local) = LocalBackendPlanner.backendSpec(
-        payloadDir = payload,
-        homeDir = home,
-        dataDir = data,
-        token = "tok",
-        nonce = "abc",
-        parentPid = 4242,
-        parentStartMarker = "winms:99",
-        local = overrides,
-        osEnv = mapOf("PATH" to "C:/Windows", "SECRET_KEY" to "leak", "HDC_HOME" to "S:/app"),
-    )
+    private fun spec(overrides: LocalSection = local, browserHeaded: Boolean = false) =
+        LocalBackendPlanner.backendSpec(
+            payloadDir = payload,
+            homeDir = home,
+            dataDir = data,
+            token = "tok",
+            nonce = "abc",
+            parentPid = 4242,
+            parentStartMarker = "winms:99",
+            local = overrides,
+            osEnv = mapOf("PATH" to "C:/Windows", "SECRET_KEY" to "leak", "HDC_HOME" to "S:/app"),
+            browserHeaded = browserHeaded,
+        )
 
     @Test
     fun `backend is a single dashboard process on an ephemeral loopback port`() {
@@ -37,6 +39,12 @@ class LocalBackendPlannerTest {
         )
         assertEquals("S:/app/release/hermes", spec.workDir)
         assertTrue(spec.readyFile!!.endsWith("ready-abc.json"))
+    }
+
+    @Test
+    fun `浏览器可见开关只在打开时注入 AGENT_BROWSER_HEADED`() {
+        assertNull(spec(browserHeaded = false).env["AGENT_BROWSER_HEADED"], "关闭时不该注入")
+        assertEquals("1", spec(browserHeaded = true).env["AGENT_BROWSER_HEADED"])
     }
 
     @Test

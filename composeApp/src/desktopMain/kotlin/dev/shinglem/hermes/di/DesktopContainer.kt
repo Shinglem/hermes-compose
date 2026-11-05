@@ -140,7 +140,14 @@ object DesktopContainer {
             profilesAdminRepository = ProfilesAdminRepository(restClient),
             modelAdminRepository = ModelAdminRepository(restClient),
             configRepository = ConfigRepository(restClient),
-            officialDesktop = OfficialDesktopLauncherImpl.detect(config, paths),
+            officialDesktop = OfficialDesktopLauncherImpl.detect(
+                config = config,
+                paths = paths,
+                // 延迟求值：LOCAL 模式下后端端口要等 Ready 后才知道（未就绪时是 `:0` 占位，
+                // 由 officialDesktopEnv 的 isUsableBackendUrl 过滤掉）。
+                backendUrl = { backend.currentTarget().baseUrl },
+                sessionToken = { backend.sessionToken },
+            ),
             terminalViewModel = terminalViewModel,
             terminalRepository = terminalRepository,
             logger = logger,
@@ -172,7 +179,7 @@ object DesktopContainer {
     ): BackendProvider {
         val fallback = GatewayTarget(config.backend.remote.baseUrl, resolveToken(config))
         return when (config.backend.mode) {
-            BackendMode.REMOTE -> RemoteBackendProvider(fallback)
+            BackendMode.REMOTE -> RemoteBackendProvider(fallback, resolveToken(config))
 
             BackendMode.LOCAL -> LocalBackendProvider(
                 payloadDir = paths.hermesDir(config).absolutePath,
@@ -197,6 +204,7 @@ object DesktopContainer {
                 osEnv = System.getenv(),
                 logger = logger,
                 scope = scope,
+                browserHeaded = config.app.browser.headed,
             )
         }
     }

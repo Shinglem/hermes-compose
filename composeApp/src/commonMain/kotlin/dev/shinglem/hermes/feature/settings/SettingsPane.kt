@@ -139,6 +139,8 @@ fun SettingsDetailPane(
     onNotificationsToggle: (Boolean) -> Unit = {},
     nativeNotifications: Boolean = false,
     onNativeNotificationsToggle: (Boolean) -> Unit = {},
+    browserHeaded: Boolean = false,
+    onBrowserHeadedToggle: (Boolean) -> Unit = {},
     updateState: UpdateState = UpdateState(),
     onCheckUpdate: () -> Unit = {},
     backendVersion: String = "",
@@ -160,6 +162,15 @@ fun SettingsDetailPane(
 
         SettingsPage.Shortcuts -> {
             ShortcutsPage(modifier = modifier)
+            return
+        }
+
+        SettingsPage.Browser -> {
+            BrowserPage(
+                headed = browserHeaded,
+                onHeadedToggle = onBrowserHeadedToggle,
+                modifier = modifier,
+            )
             return
         }
 

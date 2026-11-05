@@ -82,6 +82,8 @@ object LocalBackendPlanner {
         parentStartMarker: String,
         local: LocalSection,
         osEnv: Map<String, String>,
+        /** 让 agent 的浏览器可见（`AGENT_BROWSER_HEADED=1`，见 `BrowserSection.headed`）。 */
+        browserHeaded: Boolean = false,
     ): BackendLaunchSpec = spec(
         payloadDir = payloadDir,
         homeDir = homeDir,
@@ -100,6 +102,7 @@ object LocalBackendPlanner {
             "--skip-build", "--no-open", "--isolated",
         ),
         readyFile = readyFile(dataDir, "ready-$nonce.json"),
+        browserHeaded = browserHeaded,
     )
 
     /**
@@ -132,6 +135,7 @@ object LocalBackendPlanner {
         command: String,
         extraArgs: List<String>,
         readyFile: String,
+        browserHeaded: Boolean = false,
     ): BackendLaunchSpec {
         val env = buildMap {
             // OS 运行必需项：不继承环境，但要能启动进程（白名单，见 06 §4.2）。
@@ -148,7 +152,9 @@ object LocalBackendPlanner {
             put("PYTHONUTF8", "1")
             put("HERMES_DISABLE_LAZY_INSTALLS", "1")
             put("HERMES_DESKTOP_READY_FILE", readyFile)
-            // HERMES_WEB_DIST 刻意不设：客户端只用 JSON-RPC + REST。
+            // agent 操作的浏览器是否可见（#9）。用环境变量而不是改后端 config.yaml：
+            // `PUT /api/config/raw` 是整篇 YAML 替换，写坏会毁掉用户整份配置。
+            if (browserHeaded) put("AGENT_BROWSER_HEADED", "1")            // HERMES_WEB_DIST 刻意不设：客户端只用 JSON-RPC + REST。
         }
         return BackendLaunchSpec(
             exe = exePath(payloadDir),

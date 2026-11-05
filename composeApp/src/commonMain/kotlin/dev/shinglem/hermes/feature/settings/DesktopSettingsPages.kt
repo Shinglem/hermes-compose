@@ -116,8 +116,60 @@ fun NotificationsPage(
     }
 }
 
-/** 「桌面 → 快捷键」：只读一览（快捷键目前是固定的，不开放自定义）。 */
+/**
+ * 「桌面 → 浏览器」：让 agent 操作的浏览器可见。
+ *
+ * 开关最终变成后端子进程的 `AGENT_BROWSER_HEADED` 环境变量，所以**改完要重启后端**。
+ * 后端的浏览器可执行文件不用配：payload 里已随包带 PM 管理的 Chromium
+ * （`hermes/tools/chromium-1208/`），后端每次调 agent-browser 都显式传
+ * `AGENT_BROWSER_EXECUTABLE_PATH`。
+ */
 @Composable
+fun BrowserPage(
+    headed: Boolean,
+    onHeadedToggle: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("浏览器", style = MaterialTheme.typography.titleMedium)
+        Text(
+            text = "agent 用内置浏览器访问网页、点击页面元素、截图。默认跑在后台（无窗口），" +
+                "打开下面的开关就能看到它在做什么。",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("显示浏览器窗口", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = if (headed) "当前：开启（可在任务栏看到浏览器）" else "当前：关闭（后台运行）",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = headed, onCheckedChange = onHeadedToggle)
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Text(
+            text = buildString {
+                append("改动需要**重启后端**才生效（走环境变量注入）。")
+                append("\n\n")
+                append("浏览器用的是随包附带的 Chromium，不需要单独安装，也不会往用户目录写文件。")
+                append("空闲超过两分钟后浏览器仍会被自动回收。")
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** 「桌面 → 快捷键」：只读一览（快捷键目前是固定的，不开放自定义）。 */@Composable
 fun ShortcutsPage(modifier: Modifier = Modifier) {
     val entries = listOf(
         "Ctrl+N" to "新建会话",
