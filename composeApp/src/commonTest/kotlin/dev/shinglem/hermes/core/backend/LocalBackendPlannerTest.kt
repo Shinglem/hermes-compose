@@ -14,7 +14,12 @@ class LocalBackendPlannerTest {
     private val data = "C:/Users/u/AppData/Local/hermes-compose"
     private val local = LocalSection()
 
-    private fun spec(overrides: LocalSection = local, browserHeaded: Boolean = false) =
+    private fun spec(
+        overrides: LocalSection = local,
+        browserHeaded: Boolean = false,
+        browserArgs: String = "",
+        elevated: Boolean = false,
+    ) =
         LocalBackendPlanner.backendSpec(
             payloadDir = payload,
             homeDir = home,
@@ -26,6 +31,8 @@ class LocalBackendPlannerTest {
             local = overrides,
             osEnv = mapOf("PATH" to "C:/Windows", "SECRET_KEY" to "leak", "HDC_HOME" to "S:/app"),
             browserHeaded = browserHeaded,
+            browserArgs = browserArgs,
+            elevated = elevated,
         )
 
     @Test
@@ -45,6 +52,39 @@ class LocalBackendPlannerTest {
     fun `浏览器可见开关只在打开时注入 AGENT_BROWSER_HEADED`() {
         assertNull(spec(browserHeaded = false).env["AGENT_BROWSER_HEADED"], "关闭时不该注入")
         assertEquals("1", spec(browserHeaded = true).env["AGENT_BROWSER_HEADED"])
+    }
+
+    @Test
+    fun `提权运行时自动补 Chromium 沙箱绕过参数`() {
+        assertEquals(
+            "--no-sandbox,--disable-dev-shm-usage",
+            spec(elevated = true).env["AGENT_BROWSER_ARGS"],
+        )
+        assertNull(spec(elevated = false).env["AGENT_BROWSER_ARGS"], "非提权时不该降低隔离")
+    }
+
+    @Test
+    fun `用户填写的启动参数追加而不是替换自动部分`() {
+        assertEquals(
+            "--no-sandbox,--disable-dev-shm-usage,--remote-debugging-port=9333",
+            spec(
+                elevated = true,
+                browserArgs = "--remote-debugging-port=9333",
+            ).env["AGENT_BROWSER_ARGS"],
+        )
+        assertEquals(
+            "--remote-debugging-port=9333",
+            spec(elevated = false, browserArgs = "--remote-debugging-port=9333").env["AGENT_BROWSER_ARGS"],
+        )
+    }
+
+    @Test
+    fun `参数拆分容忍换行、空白与重复项`() {
+        assertEquals(
+            "--no-sandbox,--disable-dev-shm-usage,--foo",
+            LocalBackendPlanner.chromiumArgs(elevated = true, extra = " --no-sandbox ,\n  --foo ,, "),
+        )
+        assertNull(LocalBackendPlanner.chromiumArgs(elevated = false, extra = "  "), "全空时不设变量")
     }
 
     @Test

@@ -205,6 +205,8 @@ object DesktopContainer {
                 logger = logger,
                 scope = scope,
                 browserHeaded = config.app.browser.headed,
+                browserArgs = config.app.browser.args,
+                elevated = Elevation.isElevated(),
             )
         }
     }

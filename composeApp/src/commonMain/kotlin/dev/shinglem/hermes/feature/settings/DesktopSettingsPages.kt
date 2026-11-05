@@ -15,11 +15,15 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -128,6 +132,8 @@ fun NotificationsPage(
 fun BrowserPage(
     headed: Boolean,
     onHeadedToggle: (Boolean) -> Unit,
+    args: String,
+    onArgsChange: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -156,6 +162,8 @@ fun BrowserPage(
             Switch(checked = headed, onCheckedChange = onHeadedToggle)
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        ChromiumArgsEditor(args = args, onArgsChange = onArgsChange)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Text(
             text = buildString {
                 append("改动需要**重启后端**才生效（走环境变量注入）。")
@@ -169,7 +177,47 @@ fun BrowserPage(
     }
 }
 
-/** 「桌面 → 快捷键」：只读一览（快捷键目前是固定的，不开放自定义）。 */@Composable
+/**
+ * Chromium 启动参数编辑框。
+ *
+ * 留空 = 只走自动判断（提权运行时补 `--no-sandbox,--disable-dev-shm-usage`）。
+ * 逐字落盘会把半个参数写进配置，所以用「保存」提交，失焦不提交。
+ */
+@Composable
+private fun ChromiumArgsEditor(args: String, onArgsChange: (String) -> Unit) {
+    var draft by remember(args) { mutableStateOf(args) }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Chromium 启动参数", style = MaterialTheme.typography.bodyLarge)
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            placeholder = { Text("留空 = 自动", style = MaterialTheme.typography.bodySmall) },
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { onArgsChange(draft) }, enabled = draft != args) { Text("保存") }
+            OutlinedButton(onClick = { draft = "" }, enabled = draft.isNotEmpty()) { Text("清空") }
+        }
+        Text(
+            text = buildString {
+                append("逗号分隔，会追加到自动参数之后（不是替换）。")
+                append("\n\n")
+                append("以管理员运行时自动加 ")
+                append("--no-sandbox,--disable-dev-shm-usage")
+                append("：Chromium 在管理员令牌下拒绝启用自身沙箱，不加就")
+                append("「Chrome exited early (exit code: 0) without writing DevToolsActivePort」。")
+                append("非提权运行时不加，保持默认隔离。")
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** 「桌面 → 快捷键」：只读一览（快捷键目前是固定的，不开放自定义）。 */
+@Composable
 fun ShortcutsPage(modifier: Modifier = Modifier) {
     val entries = listOf(
         "Ctrl+N" to "新建会话",

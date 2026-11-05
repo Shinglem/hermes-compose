@@ -48,6 +48,8 @@ data class SettingsState(
     val nativeNotifications: Boolean = false,
     /** 内置后端的浏览器是否可见（`app.browser.headed`，改完要重启后端）。 */
     val browserHeaded: Boolean = false,
+    /** 追加的 Chromium 启动参数（`app.browser.args`，改完要重启后端）。 */
+    val browserArgs: String = "",
     /** 外部编辑器配置（`options.json`）。 */
     val editors: EditorsOptions = AppOptionsHolder.current.editors,
 ) {
@@ -87,6 +89,7 @@ class SettingsViewModel(
             notificationsEnabled = preferences?.notificationsEnabled ?: true,
             nativeNotifications = preferences?.nativeNotifications ?: false,
             browserHeaded = config.app.browser.headed,
+            browserArgs = config.app.browser.args,
             editors = AppOptionsHolder.current.editors,
         ),
     )
@@ -172,6 +175,26 @@ class SettingsViewModel(
             return
         }
         _state.update { it.copy(browserHeaded = enabled, saved = SettingsSaved(restartRequired = true), error = null) }
+    }
+
+    /**
+     * 追加的 Chromium 启动参数（`app.browser.args`）。
+     *
+     * 留空走自动判断（提权运行时补 `--no-sandbox`）；填了会与自动部分合并。
+     * 同样是环境变量注入，**必须重启后端才生效**。
+     */
+    fun setBrowserArgs(args: String) {
+        val value = args.trim()
+        runCatching {
+            store.saveConfigPatch(
+                JsonObject(mapOf("app" to JsonObject(mapOf("browser" to JsonObject(mapOf("args" to JsonPrimitive(value))))))),
+            )
+        }.onFailure { error ->
+            Log.warn("保存 browser.args 失败：${error.message}")
+            _state.update { it.copy(error = "保存失败：${error.message}") }
+            return
+        }
+        _state.update { it.copy(browserArgs = value, saved = SettingsSaved(restartRequired = true), error = null) }
     }
 
     /**

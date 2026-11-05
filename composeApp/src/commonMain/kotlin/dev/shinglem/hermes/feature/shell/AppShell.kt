@@ -687,6 +687,8 @@ fun AppShell(
                                 onNativeNotificationsToggle = settingsViewModel::setNativeNotifications,
                                 browserHeaded = settingsState.browserHeaded,
                                 onBrowserHeadedToggle = settingsViewModel::setBrowserHeaded,
+                                browserArgs = settingsState.browserArgs,
+                                onBrowserArgsChange = settingsViewModel::setBrowserArgs,
                                 editors = settingsState.editors,
                                 onEditorsSave = settingsViewModel::setEditors,
                                 updateState = updateState,

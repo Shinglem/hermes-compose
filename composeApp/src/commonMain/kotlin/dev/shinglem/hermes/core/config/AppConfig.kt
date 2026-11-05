@@ -173,6 +173,17 @@ data class BrowserSection(
      * （空闲超时仍会回收）。**改完需要重启后端才生效**（环境变量是启动时注入的）。
      */
     val headed: Boolean = false,
+    /**
+     * 追加的 Chromium 启动参数（`AGENT_BROWSER_ARGS`，逗号分隔）。
+     *
+     * 留空即只走自动判断：**以管理员运行时**自动补 `--no-sandbox,--disable-dev-shm-usage`。
+     * 需要这一条的原因是 Chromium 在管理员令牌下拒绝启用自身沙箱，不加就
+     * `Chrome exited early (exit code: 0) without writing DevToolsActivePort`；
+     * 而后端的 `_needs_chromium_sandbox_bypass()` 只判 Linux root / Docker / AppArmor，**Windows 恒 false**。
+     *
+     * 这个字段与自动部分**合并**（去重），所以填 `--remote-debugging-port=9333` 不会丢掉 `--no-sandbox`。
+     */
+    val args: String = "",
 )
 
 /**

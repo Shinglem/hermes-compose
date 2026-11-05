@@ -42,6 +42,10 @@ class LocalBackendProvider(
     private val scope: CoroutineScope,
     /** `config.app.browser.headed`：让 agent 操作的浏览器可见。 */
     private val browserHeaded: Boolean = false,
+    /** `config.app.browser.args`：追加的 Chromium 启动参数。 */
+    private val browserArgs: String = "",
+    /** 本进程是否以管理员令牌运行（决定是否自动补 `--no-sandbox`）。 */
+    private val elevated: Boolean = false,
 ) : BackendProvider {
 
     override val kind: BackendKind = BackendKind.LOCAL
@@ -125,6 +129,8 @@ class LocalBackendProvider(
         val spec = LocalBackendPlanner.backendSpec(
             payloadDir, homeDir, dataDir, token, nonce, parentPid, parentStartMarker, local, osEnv,
             browserHeaded = browserHeaded,
+            browserArgs = browserArgs,
+            elevated = elevated,
         )
         val port = runProcess(spec, label = "backend") ?: return
         backend = lastLaunched

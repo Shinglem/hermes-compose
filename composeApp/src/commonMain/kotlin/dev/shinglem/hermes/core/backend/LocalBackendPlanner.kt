@@ -84,6 +84,10 @@ object LocalBackendPlanner {
         osEnv: Map<String, String>,
         /** 让 agent 的浏览器可见（`AGENT_BROWSER_HEADED=1`，见 `BrowserSection.headed`）。 */
         browserHeaded: Boolean = false,
+        /** 追加的 Chromium 启动参数（`BrowserSection.args`）。 */
+        browserArgs: String = "",
+        /** 本进程是否以管理员令牌运行 —— 决定是否自动补 `--no-sandbox`。 */
+        elevated: Boolean = false,
     ): BackendLaunchSpec = spec(
         payloadDir = payloadDir,
         homeDir = homeDir,
@@ -103,6 +107,8 @@ object LocalBackendPlanner {
         ),
         readyFile = readyFile(dataDir, "ready-$nonce.json"),
         browserHeaded = browserHeaded,
+        browserArgs = browserArgs,
+        elevated = elevated,
     )
 
     /**
@@ -136,6 +142,8 @@ object LocalBackendPlanner {
         extraArgs: List<String>,
         readyFile: String,
         browserHeaded: Boolean = false,
+        browserArgs: String = "",
+        elevated: Boolean = false,
     ): BackendLaunchSpec {
         val env = buildMap {
             // OS 运行必需项：不继承环境，但要能启动进程（白名单，见 06 §4.2）。
@@ -155,6 +163,7 @@ object LocalBackendPlanner {
             // agent 操作的浏览器是否可见（#9）。用环境变量而不是改后端 config.yaml：
             // `PUT /api/config/raw` 是整篇 YAML 替换，写坏会毁掉用户整份配置。
             if (browserHeaded) put("AGENT_BROWSER_HEADED", "1")            // HERMES_WEB_DIST 刻意不设：客户端只用 JSON-RPC + REST。
+            chromiumArgs(elevated = elevated, extra = browserArgs)?.let { put("AGENT_BROWSER_ARGS", it) }
         }
         return BackendLaunchSpec(
             exe = exePath(payloadDir),
@@ -173,6 +182,28 @@ object LocalBackendPlanner {
         "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
         "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS",
     )
+
+    /** 提权运行时 Chromium 必需的绕过参数：管理员令牌下它拒绝启用自身沙箱。 */
+    val SANDBOX_BYPASS_ARGS = listOf("--no-sandbox", "--disable-dev-shm-usage")
+
+    /**
+     * 合并出 `AGENT_BROWSER_ARGS`；两段都为空时返回 null（**不设**这个变量）。
+     *
+     * 自动段只在 [elevated] 时加：Chromium 在管理员令牌下会拒绝启用沙箱，
+     * 不加就在写 `DevToolsActivePort` 前 `exit code 0` 静默退出
+     * （后端 `_needs_chromium_sandbox_bypass()` 只判 Linux root / Docker / AppArmor，
+     * Windows 上恒 false，指望不上它）。非提权时不需要，也就不主动降低隔离。
+     *
+     * 用户段与自动段**合并去重**而不是二选一：用户填 `--remote-debugging-port=…`
+     * 时不能把 `--no-sandbox` 挤掉，否则浏览器又起不来。
+     */
+    fun chromiumArgs(elevated: Boolean, extra: String): String? {
+        val parts = buildList {
+            if (elevated) addAll(SANDBOX_BYPASS_ARGS)
+            extra.split(',', '\n', '\r').map { it.trim() }.filterTo(this) { it.isNotEmpty() }
+        }.distinct()
+        return parts.joinToString(",").takeIf { it.isNotEmpty() }
+    }
 
     private fun isAbsolute(value: String): Boolean =
         value.startsWith("/") || value.startsWith("\\") || Regex("""^[A-Za-z]:[\\/].*""").matches(value)

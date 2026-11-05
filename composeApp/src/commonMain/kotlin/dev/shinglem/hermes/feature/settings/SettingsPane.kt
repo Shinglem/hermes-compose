@@ -142,6 +142,8 @@ fun SettingsDetailPane(
     onNativeNotificationsToggle: (Boolean) -> Unit = {},
     browserHeaded: Boolean = false,
     onBrowserHeadedToggle: (Boolean) -> Unit = {},
+    browserArgs: String = "",
+    onBrowserArgsChange: (String) -> Unit = {},
     editors: EditorsOptions = EditorsOptions(),
     onEditorsSave: (EditorsOptions) -> Unit = {},
     updateState: UpdateState = UpdateState(),
@@ -172,6 +174,8 @@ fun SettingsDetailPane(
             BrowserPage(
                 headed = browserHeaded,
                 onHeadedToggle = onBrowserHeadedToggle,
+                args = browserArgs,
+                onArgsChange = onBrowserArgsChange,
                 modifier = modifier,
             )
             return
