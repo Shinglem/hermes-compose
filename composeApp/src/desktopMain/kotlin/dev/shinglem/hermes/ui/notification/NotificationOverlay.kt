@@ -17,7 +17,9 @@ import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.WindowState
 import dev.shinglem.hermes.core.config.AppOptionsHolder
 import dev.shinglem.hermes.core.config.ThemeMode
+import dev.shinglem.hermes.core.config.ThemeStyle
 import dev.shinglem.hermes.platform.NotificationInbox
+import dev.shinglem.hermes.platform.NotificationRequest
 import dev.shinglem.hermes.ui.theme.HermesTheme
 import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
@@ -26,9 +28,11 @@ import kotlinx.coroutines.delay
 
 /** 距屏幕工作区边缘的距离（dp）。 */
 private const val EDGE_MARGIN = 16
+/** 相邻两张卡片之间的间距（dp）。 */
+private const val STACK_GAP = 8
 
 /**
- * 通知窗（右下角，无边框 + 透明底，只为画一张 M3 卡片）。
+ * 通知窗（右下角，无边框 + 透明底，只为画 M3 卡片）。
  *
  * 三条必须守住的约束：
  * 1. **不抢焦点**（`focusable = false`）：用户正在输入时弹出来不该把光标从输入框拿走。
@@ -36,11 +40,15 @@ private const val EDGE_MARGIN = 16
  *    托盘模式下主窗口不进入组合，审批通知同样要能弹。
  * 3. **透明 + 阴影留白**：卡片自己画圆角与阴影，窗口内容要多留 [NOTIFICATION_SHADOW_MARGIN]，
  *    否则阴影会被窗口边缘裁掉。
+ *
+ * 多条并存时**纵向堆叠**（最多 [NotificationInbox.MAX_VISIBLE] 条），最新的在最下面（贴着任务栏），
+ * 与 Windows 自己的通知中心一致；每条一个独立窗口，自动收起互不干扰。
+ * 超过上限的排队：上面某条消失后，排队的自动补到最下面。
  */
 @Composable
 fun NotificationOverlay() {
-    val request by NotificationInbox.current.collectAsState()
-    val current = request ?: return
+    val active by NotificationInbox.active.collectAsState()
+    if (active.isEmpty()) return
     val options by AppOptionsHolder.state.collectAsState()
     val darkTheme = when (options.ui.theme) {
         ThemeMode.SYSTEM -> isSystemInDarkTheme()
@@ -48,44 +56,99 @@ fun NotificationOverlay() {
         ThemeMode.DARK -> true
     }
 
-    val state = remember(current.id) {
-        // 只在显示那一刻算一次位置：中途改分辨率也不该把窗口拽到别处。
-        val area = workArea()
-        val width = NOTIFICATION_CARD_WIDTH.value + NOTIFICATION_SHADOW_MARGIN.value * 2
-        val height = notificationCardHeight(current.actions.isNotEmpty()).value +
-            NOTIFICATION_SHADOW_MARGIN.value * 2
-        val scale = screenScale()
-        val x = (area.x + area.width) / scale - width - EDGE_MARGIN
-        val y = (area.y + area.height) / scale - height - EDGE_MARGIN
+    // 只在条数变化时算一次屏幕几何：中途改分辨率也不该把窗口拽到别处。
+    val geometry = remember(active.size) { overlayGeometry() }
+    val heights = active.asReversed().map {
+        notificationCardHeight(it.actions.isNotEmpty()).value + NOTIFICATION_SHADOW_MARGIN.value * 2
+    }
+    val offsets = stackOffsets(heights, geometry.bottom, STACK_GAP.toFloat())
+    active.asReversed().forEachIndexed { index, request ->
+        NotificationWindow(
+            request = request,
+            x = geometry.left,
+            y = offsets[index],
+            width = geometry.width,
+            height = heights[index],
+            darkTheme = darkTheme,
+            themeStyle = options.ui.style,
+        )
+    }
+}
+
+/**
+ * 堆叠位置（纯函数，便于单测）：输入是从**下往上**的卡片高度与堆的底边，输出每条窗口的 y。
+ *
+ * 第一条（最新）贴着 [bottom]，后面的依次往上叠，中间留 [gap]。
+ */
+internal fun stackOffsets(heights: List<Float>, bottom: Float, gap: Float): List<Float> {
+    var consumed = 0f
+    return heights.map { height ->
+        val y = bottom - height - consumed
+        consumed += height + gap
+        y
+    }
+}
+
+/** 通知窗集合在屏幕上的几何（dp）。 */
+private class OverlayGeometry(val left: Float, val width: Float, val bottom: Float)
+
+private fun overlayGeometry(): OverlayGeometry {
+    val area = workArea()
+    val scale = screenScale()
+    val width = NOTIFICATION_CARD_WIDTH.value + NOTIFICATION_SHADOW_MARGIN.value * 2
+    return OverlayGeometry(
+        left = (area.x + area.width) / scale - width - EDGE_MARGIN,
+        width = width,
+        bottom = (area.y + area.height) / scale - EDGE_MARGIN,
+    )
+}
+
+/**
+ * 一条通知一个窗口。
+ *
+ * 位置会随上面条目的增减而变化，所以 `WindowState` 的 remember key 带上 y：
+ * 上面那条收起后，下面这条跟着挪到新位置。
+ */
+@Composable
+private fun NotificationWindow(
+    request: NotificationRequest,
+    x: Float,
+    y: Float,
+    width: Float,
+    height: Float,
+    darkTheme: Boolean,
+    themeStyle: ThemeStyle,
+) {
+    val state = remember(request.id, x, y) {
         WindowState(
             position = WindowPosition(x.dp, y.dp),
             size = DpSize(width.dp, height.dp),
         )
     }
 
-    // 自动收起：有按钮的多留一会儿，纯提示短一点。
-    LaunchedEffect(current.id) {
-        if (current.autoDismissMs > 0) {
-            delay(current.autoDismissMs)
-            NotificationInbox.dismiss(current.id)
+    // 每条自己的计时：先到的先消失，互不干扰。
+    LaunchedEffect(request.id) {
+        if (request.autoDismissMs > 0) {
+            delay(request.autoDismissMs)
+            NotificationInbox.dismiss(request.id)
         }
     }
 
     Window(
-        onCloseRequest = { NotificationInbox.dismiss(current.id) },
+        onCloseRequest = { NotificationInbox.dismiss(request.id) },
         state = state,
-        title = current.title,
+        title = request.title,
         undecorated = true,
         transparent = true,
         resizable = false,
         alwaysOnTop = true,
         focusable = false,
     ) {
-        HermesTheme(darkTheme = darkTheme, style = options.ui.style) {
+        HermesTheme(darkTheme = darkTheme, style = themeStyle) {
             Box(modifier = Modifier.fillMaxSize().padding(NOTIFICATION_SHADOW_MARGIN)) {
                 NotificationCard(
-                    request = current,
-                    onDismiss = { NotificationInbox.dismiss(current.id) },
+                    request = request,
+                    onDismiss = { NotificationInbox.dismiss(request.id) },
                     modifier = Modifier.fillMaxSize(),
                 )
             }

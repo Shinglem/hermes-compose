@@ -28,22 +28,44 @@ data class NotificationRequest(
  *
  * 为什么状态放在 common：这种通知必须由 Compose 画（系统气泡不支持按钮），
  * 而"什么时候显示哪一条"是纯状态问题，平台实现只负责投递。
- * 同一时刻只留一条：审批一次只会有一个，堆叠反而挡屏幕。
+ *
+ * **队列而不是单槽**：同一会话里多个审批可能同时到达（`onApprovalRequested` 每来一条就投递一次），
+ * 单槽会让后一条直接顶掉前一条 —— 前一条既没被看见、`ReminderGate` 又已经记过 id，
+ * 于是永远不再提醒。现在按投递顺序排队，[active] 里最多 [MAX_VISIBLE] 条同屏，
+ * 剩下的排队补位；每条各自独立自动收起、独立关闭。
  */
 object NotificationInbox {
+    /**
+     * 同屏最多几条。
+     *
+     * 3 条是"都能看见"与"不糊住右下角"的折中：审批卡片高 152dp，加上阴影留白约 176dp，
+     * 3 条 ≈ 528dp，1080p 屏幕上仍留得下正文区域。
+     */
+    const val MAX_VISIBLE: Int = 3
+
     private val counter = MutableStateFlow(0L)
 
-    private val _current = MutableStateFlow<NotificationRequest?>(null)
-    val current: StateFlow<NotificationRequest?> = _current.asStateFlow()
+    /** 全部待处理通知，顺序 = 投递顺序。 */
+    private val _queue = MutableStateFlow<List<NotificationRequest>>(emptyList())
+    val queue: StateFlow<List<NotificationRequest>> = _queue.asStateFlow()
 
+    /** 当前应画出来的那几条（最多 [MAX_VISIBLE]，顺序 = 投递顺序）。 */
+    private val _active = MutableStateFlow<List<NotificationRequest>>(emptyList())
+    val active: StateFlow<List<NotificationRequest>> = _active.asStateFlow()
+
+    /**
+     * 投递一条通知。
+     *
+     * @return 新通知的 id（测试与日志用）。
+     */
     fun post(
         title: String,
         body: String,
         actions: List<NotificationAction>,
         onBodyClick: (() -> Unit)? = null,
         autoDismissMs: Long = 30_000,
-    ) {
-        _current.value = NotificationRequest(
+    ): Long {
+        val request = NotificationRequest(
             id = counter.updateAndGet { it + 1 },
             title = title,
             body = body,
@@ -51,14 +73,33 @@ object NotificationInbox {
             onBodyClick = onBodyClick,
             autoDismissMs = autoDismissMs,
         )
+        post(request)
+        return request.id
     }
 
-    /** 只关掉这一条：期间可能已经有新的一条顶上来，别把它一起关掉。 */
+    /**
+     * 投递一条已经构造好的通知；同一个 [NotificationRequest.id] 重复投递会被忽略
+     * （"同一请求只提醒一次"的语义在投递层再兜一次）。
+     */
+    fun post(request: NotificationRequest) {
+        if (_queue.value.any { it.id == request.id }) return
+        publish(_queue.value + request)
+    }
+
+    /** 只关掉这一条：其它通知（包括排队中的）不受影响，排队的会自动补位。 */
     fun dismiss(id: Long) {
-        if (_current.value?.id == id) _current.value = null
+        val next = _queue.value.filterNot { it.id == id }
+        if (next.size != _queue.value.size) publish(next)
     }
 
     fun dismissAll() {
-        _current.value = null
+        if (_queue.value.isNotEmpty()) publish(emptyList())
+    }
+
+    private fun publish(next: List<NotificationRequest>) {
+        _queue.value = next
+        val visible = next.take(MAX_VISIBLE)
+        // 只在真的变化时写：值没变就不必让订阅者重排窗口。
+        if (_active.value != visible) _active.value = visible
     }
 }
