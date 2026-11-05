@@ -50,6 +50,20 @@ actual object NativeNotifications {
     /** 上一次初始化用的快捷方式基名：关掉开关时用它清掉开始菜单里的条目。 */
     private var lastAppName: String? = null
 
+    /**
+     * 开始菜单里那条 `.lnk` 是**我们建的**吗。
+     *
+     * 复用用户自己建的快捷方式时不能删它 —— 关掉开关只该清掉我们的痕迹（AUMID 注册键），
+     * 不该顺手把用户的入口删了。
+     */
+    private var shortcutOwned = false
+
+    /** 这次是否写过 AUMID 注册键（复用的外来 AUMID 不动它的键，免得覆盖用户配置）。 */
+    private var aumidRegistered = false
+
+    /** 这次实际在用的 AUMID（关开关时用来判断要不要连带清键）。 */
+    private var aumidInUse: String? = null
+
     /** 由 `Main` 在解析出 `<home>` 后调用一次。 */
     fun attachHome(home: File) {
         homeDir = home
@@ -67,10 +81,20 @@ actual object NativeNotifications {
             }
             // 关掉开关就把痕迹收干净：删掉开始菜单里的 .lnk 与 AUMID 注册键。
             // 用 home 现算名字而不是依赖 lastAppName —— 关掉后重启的进程里它是空的。
+            // 但**复用来的用户快捷方式不删**（`shortcutOwned == false` 且已知复用过）。
             home?.let { dir ->
-                val name = appNameFor(dir)
-                deleteShortcut(name)
+                if (shortcutOwned || lastAppName == null) {
+                    deleteShortcut(lastAppName ?: appNameFor(dir))
+                } else {
+                    Log.info("native notifications: shortcut '${lastAppName}' kept (reused, not created by us)")
+                }
+                // 自己那个 AUMID 的键始终删（只针对本实例 id，删不存在的是无操作）；
+                // 复用了旧版本自己留下的 AUMID 时连带删掉它；外来的键绝不动。
                 deleteAumidRegistration(aumidFor(dir))
+                aumidInUse?.takeIf { it != aumidFor(dir) && aumidRegistered }?.let { deleteAumidRegistration(it) }
+                shortcutOwned = false
+                aumidRegistered = false
+                aumidInUse = null
             }
             tokens.clear()
             _status.value = NativeNotificationStatus(requested = requested)
@@ -78,25 +102,46 @@ actual object NativeNotifications {
         }
 
         val id = instanceId(home)
-        // 文件名带 id：两份便携包在开始菜单里并存、互不覆盖。显示名一并带上，便于区分。
-        appName = "${ProductInfo.DISPLAY_NAME} ($id)"
+        val ownName = "${ProductInfo.DISPLAY_NAME} ($id)"
+        val ownAumid = "Shinglem.HermesDesktop.$id"
+        val ownFile = shortcutFile(ownName)
+
+        // 复用判定：自己那条在就沿用（老行为）；不在就看开始菜单里有没有**指向本程序**的快捷方式。
+        // 扫描只在这一刻做一次 —— 自己的名字在时不做任何 IO。
+        val plan = if (ownFile.isFile) {
+            planShortcut(ownName = ownName, ownFileExists = true, exePath = null, entries = null)
+        } else {
+            planShortcut(
+                ownName = ownName,
+                ownFileExists = false,
+                exePath = currentExePath(),
+                entries = scanShortcutEntries(),
+            )
+        }
+        // 文件名带 id：两份便携包在开始菜单里并存、互不覆盖。复用时用那条已有的名字。
+        appName = plan.appName
         lastAppName = appName
-        val aumid = "Shinglem.HermesDesktop.$id"
+        val aumid = plan.aumid ?: ownAumid
+        aumidInUse = aumid
+        // 复用的用户快捷方式不能删；自己新建的、或沿用旧版本自己留下的都能删。
+        shortcutOwned = plan.create || (plan.reused?.startsWith(ProductInfo.DISPLAY_NAME) == true)
 
         installListener()
         // 先注册 AUMID 的显示名与图标：`initialize` 会改进程的 AUMID，任务栏随后按它找图标，
         // 不注册就会退回 java.exe 的咖啡杯（实测）。
-        registerAumid(aumid, appName)
+        // 复用的外来 AUMID 不动它的键（那是用户自己配的），免得覆盖 DisplayName / IconUri。
+        val shouldRegisterAumid = aumid == ownAumid || aumid.startsWith(DEFAULT_AUMID_PREFIX)
+        if (shouldRegisterAumid) {
+            registerAumid(aumid, appName)
+            aumidRegistered = true
+        }
 
         val shortcut = shortcutFile(appName)
-        // 已经指向本实例的快捷方式就不要再建：`REQUIRE_CREATE` 每次启动都会重写 `.lnk`，
-        // `REQUIRE_NO_CREATE` 只沿用已有的（实测 2026-11-04：mtime 不变、未重写）。
-        // 判据只认文件名 —— 名字是 `Hermes Desktop Compose (<instanceId>).lnk`，而 instanceId
-        // 由 `<home>` 的 canonicalPath 哈希得来，同名即同一实例，不必再读 `.lnk` 的属性。
+        // `REQUIRE_CREATE` 每次启动都会重写 `.lnk`；`REQUIRE_NO_CREATE` 只沿用已有的
+        // （实测 2026-11-04：mtime 不变、未重写）。
         // 注意 `REQUIRE_NO_CREATE` 在文件缺失时**也返回 true**（只表示"不创建"），
         // 所以可用性仍由下面的 `exists` 判定。
-        val existedBefore = shortcut.isFile
-        val policy = if (existedBefore) ShortcutPolicy.REQUIRE_NO_CREATE else ShortcutPolicy.REQUIRE_CREATE
+        val policy = if (plan.create) ShortcutPolicy.REQUIRE_CREATE else ShortcutPolicy.REQUIRE_NO_CREATE
 
         val ok = runCatching {
             WindowsNotificationCenter.initialize(
@@ -129,7 +174,8 @@ actual object NativeNotifications {
         Log.info(
             "native notifications: aumid=$aumid ready=${_status.value.ready} " +
                 "shortcut=${shortcut.absolutePath} exists=$exists " +
-                "policy=${if (existedBefore) "reuse" else "create"}",
+                "policy=${if (plan.create) "create" else "reuse"} " +
+                "reused=${plan.reused ?: "none"} reason=${plan.reason}",
         )
     }
 
@@ -216,11 +262,28 @@ actual object NativeNotifications {
     }
 
     /** `%APPDATA%\Microsoft\Windows\Start Menu\Programs\<appName>.lnk`（库写的就是这里）。 */
-    private fun shortcutFile(name: String): File {
+    private fun shortcutFile(name: String): File = File(programsDir(), "$name.lnk")
+
+    /** `%APPDATA%\Microsoft\Windows\Start Menu\Programs`（用户级开始菜单）。 */
+    private fun programsDir(): File {
         val root = System.getenv("APPDATA")?.takeIf { it.isNotBlank() }
             ?: System.getProperty("user.home")
-        return File(root, "Microsoft\\Windows\\Start Menu\\Programs\\$name.lnk")
+        return File(root, "Microsoft\\Windows\\Start Menu\\Programs")
     }
+
+    /** 扫描失败返回 null，由 [planShortcut] 退回"按文件名判定"的老逻辑。 */
+    private fun scanShortcutEntries(): List<ShortcutEntry>? =
+        scanStartMenuShortcuts(programsDir())?.also { entries ->
+            Log.info("native notifications: scanned ${entries.size} start menu shortcuts")
+        }
+
+    /**
+     * 当前进程的 exe —— 库写进 `.lnk` 的 target 就是它（`GetModuleFileNameW`）。
+     *
+     * 开发态是宿主 JDK 的 `java.exe`，成品是 `hermes-desktop-compose.exe`，两边都比得中。
+     */
+    private fun currentExePath(): String? =
+        ProcessHandle.current().info().command().orElse(null)
 
     private fun deleteShortcut(name: String) {
         val removed = runCatching { shortcutFile(name).delete() }.getOrDefault(false)
