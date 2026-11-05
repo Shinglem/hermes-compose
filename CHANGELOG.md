@@ -5,6 +5,69 @@
 
 ---
 
+## [0.4.1] · 2026-11-05（hermes 0.22.5）
+
+> **patch 版本**：相对 `v0.4.0-0.22.5` 只改客户端外壳（`bin/App.jar` + 若干 `lib/*.jar` + `app/*.cfg`），
+> 升级方式是**下载 patch 包覆盖安装目录里的同名文件**，`config/` 与 `data/` 不动。
+> payload 与工具链都不变，仍是 hermes 0.22.5 / `toolchain-v1`。
+
+### 新增
+
+- **GitHub Alerts**：`> [!NOTE]` / `[!TIP]` / `[!IMPORTANT]` / `[!WARNING]` / `[!CAUTION]`
+  五种提示块，图标 + M3 语义色（蓝 / 绿 / 紫 / 琥珀 / 红）。GFM 解析器本来就产出 `ALERT` 节点，
+  这里只是补了块类型与渲染。
+- **脚注**：`正文[^1]` 渲染成上标，文末自动生成「脚注」列表。注意这不是 CommonMark / GFM
+  规范能力（GitHub 的产品特性），所以由解析前的预处理实现：抽取 `[^id]: …` 定义（支持缩进续行）、
+  正文改成行内标记、定义区从原文移除。
+- **原始 HTML 块的原生渲染**：用 **ksoup** 解析 + GitHub `html-pipeline` 的元素/属性白名单
+  （60 个元素；**没有 `style` / `class` / `on*`**），块级标签映射成 Compose 块
+  （标题 / 段落 / 引用 / 列表 / 表格 / 代码 / 图片 / `details`），**布局级 CSS 一律忽略**
+  （`display` / `flex` / `grid` / `position` / `float` 等），`style` 只认 6 个能映射到
+  `TextStyle` 的属性（颜色 / 背景 / 字号 / 字重 / 斜体 / 对齐）。防护：限深 32、限节点 5000，
+  `script` / `style` / `noscript` 整棵子树丢弃。
+- **PlantUML 与 Graphviz DOT**：图表引擎换成 `diagram-render`，与 mermaid 走同一个适配器，
+  另外补齐 gantt / mindmap / ER / pie / gitGraph 等 20+ mermaid 图族。
+
+### 变更
+
+- **公式引擎换成 RaTeX**（`io.github.darriousliu:ratex`，Rust 核心 + Compose 矢量绘制）。
+  14 个高级用例对比：`\mathbb` / `\mathcal`、`\left\{ \begin{matrix}`、`\operatorname` 正体、
+  `\xrightarrow` 长度、`align` 逐行编号都比原引擎正确。代价是随包多一份 1.1 MB 的 native dll
+  （运行时解压到 `%LOCALAPPDATA%\RaTeX`）。
+- **图表引擎换成 `diagram-render`**：跟随 M3 主题（旧引擎硬编码白底，暗色下刺眼），
+  体积净减约 0.4 MB。`mermaid-compose` 与 `latex-renderer` 依赖已移除。
+- **移除 JCEF**：`cef/`（约 310 MB）不再随包，也不再有任何内嵌浏览器链路。
+  `MarkdownConfig` 的 `webFallback` / `cefNativeDir` / `jcefPoolSize` 等 5 个字段删除，
+  `AdapterKind.Jcef` 删除 —— 这是**破坏性变更**，但目前只有本仓库在用。
+
+### 修复
+
+- **同一会话多个审批只弹出一个通知**：右下角通知窗原来是单槽（后一条直接顶掉前一条，
+  且该请求已被记住"提醒过"，于是永远不再出现）。改成队列 + 最多 3 条同屏堆叠，
+  每条独立自动收起、独立关闭。
+- **开始菜单快捷方式重复**：原生通知打开时只按文件名判断"是否已存在"，用户手动建的
+  （或旧版本用固定名建的）指向本程序的快捷方式会被忽略，于是开始菜单多出一个入口。
+  现在扫描 `Programs\` 下的 `.lnk`（纯字节解析目标路径与 AUMID）：
+  已带 AUMID 的直接复用；指向本程序但没有 AUMID 的，用 PowerShell + COM（`IPropertyStore`）
+  把 AUMID 补写进去再复用（写前备份 `.lnk.bak`）；补写失败才新建，并在设置页说明原因。
+  为不拖慢 `--silent` 启动，补写在后台线程执行，期间通知自动回退应用内窗口。
+- **HTML 块里的行内格式丢失**：`<b>` / `<i>` / `<code>` / `<a>` 在解析前被改写成 Markdown
+  标记，而 HTML 块的文本节点按纯文本输出，界面上会看到裸露的 `**粗体**`、`` `行内码` ``、
+  `[链接](url)`。现在文本节点按标记还原样式（含图片）。
+- **块级 `style` 与 `align` 被丢掉**：`<div align="center" style="font-size:28px">` 既不居中
+  也不放大。现在清洗阶段把 `align` 并入 `textAlign`，块级颜色 / 字号 / 字重 / 斜体 / 对齐
+  统一合并进 `TextStyle`。
+
+### 升级
+
+1. 下载 `hermes-desktop-compose-0.4.1-patch.zip` 与 `SHA256SUMS.txt`，先核对 SHA-256；
+2. 退出正在运行的客户端（托盘图标 → 退出）；
+3. 把 zip 里的 `bin/`、`lib/`、`app/` 覆盖到安装目录（保持相对结构，`config/` 与 `data/` 不要动）；
+4. 可选：删除 patch 说明里列出的旧 jar（`mermaid-compose-*`、`latex-renderer-*`、
+   `latex-fonts-katex-*`、`jcefmaven`、`jcef-api-*`、`jcef-natives-*`）——
+   patch 是覆盖式升级，删不掉旧文件，留着不影响运行，只是多占约 9 MB；
+5. 重新启动客户端。若安装目录里还有旧的 `cef/`（约 310 MB），现在已完全不用，可手工删除。
+
 ## [0.4.0] · 2026-11-04（hermes 0.22.5）
 
 > 首个按新规则发布的版本：tag `v0.4.0-0.22.5`，产物是**纯外壳**（不含 payload），
@@ -318,7 +381,7 @@ jlink 裁剪运行时、原生启动器打包、单实例与自启任务清理�
 
 | 数字 | 在哪 | 谁生成 | 谁消费 |
 |---|---|---|---|
-| `appVersion = "0.4.0"` | `composeApp/build.gradle.kts` | 手工 | jpackage 的 `packageVersion` / `-Djpackage.app-version`、启动器 cfg、发布资产文件名 |
+| `appVersion = "0.4.1"` | `composeApp/build.gradle.kts` | 手工 | jpackage 的 `packageVersion` / `-Djpackage.app-version`、启动器 cfg、发布资产文件名 |
 | `v<桌面版本>-<hermes版本>` | GitHub Release tag | `desktop-release` 按输入拼 | 发布资产入口、`gh release download` |
 
 **tag 就是唯一版本号**，形如 `v0.4.0-0.22.5`：前半是桌面端版本（对应 `appVersion`），
@@ -331,6 +394,7 @@ jlink 裁剪运行时、原生启动器打包、单实例与自启任务清理�
 | Release | tag 形式 | 资产 |
 |---|---|---|
 | 桌面端 | `v0.4.0-0.22.5` | `hermes-desktop-compose-0.4.0-0.22.5-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
+| 桌面端 patch | `v0.4.1` | `hermes-desktop-compose-0.4.1-patch.zip` + `SHA256SUMS.txt`（覆盖式升级，无完整包） |
 | 工具链 | `toolchain-v1` | `launcher-windows-x64.zip` / `runtime-windows-x64.zip` / `SHA256SUMS.txt` |
 | payload | 另一个仓库 `Shinglem/hermes-bundle` 的 `v0.22.5` | payload 压缩分卷 |
 
