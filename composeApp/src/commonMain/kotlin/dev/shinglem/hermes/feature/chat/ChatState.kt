@@ -95,6 +95,20 @@ data class PendingClarify(
     val isBatch: Boolean get() = questions.size > 1
 }
 
+/**
+ * 一条**还在排队**的用户消息（已提交、后端接了，但这一轮还没轮到它）。
+ *
+ * 有了它，"生成中又发一条"的语义才正确：那条消息不该插进当前轮的 transcript，
+ * 而应挂在 composer 上方的队列区，等它真正开始再进对话。
+ */
+data class QueuedPrompt(
+    val admissionId: String,
+    val text: String,
+    val sequence: Int? = null,
+    /** 后端给这一次提交的幂等键（`prompt.replace_queued` 要新生成一个）。 */
+    val submissionId: String? = null,
+)
+
 /** 上下文 / token 用量（`session.usage` 的领域投影）。 */data class SessionUsage(
     val contextUsed: Long = 0,
     val contextMax: Long = 0,
@@ -166,6 +180,13 @@ data class ChatState(
     val pendingApprovals: List<PendingApproval> = emptyList(),
     /** 本会话待作答的 `clarify`（应答后由 ViewModel 移除）。 */
     val pendingClarify: List<PendingClarify> = emptyList(),
+    /**
+     * 已提交但还没轮到执行的消息（后端 `queued`）。
+     *
+     * 生成中再发一条就走这里：不插进当前轮的 transcript，而是挂在队列区。
+     * 排队项可以「立刻插入」（`prompt.steer_queued`）或「取消」（`prompt.cancel`）。
+     */
+    val queuedPrompts: List<QueuedPrompt> = emptyList(),
     /** 本会话的 agent 后台进程（`process.list` 轮询 + `agent.terminal.output` 增量）。 */
     val backgroundTasks: List<BackgroundTask> = emptyList(),
     /** 正在终止的进程 id（按钮转圈，避免重复点）。 */

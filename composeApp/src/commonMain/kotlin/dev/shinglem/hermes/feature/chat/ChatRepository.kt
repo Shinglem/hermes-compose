@@ -132,6 +132,16 @@ class ChatRepository(
                 description = item.stringOrNull("description").orEmpty(),
             )
         }.orEmpty()
+        val pending = (obj["pending"] as? JsonArray)?.mapNotNull { row ->
+            val item = row as? JsonObject ?: return@mapNotNull null
+            val admissionId = item.stringOrNull("admission_id") ?: return@mapNotNull null
+            ResumedPending(
+                admissionId = admissionId,
+                text = item.stringOrNull("text").orEmpty(),
+                status = item.stringOrNull("status").orEmpty(),
+                sequence = (item["sequence"] as? JsonPrimitive)?.intOrNull,
+            )
+        }.orEmpty()
         return ResumedSession(
             runtimeId = runtimeId,
             cwd = info?.stringOrNull("cwd"),
@@ -142,6 +152,7 @@ class ChatRepository(
             revision = (obj["revision"] as? JsonPrimitive)?.intOrNull,
             running = (obj["running"] as? JsonPrimitive)?.booleanOrNull == true,
             prompts = prompts,
+            pending = pending,
         )
     }
 
@@ -177,7 +188,48 @@ class ChatRepository(
         return PromptAck(
             status = obj.stringOrNull("status"),
             userRowId = (obj["user_row_id"] as? JsonPrimitive)?.longOrNull,
+            admissionId = obj.stringOrNull("admission_id"),
+            sequence = (obj["sequence"] as? JsonPrimitive)?.intOrNull,
+            executionGeneration = (obj["execution_generation"] as? JsonPrimitive)?.intOrNull,
         )
+    }
+
+    /**
+     * 把一条**还在排队**的消息立刻交给正在跑的那一轮（`prompt.steer_queued`）。
+     *
+     * 这就是"插队"：admission 仍在 `queued` 时，它的文本会被送进当前轮，
+     * 该 admission 读作 `started`（`steering` 标记），不会自己再单独跑一轮；
+     * 当前轮把它消费掉就按 `steered` 收尾，没消费则退回原队列位置。
+     *
+     * 这条请求**不要** generation：它按 `admission_id` 定位，不是按执行代。
+     */
+    suspend fun steerQueued(profile: String?, runtimeSessionId: String, admissionId: String): String? {
+        val params = buildJsonObject {
+            put("session_id", runtimeSessionId)
+            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
+            put("admission_id", admissionId)
+        }
+        val result = try {
+            gateway.call(RpcMethods.PROMPT_STEER_QUEUED, params, Timeouts.DEFAULT_MS)
+        } catch (throwable: Throwable) {
+            throw ErrorMapper.from(throwable, RpcMethods.PROMPT_STEER_QUEUED)
+        }
+        return (result as? JsonObject)?.stringOrNull("status")
+    }
+
+    /** 取消一条还在排队的消息（`prompt.cancel`）。 */
+    suspend fun cancelQueued(profile: String?, runtimeSessionId: String, admissionId: String): String? {
+        val params = buildJsonObject {
+            put("session_id", runtimeSessionId)
+            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
+            put("admission_id", admissionId)
+        }
+        val result = try {
+            gateway.call(RpcMethods.PROMPT_CANCEL, params, Timeouts.DEFAULT_MS)
+        } catch (throwable: Throwable) {
+            throw ErrorMapper.from(throwable, RpcMethods.PROMPT_CANCEL)
+        }
+        return (result as? JsonObject)?.stringOrNull("status")
     }
 
     /**
@@ -512,7 +564,19 @@ data class ResumedSession(
      * `clarify.respond` 解开，否则 turn 会一直停在 `waiting`。
      */
     val prompts: List<ResumedPrompt> = emptyList(),
+    /** 快照里**还在排队**的消息（`pending[]`）：重连后队列不能丢。 */
+    val pending: List<ResumedPending> = emptyList(),
 )
+
+/** `session.resume` 快照里的 `pending[]`（一条已提交、还没跑完的 admission）。 */
+data class ResumedPending(
+    val admissionId: String,
+    val text: String,
+    val status: String,
+    val sequence: Int? = null,
+) {
+    val isQueued: Boolean get() = status == "queued"
+}
 
 /** `session.resume` 快照里的 `prompts[]`（`clarify` / `approval` 两条补拉路径都靠它）。 */
 data class ResumedPrompt(
@@ -527,7 +591,18 @@ data class ResumedPrompt(
     val description: String = "",
 )
 
-data class PromptAck(val status: String?, val userRowId: Long?)
+data class PromptAck(
+    /** `queued` / `started` / `unknown` / `terminal`（`AdmissionStatus.status`）。 */
+    val status: String?,
+    val userRowId: Long?,
+    /** 这次提交的 admission 身份：排队时要靠它取消 / 插队。 */
+    val admissionId: String? = null,
+    val sequence: Int? = null,
+    val executionGeneration: Int? = null,
+) {
+    /** 还在排队（后端接了但这一轮还没轮到它）。 */
+    val isQueued: Boolean get() = status == "queued" || status == "unknown"
+}
 
 private fun JsonObject.stringOrNull(key: String): String? =
     (this[key] as? JsonPrimitive)?.contentOrNull

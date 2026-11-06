@@ -53,6 +53,12 @@ object RpcMethods {
     /** 撤销一条 admission（停止生成的正规路径；`session.interrupt` 是另一条）。 */
     const val PROMPT_CANCEL = "prompt.cancel"
 
+    /** 把**排队中**的 admission 立刻交给正在跑的那一轮（插队）。 */
+    const val PROMPT_STEER_QUEUED = "prompt.steer_queued"
+
+    /** 取消排队项并提交编辑后的文本（替换，不插队）。 */
+    const val PROMPT_REPLACE_QUEUED = "prompt.replace_queued"
+
     /** clarify 的作答（与 `approval.respond` 同一套 `execution_generation` + `prompt_id`）。 */
     const val CLARIFY_RESPOND = "clarify.respond"
 

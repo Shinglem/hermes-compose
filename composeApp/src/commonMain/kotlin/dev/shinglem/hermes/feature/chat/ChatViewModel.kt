@@ -292,25 +292,40 @@ class ChatViewModel(
         if (trimmed.isEmpty()) return
         val current = _state.value
         val key = current.key ?: return
-        // 生成中不禁用发送：后端按 `display.busy_input_mode` 把这条当纠偏/排队处理
-        // （见 08-data-contract §2.2 的易错口径）。
-        if (current.isBusy) {
-            steer(trimmed)
-            return
-        }
         if (current.sending) return
 
         viewModelScope.launch {
             _state.update { it.copy(sending = true, sendError = null) }
             try {
                 val runtimeId = ensureRuntime(key)
-                _state.update { state -> state.appendLocalUser(nextLocalId("user"), trimmed) }
-                _state.update { it.copy(streaming = StreamingState(startedAt = Clock.System.now())) }
+                // 归属由"发送时是否正在生成"决定，而不是 ack 的 status：
+                // 后端对新会话的首条消息也回 `queued`（agent 还没起来），那条显然属于这一轮。
+                val wasBusy = current.isBusy
                 val ack = repository.submitPrompt(key.profile, runtimeId, trimmed)
-                Log.info("prompt.submit ack status=${ack.status} userRowId=${ack.userRowId}")
+                Log.info(
+                    "prompt.submit ack status=${ack.status} admission=${ack.admissionId} " +
+                        "userRowId=${ack.userRowId} wasBusy=$wasBusy",
+                )
+                if (wasBusy && ack.isQueued && ack.admissionId != null) {
+                    // 生成中发的那条：不进当前轮的 transcript，挂到排队区。
+                    _state.update { state ->
+                        state.copy(
+                            queuedPrompts = state.queuedPrompts + QueuedPrompt(
+                                admissionId = ack.admissionId,
+                                text = trimmed,
+                                sequence = ack.sequence,
+                            ),
+                        )
+                    }
+                } else {
+                    _state.update { state -> state.appendLocalUser(nextLocalId("user"), trimmed) }
+                    _state.update {
+                        it.copy(streaming = it.streaming ?: StreamingState(startedAt = Clock.System.now()))
+                    }
+                    startTurnWatchdog(key, runtimeId)
+                }
                 // 后端在第一条 prompt 之后才给会话生成列表行 —— 这时刷新列表才看得到它。
                 onSessionPersisted?.invoke()
-                startTurnWatchdog(key, runtimeId)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
@@ -323,6 +338,51 @@ class ChatViewModel(
                 }
             } finally {
                 _state.update { it.copy(sending = false) }
+            }
+        }
+    }
+
+    /** 队列里的某条「立刻插入」：把它的文本交给正在跑的那一轮（`prompt.steer_queued`）。 */
+    fun steerQueuedPrompt(admissionId: String) {
+        val key = _state.value.key ?: return
+        val item = _state.value.queuedPrompts.firstOrNull { it.admissionId == admissionId } ?: return
+        viewModelScope.launch {
+            try {
+                val runtimeId = ensureRuntime(key)
+                repository.steerQueued(key.profile, runtimeId, admissionId)
+                Log.info("prompt.steer_queued accepted admission=$admissionId")
+                _state.update { state ->
+                    state.copy(
+                        queuedPrompts = state.queuedPrompts - item,
+                        streaming = state.streaming ?: StreamingState(startedAt = Clock.System.now()),
+                    )
+                }
+                onSessionPersisted?.invoke()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (throwable: Throwable) {
+                _state.update {
+                    it.copy(sendError = ErrorMapper.from(throwable, RpcMethods.PROMPT_STEER_QUEUED))
+                }
+            }
+        }
+    }
+
+    /** 取消队列里的某条（`prompt.cancel`）。 */
+    fun cancelQueuedPrompt(admissionId: String) {
+        val key = _state.value.key ?: return
+        val item = _state.value.queuedPrompts.firstOrNull { it.admissionId == admissionId } ?: return
+        viewModelScope.launch {
+            try {
+                val runtimeId = ensureRuntime(key)
+                repository.cancelQueued(key.profile, runtimeId, admissionId)
+                _state.update { state -> state.copy(queuedPrompts = state.queuedPrompts - item) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (throwable: Throwable) {
+                _state.update {
+                    it.copy(sendError = ErrorMapper.from(throwable, RpcMethods.PROMPT_CANCEL))
+                }
             }
         }
     }
@@ -1044,6 +1104,24 @@ class ChatViewModel(
         generation?.let { generations[key] = it }
     }
 
+    /**
+     * 用快照里的 `pending[]` 重建排队区。
+     *
+     * 队列是**后端的状态**，客户端只是镜像：重连、切回会话、以及每轮结束时都对齐一次，
+     * 才能保证"生成中再发一条"的那条不会既不在队列里、又没进 transcript。
+     */
+    private fun adoptSnapshotQueue(key: SessionKey, resumed: ResumedSession) {
+        if (_state.value.key != key) return
+        val queued = resumed.pending.filter { it.isQueued }.map { item ->
+            QueuedPrompt(admissionId = item.admissionId, text = item.text, sequence = item.sequence)
+        }
+        val current = _state.value.queuedPrompts
+        if (queued == current) return
+        if (queued.isEmpty() && current.isEmpty()) return
+        Log.info("queued prompts aligned from snapshot: ${current.size} -> ${queued.size}")
+        _state.update { it.copy(queuedPrompts = queued) }
+    }
+
     /** 当前会话的 fence 快照（`session.mutate` / 控制类调用统一从这里取）。 */
     private fun fence(key: SessionKey): SessionFence =
         SessionFence(revision = revisions[key], generation = generations[key])
@@ -1057,6 +1135,7 @@ class ChatViewModel(
      * turn 会一直停在 `waiting`（实测：一个 pwsh 审批让整轮卡住，界面上只看到转圈）。
      */
     private fun adoptSnapshotPrompts(key: SessionKey, resumed: ResumedSession) {
+        adoptSnapshotQueue(key, resumed)
         if (resumed.prompts.isEmpty()) return
         val knownApprovals = _state.value.pendingApprovals.map { it.requestId }.toSet()
         val knownClarify = _state.value.pendingClarify.map { it.requestId }.toSet()

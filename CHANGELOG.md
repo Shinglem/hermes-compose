@@ -21,6 +21,16 @@
 
 ### 新增
 
+- **排队区 + 插队**：生成中再发的那条消息现在挂在 composer 上方的「排队中」区域，
+  不再插进当前轮（以前它会跑到正在流式的思考过程前面）。每条排队项两个动作：
+  - 「立刻插入」→ `prompt.steer_queued`：把这条文本交给正在跑的那一轮（当前轮还没起
+    agent 时会回 `steer_unavailable`，等它跑起来再点）
+  - 「取消」→ `prompt.cancel`
+
+  归属判据是「**发送时是否正在生成**」，不是 ack 的 `status` —— 后端对新会话的首条消息
+  也回 `queued`（agent 还没起来），那条显然属于这一轮。队列本身是后端状态
+  （`session.resume` 的 `pending[]`），重连/切回后会对齐。
+
 - **跟随官方 canonical 路线接入后端**：`local` 模式默认改成
   `hermes gateway ensure --json` → attach 上游**机器级 gateway**，与官方 Desktop / TUI / webapp
   走同一条路。收益是 owner 侧统一的队列、history、steer/rewind 语义，不再和机器上其他入口分叉。

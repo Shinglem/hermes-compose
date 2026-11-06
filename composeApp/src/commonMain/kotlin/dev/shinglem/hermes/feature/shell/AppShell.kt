@@ -838,6 +838,8 @@ fun AppShell(
                                 onDismissUsageError = chatViewModel::dismissUsageError,
                                 onOpenSubagents = { subagentViewModel.open() },
                                 onKillBackgroundTask = chatViewModel::killBackgroundTask,
+                                onSteerQueued = chatViewModel::steerQueuedPrompt,
+                                onCancelQueued = chatViewModel::cancelQueuedPrompt,
                                 onDismissBackgroundTask = chatViewModel::dismissBackgroundTask,
                                 modelBar = {
                                     Row(

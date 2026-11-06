@@ -95,6 +95,17 @@ object RpcContracts {
             allowed = setOf("session_id", "admission_id"),
             required = setOf("session_id", "admission_id"),
         ),
+        RpcMethods.PROMPT_STEER_QUEUED to RpcContractSpec(
+            allowed = setOf("profile", "session_id", "admission_id"),
+            required = setOf("session_id", "admission_id"),
+        ),
+        RpcMethods.PROMPT_REPLACE_QUEUED to RpcContractSpec(
+            allowed = setOf(
+                "profile", "session_id", "admission_id", "submission_id", "text", "attachments",
+                "display_kind", "title_preview",
+            ),
+            required = setOf("session_id", "admission_id", "submission_id", "text"),
+        ),
         RpcMethods.APPROVAL_RESPOND to RpcContractSpec(
             allowed = setOf("profile", "session_id", "execution_generation", "prompt_id", "choice"),
             required = setOf("session_id", "execution_generation", "prompt_id", "choice"),

@@ -142,6 +142,9 @@ fun ChatPane(
     /** 后台任务条：终止 / 收起某条（`process.kill` 与本地忽略）。 */
     onKillBackgroundTask: (String) -> Unit = {},
     onDismissBackgroundTask: (String) -> Unit = {},
+    /** 排队区：把这条立刻插进当前轮（`prompt.steer_queued`）/ 取消它（`prompt.cancel`）。 */
+    onSteerQueued: (String) -> Unit = {},
+    onCancelQueued: (String) -> Unit = {},
 ) {
     if (summary == null) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -383,6 +386,17 @@ fun ChatPane(
             onDismiss = onDismissBackgroundTask,
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
         )
+
+        // 排队区：这些消息后端已接受但还没轮到执行。生成中再发的那条挂在这里，
+        // 不插进当前轮的 transcript（否则它会跑到正在流式的思考过程前面）。
+        if (state.queuedPrompts.isNotEmpty()) {
+            QueuedPromptBar(
+                items = state.queuedPrompts,
+                onSteer = onSteerQueued,
+                onCancel = onCancelQueued,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+            )
+        }
 
         composer.state.completion?.let { completion ->
             CompletionPopover(
