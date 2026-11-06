@@ -55,6 +55,13 @@ data class PendingApproval(
     val fromRequest: Boolean = true,
     /** 发起它的会话（系统通知点击要跳到这里；跨会话时也能定位）。 */
     val sessionKey: SessionKey? = null,
+    /**
+     * 应答要回传的 fence（`approval.respond` 必填）。
+     *
+     * 必须**跟着这条卡片**带，不能在应答时现查 `generations[当前会话]` —— 用户在别的会话里
+     * 点系统通知时，现查拿到的是另一个会话的 generation，后端回 `4001 stale_generation`。
+     */
+    val executionGeneration: Int? = null,
 )
 
 /**

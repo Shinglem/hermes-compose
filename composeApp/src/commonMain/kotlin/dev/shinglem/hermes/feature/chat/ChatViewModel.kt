@@ -107,6 +107,16 @@ class ChatViewModel(
     /** 已经弹过系统通知的审批（补拉 / 重连会重复拿到同一条）。 */
     private val notifiedApprovals = mutableSetOf<String>()
 
+    /**
+     * 属于**别的会话**的等待项（后端在等人，但用户此刻在看另一个会话）。
+     *
+     * 不写进 `_state` —— 那会让当前会话的界面冒出别人的卡片；但必须登记，
+     * 否则系统通知里点「允许一次」时找不到这条，应答直接 `return`，点击等于没反应。
+     * 切回该会话时 `session.resume` 会把它补成真正的卡片。
+     */
+    private val crossSessionApprovals = mutableMapOf<String, PendingApproval>()
+    private val crossSessionClarify = mutableMapOf<String, PendingClarify>()
+
     /** `clarify` 的作答结果：null = 取消（回空结果），map 为空 = 全部跳过。 */
     private val clarifyDecisions = mutableMapOf<String, CompletableDeferred<Map<String, String>?>>()
 
@@ -735,15 +745,23 @@ class ChatViewModel(
             return
         }
         // 补拉回来的卡片（请求发出时本端不在线）：响应帧早就不存在，只能走 `approval.respond`。
-        val pending = _state.value.pendingApprovals.firstOrNull { it.requestId == requestId } ?: return
-        val key = _state.value.key ?: return
+        // 先看当前会话，再看不属于当前会话但已登记的那些（系统通知就是从这里点进来的）。
+        val pending = _state.value.pendingApprovals.firstOrNull { it.requestId == requestId }
+            ?: crossSessionApprovals[requestId]
+            ?: return
+        // **必须用卡片自己记的会话与 fence**：用户可能在别的会话里点系统通知，
+        // 现查 `_state.value.key` / `generations[当前会话]` 拿到的是另一个会话的值，
+        // 后端回 4001 stale_generation（实测：切会话后点通知必报）。
+        val key = pending.sessionKey ?: _state.value.key ?: return
         val runtimeId = pending.runtimeSessionId ?: runtimeIds[key] ?: return
+        val generation = pending.executionGeneration ?: generations[key]
         _state.update { current ->
             current.copy(pendingApprovals = current.pendingApprovals.filterNot { it.requestId == requestId })
         }
         viewModelScope.launch {
             try {
-                repository.respondApproval(key.profile, runtimeId, requestId, choice, generations[key])
+                repository.respondApproval(key.profile, runtimeId, requestId, choice, generation)
+                crossSessionApprovals.remove(requestId)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
@@ -1211,8 +1229,11 @@ class ChatViewModel(
                     // 没有请求帧可回，只能走 `approval.respond`。
                     fromRequest = false,
                     sessionKey = key,
+                    executionGeneration = prompt.executionGeneration ?: generations[key],
                 )
                 _state.update { it.copy(pendingApprovals = it.pendingApprovals + approval) }
+                // 切回该会话后快照会把它补成真正的卡片，跨会话登记表里的那条就过期了。
+                crossSessionApprovals.remove(approval.requestId)
                 onApprovalRequested?.invoke(approval, key)
                 1
             }
@@ -1243,6 +1264,63 @@ class ChatViewModel(
             else -> {
                 Log.warn("snapshot/event prompt kind=${prompt.kind} 未处理（可能会卡住这一轮）")
                 0
+            }
+        }
+    }
+
+    /**
+     * 别的会话里"后端在等人"：登记 + 弹提醒，但**不写当前 UI**。
+     *
+     * 之前这类事件被 `otherKey` 分支整条丢掉：用户发了审批请求后立刻切到别的对话，
+     * 审批到达时既没弹通知、也没进任何队列，只有切回来才从 `session.resume` 快照看到。
+     */
+    private fun notifyCrossSessionPending(otherKey: SessionKey, event: GatewayEvent) {
+        if (event.type != GatewayEventTypes.APPROVAL_REQUEST &&
+            event.type != GatewayEventTypes.CLARIFY_REQUEST
+        ) {
+            return
+        }
+        val prompt = (event.payload as? JsonObject)?.toResumedPrompt() ?: return
+        val runtimeId = event.sessionId
+        when (prompt.kind) {
+            "approval" -> {
+                val approval = PendingApproval(
+                    requestId = prompt.promptId,
+                    command = prompt.command,
+                    description = prompt.description,
+                    choices = prompt.choices,
+                    runtimeSessionId = runtimeId,
+                    fromRequest = false,
+                    sessionKey = otherKey,
+                    executionGeneration = prompt.executionGeneration ?: generations[otherKey],
+                )
+                crossSessionApprovals[approval.requestId] = approval
+                if (notifiedApprovals.add(approval.requestId)) {
+                    Log.info("pending approval for other session ${otherKey.sessionId}: ${prompt.promptId}")
+                    onApprovalRequested?.invoke(approval, otherKey)
+                }
+            }
+
+            "clarify" -> {
+                val clarify = PendingClarify(
+                    requestId = prompt.promptId,
+                    frameId = "",
+                    questions = listOf(
+                        ClarifyQuestion(
+                            qid = prompt.promptId,
+                            question = prompt.question,
+                            choices = prompt.choices,
+                            multiSelect = prompt.multiSelect,
+                        ),
+                    ),
+                    runtimeSessionId = runtimeId,
+                    sessionKey = otherKey,
+                    promptId = prompt.promptId,
+                    executionGeneration = prompt.executionGeneration ?: generations[otherKey],
+                )
+                crossSessionClarify[clarify.requestId] = clarify
+                Log.info("pending clarify for other session ${otherKey.sessionId}: ${prompt.promptId}")
+                onClarifyRequested?.invoke(clarify, otherKey)
             }
         }
     }
@@ -1286,6 +1364,9 @@ class ChatViewModel(
             ?.let { sid -> runtimeIds.entries.firstOrNull { it.value == sid }?.key }
             ?.takeIf { it != key }
         if (otherKey != null) {
+            // 「后端在等人」不是"这个会话有新内容"：用户此刻可能在别的会话里，
+            // 也必须弹提醒，否则要切回来才知道（实测：切走后就再也不弹）。
+            notifyCrossSessionPending(otherKey, event)
             if (isContentEvent(event.type)) {
                 dirtyKeys += otherKey
                 trackShadow(otherKey, event)
@@ -1323,6 +1404,8 @@ class ChatViewModel(
                     )
                 }
                 approvalDecisions.remove(id)?.complete(CHOICE_DENY)
+                crossSessionApprovals.remove(id)
+                crossSessionClarify.remove(id)
                 Log.info("request.cancel method=$method id=$id")
             }
             return
@@ -1567,9 +1650,11 @@ class ChatViewModel(
             return
         }
         // 补拉路径：帧早就不存在了，只能发 `clarify.respond`（要 prompt_id + execution_generation）。
-        val pending = _state.value.pendingClarify.firstOrNull { it.requestId == requestId } ?: return
+        val pending = _state.value.pendingClarify.firstOrNull { it.requestId == requestId }
+            ?: crossSessionClarify[requestId]
+            ?: return
         val promptId = pending.promptId ?: return
-        val key = _state.value.key ?: return
+        val key = pending.sessionKey ?: _state.value.key ?: return
         val runtimeId = pending.runtimeSessionId ?: runtimeIds[key] ?: return
         _state.update { current ->
             current.copy(pendingClarify = current.pendingClarify.filterNot { it.requestId == requestId })
@@ -1583,6 +1668,7 @@ class ChatViewModel(
                     answer = clarifyAnswer(answers),
                     executionGeneration = pending.executionGeneration ?: generations[key],
                 )
+                crossSessionClarify.remove(requestId)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
