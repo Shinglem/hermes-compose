@@ -357,6 +357,9 @@ actual object NativeNotifications {
                 if (error != null) {
                     failed = true
                     tokens.remove(tag)
+                    Log.warn("toast failed tag=$tag: $error")
+                } else {
+                    Log.info("toast shown tag=$tag buttons=${buttons.size}")
                 }
             },
         )

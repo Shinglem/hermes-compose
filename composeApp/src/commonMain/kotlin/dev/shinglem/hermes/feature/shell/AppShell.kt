@@ -42,6 +42,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import dev.shinglem.hermes.core.app.ProductInfo
+import dev.shinglem.hermes.core.log.Log
 import dev.shinglem.hermes.core.transport.GatewayEventTypes
 import dev.shinglem.hermes.di.AppContainer
 import dev.shinglem.hermes.feature.capabilities.CapabilityDetailPane
@@ -313,7 +314,10 @@ fun AppShell(
         body: String,
         actions: List<NotificationAction> = emptyList(),
     ) {
-        if (!container.preferences.notificationsEnabled || !SystemNotifications.supported) return
+        if (!container.preferences.notificationsEnabled || !SystemNotifications.supported) {
+            Log.info("remind skipped id=$id (enabled=${container.preferences.notificationsEnabled} supported=${SystemNotifications.supported})")
+            return
+        }
         // 正在看这个会话且窗口在前台：不打扰（判据见 NotificationRules）。
         val remind = shouldRemindForSession(
             target = target,
@@ -321,8 +325,15 @@ fun AppShell(
             activeProfile = shellViewModel.state.value.activeProfile,
             selectedSessionId = sessionViewModel.state.value.selectedId,
         )
-        if (!remind) return
-        if (!reminders.shouldRemind(id)) return
+        if (!remind) {
+            Log.info("remind skipped id=$id (foreground and viewing this session)")
+            return
+        }
+        if (!reminders.shouldRemind(id)) {
+            Log.info("remind skipped id=$id (already reminded)")
+            return
+        }
+        Log.info("remind show id=$id actions=${actions.size} foreground=${AppFocus.isForeground}")
         SystemNotifications.setPendingAction(target?.let { key -> { notifyScope.launch { jumpToSession(key) } } })
         SystemNotifications.show(title, body.take(180), actions)
     }
