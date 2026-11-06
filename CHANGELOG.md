@@ -101,6 +101,15 @@
   `_PROFILE_IMPLICIT` 剥离。fence 过期时用拒绝里带回的 `data.revision` /
   `data.execution_generation` 重试一次。
 
+- **「发消息没反应」/「一直正在生成」**：后端会停下来等人（`kind=approval` 的危险命令、
+  `kind=clarify` 的提问），它有两种到达方式 —— 实时的 `server→client` 请求帧，以及
+  `session.resume` 快照里的 `prompts[]`。以前只实现了前者，于是**重连 / 切回会话后**
+  后端一直在 `waiting`、界面上却什么都没有（日志里连错误都没有）。
+  现在 `session.resume` 之后会把快照里的 `approval` / `clarify` 全部补成卡片，
+  作答走 `approval.respond` / `clarify.respond`（要 `prompt_id` + `execution_generation`）。
+- **提交后长期静默**：加了看门狗（90s 无该会话任何事件就对账一次），
+  `running=false` 才收尾并提示，`running=true` 继续等（长工具调用不该被打断）。
+
 ### 变更
 
 - **RPC 调用层按契约重建**（0.23.0 的 canonical 契约是闭集，散在各处的参数靠试错维护不住）：

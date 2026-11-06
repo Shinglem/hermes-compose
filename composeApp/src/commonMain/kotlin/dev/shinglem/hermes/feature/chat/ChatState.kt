@@ -82,6 +82,15 @@ data class PendingClarify(
     val runtimeSessionId: String? = null,
     /** 发起它的会话（系统通知点击要跳到这里）。 */
     val sessionKey: SessionKey? = null,
+    /**
+     * 后端给这次澄清的 `prompt_id`（`session.resume` 快照里的那一份才有）。
+     *
+     * 有响应帧时走帧（实时路径）；只有 `promptId` 时说明是重连/补拉补回来的，
+     * 只能发 `clarify.respond` —— 否则卡片点了没反应，turn 一直停在 `waiting`。
+     */
+    val promptId: String? = null,
+    /** 发 `clarify.respond` 用的执行代。 */
+    val executionGeneration: Int? = null,
 ) {
     val isBatch: Boolean get() = questions.size > 1
 }

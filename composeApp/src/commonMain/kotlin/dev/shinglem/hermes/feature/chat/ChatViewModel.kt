@@ -91,6 +91,9 @@ class ChatViewModel(
     /** (profile, storedId) → `revision`：`session.mutate` 的 `expected_revision`。 */
     private val revisions = mutableMapOf<SessionKey, Int?>()
 
+    /** (profile, storedId) → 最近一次收到该会话事件的时间（看门狗据此判断静默）。 */
+    private val lastEventAt = mutableMapOf<SessionKey, Long>()
+
     /** (profile, storedId) → 会话工作目录，供 composer 的 `@` 补全使用。 */
     private val cwds = mutableMapOf<SessionKey, String?>()
 
@@ -307,6 +310,7 @@ class ChatViewModel(
                 Log.info("prompt.submit ack status=${ack.status} userRowId=${ack.userRowId}")
                 // 后端在第一条 prompt 之后才给会话生成列表行 —— 这时刷新列表才看得到它。
                 onSessionPersisted?.invoke()
+                startTurnWatchdog(key, runtimeId)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
@@ -1015,7 +1019,10 @@ class ChatViewModel(
                 reasoningEffort = resumed.reasoningEffort ?: current.reasoningEffort,
             )
         }
-        Log.info("chat.resume stored=${key.sessionId} runtime=${resumed.runtimeId}")
+        Log.info("chat.resume stored=${key.sessionId} runtime=${resumed.runtimeId} running=${resumed.running} prompts=${resumed.prompts.size}")
+        // 快照里挂着的 clarify 要补成卡片：它只能靠 `clarify.respond` 解开，
+        // 不补的话 turn 会一直停在 `waiting`，界面上就是"一直正在生成"。
+        adoptSnapshotPrompts(key, resumed)
         // 重连 / 重建 runtime 后补拉挂着的审批：那些请求的响应帧本端已经收不到了。
         refreshPendingApprovals(key, resumed.runtimeId)
         startBackgroundPolling(key, resumed.runtimeId)
@@ -1040,6 +1047,71 @@ class ChatViewModel(
     /** 当前会话的 fence 快照（`session.mutate` / 控制类调用统一从这里取）。 */
     private fun fence(key: SessionKey): SessionFence =
         SessionFence(revision = revisions[key], generation = generations[key])
+
+    /**
+     * 把 `session.resume` 快照里还没应答的**审批 / 澄清**补成卡片。
+     *
+     * 这条路径以前完全缺失：实时帧走 `awaitClarifyDecision` / `awaitApprovalDecision`，
+     * 而**重连 / 切回会话**时那些请求帧早就不存在了。快照里的 `prompts[]` 只能靠
+     * `approval.respond` / `clarify.respond` 作答 —— 不补卡片就是"后端在等、界面上什么都没有"，
+     * turn 会一直停在 `waiting`（实测：一个 pwsh 审批让整轮卡住，界面上只看到转圈）。
+     */
+    private fun adoptSnapshotPrompts(key: SessionKey, resumed: ResumedSession) {
+        if (resumed.prompts.isEmpty()) return
+        val knownApprovals = _state.value.pendingApprovals.map { it.requestId }.toSet()
+        val knownClarify = _state.value.pendingClarify.map { it.requestId }.toSet()
+
+        val approvals = mutableListOf<PendingApproval>()
+        val clarifies = mutableListOf<PendingClarify>()
+        resumed.prompts.forEach { prompt ->
+            // 新增"等待用户"的类型必须在这里显式加分支（见
+            // `.design/详细设计/工程与代码/11-后端API调用规范.md` §5）：
+            // 漏一个就是"后端在等、界面上什么都没有"，静默卡死且没有任何错误日志。
+            when (prompt.kind) {
+                "approval" -> if (prompt.promptId !in knownApprovals) {
+                    approvals += PendingApproval(
+                        requestId = prompt.promptId,
+                        command = prompt.command,
+                        description = prompt.description,
+                        choices = prompt.choices,
+                        runtimeSessionId = resumed.runtimeId,
+                        // 帧已经不存在，只能走 `approval.respond`。
+                        fromRequest = false,
+                        sessionKey = key,
+                    )
+                }
+                "clarify" -> if (prompt.promptId !in knownClarify) {
+                    clarifies += PendingClarify(
+                        requestId = prompt.promptId,
+                        frameId = "",
+                        questions = listOf(
+                            ClarifyQuestion(
+                                qid = prompt.promptId,
+                                question = prompt.question,
+                                choices = prompt.choices,
+                                multiSelect = prompt.multiSelect,
+                            ),
+                        ),
+                        runtimeSessionId = resumed.runtimeId,
+                        sessionKey = key,
+                        promptId = prompt.promptId,
+                        executionGeneration = prompt.executionGeneration ?: resumed.executionGeneration,
+                    )
+                }
+                else -> Log.warn("snapshot prompt kind=${prompt.kind} 未处理（可能会卡住这一轮）")
+            }
+        }
+        if (approvals.isEmpty() && clarifies.isEmpty()) return
+        _state.update { current ->
+            current.copy(
+                pendingApprovals = current.pendingApprovals + approvals,
+                pendingClarify = current.pendingClarify + clarifies,
+            )
+        }
+        Log.info("pending prompts restored from snapshot: approvals=${approvals.size} clarify=${clarifies.size}")
+        approvals.forEach { onApprovalRequested?.invoke(it, key) }
+        clarifies.forEach { onClarifyRequested?.invoke(it, key) }
+    }
 
     override val storedSessionId: String? get() = _state.value.key?.sessionId
 
@@ -1070,6 +1142,10 @@ class ChatViewModel(
                 ?.let { sid -> runtimeIds.entries.firstOrNull { it.value == sid }?.key }
                 ?.let { owner -> generations[owner] = gen }
         }
+        // 看门狗按"最近一次该会话的事件"判断是否静默。
+        event.sessionId
+            ?.let { sid -> runtimeIds.entries.firstOrNull { it.value == sid }?.key }
+            ?.let { owner -> lastEventAt[owner] = Clock.System.now().toEpochMilliseconds() }
         val key = _state.value.key ?: return
         // 别的会话 / 别的 profile：只标记"有新内容"，切回时补拉；绝不写当前 UI。
         val otherKey = event.sessionId
@@ -1314,15 +1390,88 @@ class ChatViewModel(
         }
     }
 
+    /** `clarify.respond` 的 `answer`（单问回文本，多问回 JSON 对象字符串）。 */
+    private fun clarifyAnswer(answers: Map<String, String>): String {
+        if (answers.isEmpty()) return ""
+        if (answers.size == 1) return answers.values.first()
+        return buildJsonObject { answers.forEach { (qid, text) -> put(qid, text) } }.toString()
+    }
+
     /** 作答一个 `clarify`；批量请求的 [answers] 键是 `qid`。 */
     fun answerClarify(requestId: String, answers: Map<String, String>) {
-        clarifyDecisions[requestId]?.complete(answers)
+        // 实时路径：响应帧还挂着，直接交付。
+        clarifyDecisions[requestId]?.let { decision ->
+            decision.complete(answers)
+            return
+        }
+        // 补拉路径：帧早就不存在了，只能发 `clarify.respond`（要 prompt_id + execution_generation）。
+        val pending = _state.value.pendingClarify.firstOrNull { it.requestId == requestId } ?: return
+        val promptId = pending.promptId ?: return
+        val key = _state.value.key ?: return
+        val runtimeId = pending.runtimeSessionId ?: runtimeIds[key] ?: return
+        _state.update { current ->
+            current.copy(pendingClarify = current.pendingClarify.filterNot { it.requestId == requestId })
+        }
+        viewModelScope.launch {
+            try {
+                repository.respondClarify(
+                    profile = key.profile,
+                    runtimeSessionId = runtimeId,
+                    promptId = promptId,
+                    answer = clarifyAnswer(answers),
+                    executionGeneration = pending.executionGeneration ?: generations[key],
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (throwable: Throwable) {
+                Log.info("clarify.respond failed: ${throwable.message}")
+                _state.update {
+                    it.copy(sendError = ErrorMapper.from(throwable, RpcMethods.CLARIFY_RESPOND))
+                }
+            }
+        }
     }
 
     /** 取消 `clarify`：回空结果，后端按"用户放弃"处理。 */
     fun cancelClarify(requestId: String) {
         val businessId = clarifyFrameIds.remove(requestId) ?: requestId
         clarifyDecisions[businessId]?.complete(null)
+    }
+
+    /**
+     * 提交后的看门狗：ack 只代表"已被接受"，真正开跑靠事件。
+     *
+     * 实测踩到过两种"一直正在生成"：后端把 admission 排进队列后没开跑（上一轮卡在
+     * `clarify` 等应答），以及 runtime 被重建后这条 admission 丢了。两种情况后端都不会
+     * 再发事件，界面就会永远转圈。这里在**长时间静默**时主动对账一次：
+     * `running=false` 才收尾（`running=true` 说明真的在跑，长工具调用不该被打断）。
+     */
+    private fun startTurnWatchdog(key: SessionKey, runtimeId: String) {
+        viewModelScope.launch {
+            delay(TURN_SILENCE_TIMEOUT_MS)
+            if (_state.value.key != key || _state.value.streaming == null) return@launch
+            val silentFor = Clock.System.now().toEpochMilliseconds() - (lastEventAt[key] ?: 0L)
+            if (silentFor < TURN_SILENCE_TIMEOUT_MS) return@launch
+            Log.info("turn watchdog: ${silentFor}ms 静默，开始对账")
+            val resumed = runCatching { repository.resumeSession(key.profile, key.sessionId) }.getOrNull()
+                ?: return@launch
+            adoptFence(key, resumed.revision, resumed.executionGeneration)
+            adoptSnapshotPrompts(key, resumed)
+            if (resumed.running) {
+                Log.info("turn watchdog: 后端仍在跑，保持等待")
+                return@launch
+            }
+            Log.info("turn watchdog: 后端已空闲，收尾并重读历史")
+            flushDeltaBuffer()
+            _state.update { current ->
+                current.copy(
+                    streaming = null,
+                    sendError = AppError.Protocol("这一轮没有开始执行（后端已空闲），请重发或检查后端日志"),
+                )
+            }
+            // 重新打开一次，把后端侧可能已经落库的内容拉回来。
+            open(key.profile, key.sessionId, force = true)
+        }
     }
 
     private fun isContentEvent(type: String): Boolean = type in CONTENT_EVENT_TYPES
@@ -1433,6 +1582,14 @@ class ChatViewModel(
 
         /** 后端 clarify 的超时与审批同量级；本端兜底必须更长，先把等待结束掉。 */
         const val CLARIFY_TIMEOUT_MS = 330_000L
+
+        /**
+         * 提交后多久没有任何该会话的事件就去看门狗对账一次。
+         *
+         * 取 90s：正常一轮里 `agent.step` / `thinking.delta` 的间隔远小于它，
+         * 而遇到 clarify / 重启这类"后端在等、不会推事件"的情况又不至于让用户干等太久。
+         */
+        const val TURN_SILENCE_TIMEOUT_MS = 90_000L
 
         /** 会把对话内容写进 transcript 的事件：别的会话收到这些就标记 dirty。 */
         val CONTENT_EVENT_TYPES = setOf(

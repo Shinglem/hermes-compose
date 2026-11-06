@@ -115,6 +115,23 @@ class ChatRepository(
         val runtimeId = obj.stringOrNull("session_id")
             ?: throw AppError.Protocol("session.resume returned no session_id")
         val info = obj["info"] as? JsonObject
+        val prompts = (obj["prompts"] as? JsonArray)?.mapNotNull { row ->
+            val item = row as? JsonObject ?: return@mapNotNull null
+            val kind = item.stringOrNull("kind") ?: return@mapNotNull null
+            val promptId = item.stringOrNull("prompt_id") ?: return@mapNotNull null
+            ResumedPrompt(
+                kind = kind,
+                promptId = promptId,
+                executionGeneration = (item["execution_generation"] as? JsonPrimitive)?.intOrNull,
+                question = item.stringOrNull("question").orEmpty(),
+                choices = (item["choices"] as? JsonArray)
+                    ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                    ?: emptyList(),
+                multiSelect = (item["multi_select"] as? JsonPrimitive)?.booleanOrNull == true,
+                command = item.stringOrNull("command").orEmpty(),
+                description = item.stringOrNull("description").orEmpty(),
+            )
+        }.orEmpty()
         return ResumedSession(
             runtimeId = runtimeId,
             cwd = info?.stringOrNull("cwd"),
@@ -123,6 +140,8 @@ class ChatRepository(
             reasoningEffort = info?.stringOrNull("reasoning_effort"),
             executionGeneration = (obj["execution_generation"] as? JsonPrimitive)?.intOrNull,
             revision = (obj["revision"] as? JsonPrimitive)?.intOrNull,
+            running = (obj["running"] as? JsonPrimitive)?.booleanOrNull == true,
+            prompts = prompts,
         )
     }
 
@@ -350,6 +369,26 @@ class ChatRepository(
             ?: false
     }
 
+    /** 补拉路径的 clarify 作答（`clarify.respond`）：要 `prompt_id` + `execution_generation`。 */
+    suspend fun respondClarify(
+        profile: String?,
+        runtimeSessionId: String,
+        promptId: String,
+        answer: String,
+        executionGeneration: Int?,
+    ) {
+        gateway.sessionControl(
+            method = RpcMethods.CLARIFY_RESPOND,
+            sessionId = runtimeSessionId,
+            profile = profile,
+            fence = SessionFence(generation = executionGeneration),
+            extra = buildJsonObject {
+                put("prompt_id", promptId)
+                put("answer", answer)
+            },
+        )
+    }
+
     /**
      * 交付决策（补拉回来的卡片只能走这条路）；返回本次决策解开了几条等待。
      *
@@ -459,12 +498,33 @@ data class ResumedSession(
     val reasoningEffort: String? = null,
     /**
      * `execution_generation`：0.23.0 的 canonical gateway 要求 `session.interrupt` /
-     * `session.steer` / `approval.respond` **必须**带上它（缺了就是 `4001 invalid_params`），
-     * 每次 `prompt.submit` 之后这个数会变，所以它只作为"当前这一代的凭据"快照。
+     * `session.steer` / `approval.respond` / `clarify.respond` **必须**带上它
+     * （缺了就是 `4001 invalid_params`），每次 `prompt.submit` 之后这个数会变，
+     * 所以它只作为"当前这一代的凭据"快照。
      */
     val executionGeneration: Int? = null,
     /** 会话的 mutation revision，做 rename / archive 等编辑时的 fence。 */
     val revision: Int? = null,
+    /** 会话此刻是否还在跑（`running`）：卡在 clarify 时会一直是 true。 */
+    val running: Boolean = false,
+    /**
+     * 快照里**还没被应答**的请求（`prompts`）：`kind=clarify` 的那条只能靠
+     * `clarify.respond` 解开，否则 turn 会一直停在 `waiting`。
+     */
+    val prompts: List<ResumedPrompt> = emptyList(),
+)
+
+/** `session.resume` 快照里的 `prompts[]`（`clarify` / `approval` 两条补拉路径都靠它）。 */
+data class ResumedPrompt(
+    val kind: String,
+    val promptId: String,
+    val executionGeneration: Int? = null,
+    val question: String = "",
+    val choices: List<String> = emptyList(),
+    val multiSelect: Boolean = false,
+    /** `kind=approval` 时的命令与说明。 */
+    val command: String = "",
+    val description: String = "",
 )
 
 data class PromptAck(val status: String?, val userRowId: Long?)
