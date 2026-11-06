@@ -92,7 +92,7 @@ object RpcContracts {
             required = setOf("session_id", "text"),
         ),
         RpcMethods.PROMPT_CANCEL to RpcContractSpec(
-            allowed = setOf("session_id", "admission_id"),
+            allowed = setOf("profile", "session_id", "admission_id"),
             required = setOf("session_id", "admission_id"),
         ),
         RpcMethods.PROMPT_STEER_QUEUED to RpcContractSpec(
@@ -160,10 +160,15 @@ object RpcContracts {
      *
      * 返回 `null` 表示通过；否则返回可直接写进日志/异常的说明（含非法键名，和 backend 的
      * `data.fields` 一个语义）。
+     *
+     * ⚠️ `_PROFILE_IMPLICIT` 里的方法**允许额外带 `profile`**：dispatch 会先拿它做跨 profile
+     * 路由、到自家 home 再剥离（`gateway/session_controls.py`）。
+     * 这条如果漏了，本地校验会把正确的调用拦下来 —— 实测踩过一次
+     * （`prompt.cancel` 被报"多余键=[profile]"）。
      */
     fun problems(method: String, keys: Set<String>): String? {
         val spec = CANONICAL[method] ?: return null
-        val extra = keys - spec.allowed
+        val extra = (keys - spec.allowed) - profileAllowed(method)
         val missing = spec.required - keys
         if (extra.isEmpty() && missing.isEmpty()) return null
         return buildString {
@@ -172,4 +177,8 @@ object RpcContracts {
             if (missing.isNotEmpty()) append("，缺少必填=$missing")
         }
     }
+
+    /** 该方法能否额外带 `profile`（由服务端剥离）。 */
+    private fun profileAllowed(method: String): Set<String> =
+        if (method in PROFILE_IMPLICIT) setOf("profile") else emptySet()
 }

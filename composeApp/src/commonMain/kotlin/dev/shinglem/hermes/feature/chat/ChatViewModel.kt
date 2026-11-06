@@ -3,6 +3,7 @@ package dev.shinglem.hermes.feature.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.shinglem.hermes.core.contract.RpcMethods
+import dev.shinglem.hermes.core.transport.ConnectionState
 import dev.shinglem.hermes.core.transport.SessionFence
 import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.error.ErrorMapper
@@ -130,6 +131,32 @@ class ChatViewModel(
     init {
         viewModelScope.launch {
             gateway.events.collect(::handleGatewayEvent)
+        }
+        // 重连后必须重新 resume：订阅与"本端会应答 server→client 请求"的声明都绑在**连接**上，
+        // 断线重连后旧订阅作废。不重建的话，重连窗口内后端发出的审批 / clarify 我们永远收不到，
+        // 只能靠用户手动刷新（触发 resume）从快照里补出来 —— 实测就是"审批不弹、刷新才有"。
+        viewModelScope.launch {
+            var wasConnected = false
+            gateway.connection.collect { connection ->
+                when (connection) {
+                    is ConnectionState.Connected -> {
+                        if (wasConnected) return@collect
+                        wasConnected = true
+                        runtimeIds.clear()
+                        generations.clear()
+                        revisions.clear()
+                        lastEventAt.clear()
+                        val key = _state.value.key ?: return@collect
+                        Log.info("gateway reconnected; re-resuming ${key.sessionId}")
+                        runCatching { ensureRuntime(key) }
+                            .onFailure { Log.warn("re-resume after reconnect failed: ${it.message}") }
+                    }
+                    ConnectionState.Idle, ConnectionState.Closed -> wasConnected = false
+                    // 断线（Reconnecting / Disconnected）也要复位：否则"Connected → Reconnecting →
+                    // Connected"会被当成同一次连接，重连后依然用旧的 runtime id。
+                    else -> wasConnected = false
+                }
+            }
         }
         gateway.onServerRequest(APPROVAL_REQUEST) { frameId, params ->
             awaitApprovalDecision(frameId, params)
