@@ -125,12 +125,30 @@
   `any { isFocused }` 就为真，于是「人在别的应用里」被判成「正在看我」，提醒被静默跳过
   （实测日志：三行 `remind skipped … (foreground and viewing this session)`，只有一条漏网弹出）。
   改成 `isActive`（AWT 语义 = **系统级**活动窗口）并只认 `Frame` / `Dialog`；
+  再进一步：**权威值改为界面层推送**（Compose `LocalWindowInfo.isWindowFocused`，只盯主窗口），
+  AWT 判定降级为"未收到推送前的兜底"；
   同时把窗口焦点状态加进补提醒的 `LaunchedEffect` key —— **切到后台本身也是一次「用户切走了」**，
   之前因前台被跳过的那几条现在会重新评估、补弹。
   附带：同时到达的多条 toast，Windows 只弹一条横幅（其余静默进通知中心），
   所以 `NativeNotifications.show` 按 1.5s 间隔逐条发，让每条都有自己的横幅。
   （顺带排除并记录了另一个假设：同 `group` **不会**折叠 —— `nucleus 2.5.18` 实测连发
   3 条带按钮的 toast，通知中心里 3 条都在。）
+- **切到别的会话后，那边的审批不再"静默"**：`handleGatewayEvent` 的「非当前会话」分支
+  把所有事件直接 `return`，而审批 / 提问的处理写在它后面 —— 你发完请求切走，审批到达时
+  既不弹通知也不进任何队列，只有切回来才从快照看到。现在该分支会先登记并弹提醒
+  （**不写当前界面**，避免你在会话 B 看到会话 A 的卡片）；切回该会话时由 `session.resume` 补成真卡片。
+- **点系统通知里的「允许一次」报 `4001 stale_generation`**：应答用的是**当前会话**的
+  `key` 与 `execution_generation` 现查（你在会话 B 点会话 A 的审批，回传的是 B 的值）。
+  现在 `PendingApproval` 自带 `executionGeneration`，应答一律用**卡片自己记的**会话与 fence；
+  `clarify` 同样处理。跨会话那条也登记进 `crossSessionApprovals` —— 否则点通知时找不到它，
+  点击等于没反应。
+- **已答过的审批卡片残留、再点报错**：三处没跟后端对账 ——
+  ① `savedStates`（切走时的快照）也持有 `pendingApprovals`，而应答只清了当前 `_state`；
+  ② `adoptSnapshotPrompts` 只补不删（`resume` 的 `prompts[]` 才是权威）；
+  ③ `RESTORE_SNAPSHOT` 分支恢复快照后直接 `return`，完全不核。
+  现在统一走 `forgetPendingRequest()`（一次清 `_state` + 所有快照 + 跨会话表）、
+  快照对账会 drop 掉后端已不认的条目、恢复快照后异步 `ensureRuntime(force)` 复查。
+  另外 `stale_generation` / `*_not_found` 这类**"已被别处处理"**的回执不再弹红条，静默收掉。
 - **`data/logs/desktop.log` 每行写两遍**：`Logging.init` 里在 `doConfigure` 之前没 `reset`，
   而 logback 在第一次访问 `LoggerFactory` 时已按 classpath 自动配置过一次 ——
   等于给 root 挂了两个同名 appender。副作用不只是体积：排查时会把「同一事件出现两次」
