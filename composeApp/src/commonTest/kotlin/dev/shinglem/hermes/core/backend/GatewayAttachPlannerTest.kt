@@ -117,4 +117,36 @@ class GatewayAttachPlannerTest {
         assertEquals("""S:\app\data\agent""", spec.env["HERMES_HOME"])
         assertEquals(GatewayAttachPlanner.STOP_TIMEOUT_MS, spec.timeoutMs)
     }
+
+    @Test
+    fun `env 文件里的会话令牌会被解析出来`() {
+        val text = """
+            # comment
+            SOME_KEY=1
+            export HERMES_DASHBOARD_SESSION_TOKEN=abc123
+            OTHER=2
+        """.trimIndent()
+        assertEquals("abc123", GatewayAttachPlanner.envFileToken(text))
+    }
+
+    @Test
+    fun `env 文件里的令牌支持引号与等号`() {
+        assertEquals(
+            "t-1=2",
+            GatewayAttachPlanner.envFileToken("""HERMES_DASHBOARD_SESSION_TOKEN="t-1=2""""),
+        )
+        assertEquals(
+            "tok",
+            GatewayAttachPlanner.envFileToken("HERMES_DASHBOARD_SESSION_TOKEN='tok'"),
+        )
+    }
+
+    @Test
+    fun `没有该键或值为空时返回 null`() {
+        assertNull(GatewayAttachPlanner.envFileToken(null))
+        assertNull(GatewayAttachPlanner.envFileToken(""))
+        assertNull(GatewayAttachPlanner.envFileToken("OTHER=1"))
+        assertNull(GatewayAttachPlanner.envFileToken("HERMES_DASHBOARD_SESSION_TOKEN="))
+        assertNull(GatewayAttachPlanner.envFileToken("# HERMES_DASHBOARD_SESSION_TOKEN=abc"))
+    }
 }

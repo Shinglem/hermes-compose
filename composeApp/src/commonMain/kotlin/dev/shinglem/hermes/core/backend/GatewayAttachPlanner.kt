@@ -78,6 +78,37 @@ object GatewayAttachPlanner {
 
     fun exePath(payloadDir: String): String = LocalBackendPlanner.path(payloadDir, "bin", "hermes.exe")
 
+    /**
+     * 从 `HERMES_HOME/.env` 取上游真正会用的会话令牌。
+     *
+     * **为什么必须读它**：`gateway ensure` 起 daemon 时走
+     * `served_profile_child_env(base=os.environ, target_home=home, inherit_credentials=True)`，
+     * 它会用 home 的 `.env` **覆盖**我们在 env 里注入的 `HERMES_DASHBOARD_SESSION_TOKEN`。
+     * 于是出现「客户端随机生成 A、daemon 用 .env 里的 B」→ WS 握手 403、无限重连（实测踩过）。
+     *
+     * 优先级：`home/.env` 有值就用它（那是 daemon 必然采用的值）；否则用我们生成的。
+     * 解析刻意保守：只认 `KEY=value` 行，去掉成对引号与 `export ` 前缀，值里允许 `=`。
+     */
+    fun envFileToken(envFileText: String?): String? {
+        if (envFileText.isNullOrBlank()) return null
+        val key = "HERMES_DASHBOARD_SESSION_TOKEN"
+        for (raw in envFileText.lineSequence()) {
+            val line = raw.trim()
+            if (line.isEmpty() || line.startsWith("#")) continue
+            val body = if (line.startsWith("export ")) line.removePrefix("export ").trim() else line
+            val eq = body.indexOf('=')
+            if (eq <= 0) continue
+            if (!body.substring(0, eq).trim().equals(key, ignoreCase = true)) continue
+            val value = body.substring(eq + 1).trim()
+                .removeSurrounding("\"")
+                .removeSurrounding("'")
+                .trim()
+            return value.takeIf { it.isNotEmpty() }
+        }
+        return null
+    }
+
+
     private fun baseEnv(
         homeDir: String,
         token: String,

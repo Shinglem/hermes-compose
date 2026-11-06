@@ -64,6 +64,7 @@ class GatewayAttachLifecycleTest {
         val provider = GatewayAttachBackendProvider(
             payloadDir = payload.absolutePath,
             homeDir = home.absolutePath,
+            tokenStoreDir = home.absolutePath,
             token = "it-token-" + System.nanoTime(),
             local = LocalSection(runCron = false, readyTimeoutMs = 60_000),
             foreignHomes = emptyList(),

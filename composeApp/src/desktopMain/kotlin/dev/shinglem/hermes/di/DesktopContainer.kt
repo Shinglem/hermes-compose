@@ -188,7 +188,11 @@ object DesktopContainer {
                 LocalEngine.GATEWAY -> GatewayAttachBackendProvider(
                     payloadDir = paths.hermesDir(config).absolutePath,
                     homeDir = paths.hermesHomeDir(config).absolutePath,
-                    token = config.backend.local.token?.takeIf { it.isNotBlank() } ?: randomHex(16),
+                    tokenStoreDir = paths.dataDir(config).absolutePath,
+                    // 空串 = 配置里没写；此时 provider 会优先沿用持久化令牌，
+                    // 避免每次启动换 token 让常驻 daemon 认不出来。
+                    token = config.backend.local.token?.takeIf { it.isNotBlank() }.orEmpty(),
+                    newToken = { randomHex(16) },
                     local = config.backend.local,
                     foreignHomes = foreignHomes(),
                     runner = DesktopOneShotRunner,

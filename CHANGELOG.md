@@ -5,6 +5,27 @@
 
 ---
 
+## [0.5.1] · 2026-11-06（hermes 0.23.0）
+
+> **patch 版本**：只改客户端外壳（`bin/App.jar`），覆盖式升级，`config/`、`data/` 与 payload 都不动。
+> 相对 `v0.5.0-0.23.0` 只修了一个会把用户挡在门外的 bug。
+
+### 修复
+
+- **老 home 升级后「网关 xxms 但一直重连中」**：`gateway` 路线下，daemon 启动时走上游
+  `served_profile_child_env(inherit_credentials=True)`，它会用 `HERMES_HOME/.env` 里的
+  `HERMES_DASHBOARD_SESSION_TOKEN` **覆盖**客户端注入的值。于是客户端拿着自己随机生成的令牌去连
+  daemon，WebSocket 握手 403、无限重连（HTTP `/api/status` 却是 200，所以状态栏显示延迟正常）。
+  只在 `.env` 里已有该键的老 home 上复现；全新的空 home 不会。
+
+### 变更
+
+- 会话令牌改为**四段优先级**：`home/.env` 的 `HERMES_DASHBOARD_SESSION_TOKEN` → 配置里的
+  `backend.local.token` → 上次持久化的 `<data>/gateway-token` → 新生成并落盘。
+  daemon 是常驻进程，重启客户端时令牌必须不变。
+
+---
+
 ## [0.5.0] · 2026-11-06（hermes 0.23.0）
 
 > **完整包版本（桌面版本升位）**：tag `v0.5.0-0.23.0`，由 `desktop-release` 走 CI 出完整包。
@@ -520,8 +541,8 @@ jlink 裁剪运行时、原生启动器打包、单实例与自启任务清理�
 
 | Release | tag 形式 | 资产 |
 |---|---|---|
-| 桌面端 | `v0.4.0-0.22.5` | `hermes-desktop-compose-0.4.0-0.22.5-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
-| 桌面端 patch | `v0.4.1` | `hermes-desktop-compose-0.4.1-patch.zip` + `SHA256SUMS.txt`（覆盖式升级，无完整包） |
+| 桌面端 | `v0.5.0-0.23.0` | `hermes-desktop-compose-0.5.0-0.23.0-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
+| 桌面端 patch | `v0.5.1` | `hermes-desktop-compose-0.5.1-patch.zip` + `SHA256SUMS.txt`（覆盖式升级，无完整包） |
 | 桌面端 patch | `v0.4.2` | `hermes-desktop-compose-0.4.2-patch.zip` + `SHA256SUMS.txt`（同上） |
 | 工具链 | `toolchain-v1` | `launcher-windows-x64.zip` / `runtime-windows-x64.zip` / `SHA256SUMS.txt` |
 | payload | 另一个仓库 `Shinglem/hermes-bundle` 的 `v0.22.5` | payload 压缩分卷 |

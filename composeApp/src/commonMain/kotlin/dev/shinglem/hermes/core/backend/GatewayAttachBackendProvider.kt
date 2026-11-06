@@ -28,6 +28,12 @@ import kotlinx.coroutines.withContext
 class GatewayAttachBackendProvider(
     private val payloadDir: String,
     private val homeDir: String,
+    /** 持久化令牌的目录（客户端自己的数据区，例如 `<home>/data`）。 */
+    private val tokenStoreDir: String,
+    /**
+     * 本次候选令牌。空串表示「配置里没写」——那时会优先沿用持久化的那个，
+     * 避免每次启动换 token 让常驻 daemon 认不出来（见 [resolveToken]）。
+     */
     private val token: String,
     private val local: LocalSection,
     private val foreignHomes: List<String>,
@@ -36,6 +42,8 @@ class GatewayAttachBackendProvider(
     private val osEnv: Map<String, String>,
     private val logger: AppLogger,
     private val scope: CoroutineScope,
+    /** 候选令牌为空且没有持久化值时，用它生成一个新令牌。 */
+    private val newToken: () -> String = { "" },
     private val browserHeaded: Boolean = false,
     private val browserArgs: String = "",
     private val elevated: Boolean = false,
@@ -45,7 +53,10 @@ class GatewayAttachBackendProvider(
 
     override val kind: BackendKind = BackendKind.LOCAL
 
-    override val sessionToken: String? get() = token.takeIf { it.isNotBlank() }
+    /** 实际生效的令牌；[start] 之前是候选值。 */
+    private var effectiveToken: String = token
+
+    override val sessionToken: String? get() = effectiveToken.takeIf { it.isNotBlank() }
 
     private val _state = MutableStateFlow<BackendBootState>(BackendBootState.Idle)
     override val state: StateFlow<BackendBootState> = _state.asStateFlow()
@@ -98,12 +109,13 @@ class GatewayAttachBackendProvider(
             }
         }
         fs.mkdirs(homeDir)
+        effectiveToken = resolveToken()
 
         step("连接后端（gateway ensure）")
         val spec = GatewayAttachPlanner.ensureSpec(
             payloadDir = payloadDir,
             homeDir = homeDir,
-            token = token,
+            token = effectiveToken,
             local = local,
             osEnv = osEnv,
             browserHeaded = browserHeaded,
@@ -133,7 +145,7 @@ class GatewayAttachBackendProvider(
                         "(instance=${parsed.endpoint.instanceId}, supervisor=${parsed.endpoint.supervisor})",
                 )
                 _state.value = BackendBootState.Ready(
-                    target = GatewayTarget(baseUrl = baseUrl, token = token),
+                    target = GatewayTarget(baseUrl = baseUrl, token = effectiveToken),
                 )
             }
 
@@ -158,6 +170,43 @@ class GatewayAttachBackendProvider(
     }
 
     // ---------------------------------------------------------------- internals
+
+    /**
+     * 决定本次用哪个会话令牌。
+     *
+     * 顺序（每条都有一次实测事故做后盾）：
+     * 1. **`home/.env` 的 `HERMES_DASHBOARD_SESSION_TOKEN`** —— daemon 启动时
+     *    `served_profile_child_env(inherit_credentials=True)` 会用 home 的 `.env` **覆盖**我们
+     *    注入的值；不跟随它就会「客户端用 A、daemon 用 B」，WS 握手 403 无限重连。
+     * 2. **配置里的 `local.token`** —— 用户显式指定的值。
+     * 3. **上次持久化的令牌** —— daemon 是常驻进程，重启客户端时不能换令牌。
+     * 4. 都没有 → 生成一个并落盘，供下次复用。
+     */
+    private fun resolveToken(): String {
+        val fromEnvFile = GatewayAttachPlanner.envFileToken(fs.readTextOrNull(envFilePath()))
+        if (fromEnvFile != null) {
+            logger.log(LogLevel.INFO, "gateway attach: 使用 home/.env 里的会话令牌（daemon 以它为准）")
+            // 同时落一份：万一 `.env` 以后被删，常驻 daemon 用的还是这个值。
+            persistToken(fromEnvFile)
+            return fromEnvFile
+        }
+        if (token.isNotBlank()) return token
+        val persisted = fs.readTextOrNull(persistedTokenPath())?.trim()
+        if (!persisted.isNullOrEmpty()) return persisted
+        val generated = newToken().takeIf { it.isNotBlank() } ?: return ""
+        persistToken(generated)
+        return generated
+    }
+
+    private fun persistToken(value: String) {
+        runCatching { fs.writeText(persistedTokenPath(), value) }
+            .onFailure { logger.log(LogLevel.WARN, "gateway attach: 令牌落盘失败（$it）") }
+    }
+
+    private fun envFilePath(): String = LocalBackendPlanner.path(homeDir, ".env")
+
+    /** 放在我们自己的数据区，不写进 home（那里是上游的地盘）。 */
+    private fun persistedTokenPath(): String = LocalBackendPlanner.path(tokenStoreDir, TOKEN_FILE)
 
     /**
      * 停掉本 home 的 gateway。
@@ -220,5 +269,10 @@ class GatewayAttachBackendProvider(
         state == "conflict" -> "后端运行状态冲突"
         state == "inaccessible" -> "无法访问后端运行时"
         else -> "后端未就绪（$state）"
+    }
+
+    private companion object {
+        /** 持久化的会话令牌：daemon 常驻，重启客户端时令牌必须不变。 */
+        const val TOKEN_FILE = "gateway-token"
     }
 }
