@@ -141,19 +141,19 @@ object SettingsCatalog {
 
     val groups: List<SettingsGroup> = listOf(
         SettingsGroup(
-            title = "后端连接",
+            title = "后端",
             fields = listOf(
                 SettingsField("backend.mode", "后端模式", "local = 拉起随包 payload，remote = 连既有服务", SettingsKind.ENUM, listOf("local", "remote")),
                 SettingsField(
                     "backend.local.host",
                     "监听地址",
-                    "127.0.0.1 = 只接受本机连接（推荐）。填 0.0.0.0 会进入后端的登录门禁模式，桌面客户端反而不认，给别人用请配隧道",
+                    "isolated 路线生效；gateway 路线的地址由 daemon 决定（看启动日志里的 api_origin）",
                     SettingsKind.TEXT,
                 ),
                 SettingsField(
                     "backend.local.port",
                     "监听端口",
-                    "0 = 随机分配（默认）。固定端口才能被 SSH/Tailscale 隧道或脚本稳定指向；与官方桌面端抢 9119 会启动失败",
+                    "isolated 路线生效：0 = 随机分配（默认），固定端口才能被隧道稳定指向；gateway 路线的端口由 daemon 决定",
                     SettingsKind.NUMBER,
                 ),
                 SettingsField(
@@ -164,56 +164,30 @@ object SettingsCatalog {
                     nullable = true,
                 ),
                 SettingsField("backend.local.hermes_dir", "内嵌 payload 目录", "相对 <home>，或绝对路径", SettingsKind.TEXT),
-                SettingsField("backend.local.home_dir", "本地数据目录", "后端 HERMES_HOME，相对 <home>", SettingsKind.TEXT),
+                SettingsField("backend.local.home_dir", "本地数据目录", "后端 HERMES_HOME，相对 <home>；gateway 路线会注入给 daemon", SettingsKind.TEXT),
+                SettingsField(
+                    "backend.local.engine",
+                    "后端路线",
+                    "gateway = 让上游机器级 gateway 起后端再 attach（0.23+ 的官方路线）；isolated = 自起 dashboard 子进程（回退）",
+                    SettingsKind.ENUM,
+                    listOf("gateway", "isolated"),
+                ),
                 SettingsField("backend.local.ready_timeout_ms", "启动超时（毫秒）", "下限 45000", SettingsKind.NUMBER),
-                SettingsField("backend.local.run_cron", "本地模式执行 cron", "= 是否给子进程设 HERMES_DESKTOP=1", SettingsKind.BOOLEAN),
+                SettingsField("backend.local.run_cron", "本地模式执行 cron", "= 是否给后端子进程设 HERMES_DESKTOP=1；改完要重启后端", SettingsKind.BOOLEAN),
                 SettingsField("backend.remote.base_url", "远端地址", "remote 模式使用", SettingsKind.TEXT),
                 SettingsField("backend.remote.connect_timeout_ms", "连接超时（毫秒）", null, SettingsKind.NUMBER),
             ),
         ),
         SettingsGroup(
-            title = "应用",
+            title = "网络",
             fields = listOf(
-                SettingsField("app.data_dir", "数据目录", "留空 = %LOCALAPPDATA%\\hermes-compose；便携模式填 data", SettingsKind.TEXT, nullable = true),
-                SettingsField("app.log_level", "日志级别", null, SettingsKind.ENUM, listOf("DEBUG", "INFO", "WARN", "ERROR")),
-                SettingsField("app.profile", "固定 profile", "留空 = 跟随上次选择", SettingsKind.TEXT, nullable = true),
-                SettingsField("app.close_to_tray", "关闭时收进托盘", null, SettingsKind.BOOLEAN),
-                SettingsField(
-                    "app.elevate",
-                    "要求管理员权限",
-                    "ask = 每次手动启动弹一次 UAC；开机自启走计划任务，不受此影响",
-                    SettingsKind.ENUM,
-                    listOf("never", "ask"),
-                ),
-                SettingsField(
-                    SettingsCatalog.KEY_AUTOSTART,
-                    "开机自启",
-                    "task = 登录时由计划任务以最高权限启动（不弹 UAC）；需要管理员权限才能落地",
-                    SettingsKind.ENUM,
-                    listOf("off", "task"),
-                ),
+                SettingsField("options.network.request_timeout_ms", "请求超时（毫秒）", null, SettingsKind.NUMBER),
+                SettingsField("options.network.write_timeout_ms", "写请求超时（毫秒）", null, SettingsKind.NUMBER),
+                SettingsField("options.network.prompt_ack_timeout_ms", "对话 ack 超时（毫秒）", "下限 60000", SettingsKind.NUMBER),
             ),
         ),
         SettingsGroup(
-            title = "日志",
-            fields = listOf(
-                SettingsField("app.log.dir", "日志目录", "相对数据目录", SettingsKind.TEXT),
-                SettingsField("app.log.keep_days", "保留天数", null, SettingsKind.NUMBER),
-                SettingsField("app.log.max_files", "最多文件数", null, SettingsKind.NUMBER),
-                SettingsField("app.log.also_stderr", "同时输出到控制台", null, SettingsKind.BOOLEAN),
-            ),
-        ),
-        SettingsGroup(
-            title = "窗口",
-            fields = listOf(
-                SettingsField("app.window.width", "初始宽度", null, SettingsKind.NUMBER),
-                SettingsField("app.window.height", "初始高度", null, SettingsKind.NUMBER),
-                SettingsField("app.window.min_width", "最小宽度", null, SettingsKind.NUMBER),
-                SettingsField("app.window.min_height", "最小高度", null, SettingsKind.NUMBER),
-            ),
-        ),
-        SettingsGroup(
-            title = "界面与网络",
+            title = "界面",
             fields = listOf(
                 SettingsField(
                     "options.ui.theme",
@@ -239,9 +213,52 @@ object SettingsCatalog {
                     listOf("follow", "material", "paper"),
                     enumLabels = MARKDOWN_STYLE_LABELS,
                 ),
-                SettingsField("options.network.request_timeout_ms", "请求超时（毫秒）", null, SettingsKind.NUMBER),
-                SettingsField("options.network.write_timeout_ms", "写请求超时（毫秒）", null, SettingsKind.NUMBER),
-                SettingsField("options.network.prompt_ack_timeout_ms", "对话 ack 超时（毫秒）", "下限 60000", SettingsKind.NUMBER),
+            ),
+        ),
+        SettingsGroup(
+            title = "窗口",
+            fields = listOf(
+                SettingsField("app.window.width", "初始宽度", null, SettingsKind.NUMBER),
+                SettingsField("app.window.height", "初始高度", null, SettingsKind.NUMBER),
+                SettingsField("app.window.min_width", "最小宽度", null, SettingsKind.NUMBER),
+                SettingsField("app.window.min_height", "最小高度", null, SettingsKind.NUMBER),
+            ),
+        ),
+        SettingsGroup(
+            title = "常规",
+            fields = listOf(
+                SettingsField("app.data_dir", "数据目录", "留空 = %LOCALAPPDATA%\\hermes-compose；便携模式填 data", SettingsKind.TEXT, nullable = true),
+                SettingsField("app.profile", "固定 profile", "留空 = 跟随上次选择", SettingsKind.TEXT, nullable = true),
+                SettingsField("app.close_to_tray", "关闭时收进托盘", null, SettingsKind.BOOLEAN),
+            ),
+        ),
+        SettingsGroup(
+            title = "启动与权限",
+            fields = listOf(
+                SettingsField(
+                    "app.elevate",
+                    "要求管理员权限",
+                    "ask = 每次手动启动弹一次 UAC；开机自启走计划任务，不受此影响",
+                    SettingsKind.ENUM,
+                    listOf("never", "ask"),
+                ),
+                SettingsField(
+                    SettingsCatalog.KEY_AUTOSTART,
+                    "开机自启",
+                    "task = 登录时由计划任务以最高权限启动（不弹 UAC）；需要管理员权限才能落地",
+                    SettingsKind.ENUM,
+                    listOf("off", "task"),
+                ),
+            ),
+        ),
+        SettingsGroup(
+            title = "日志",
+            fields = listOf(
+                SettingsField("app.log_level", "日志级别", null, SettingsKind.ENUM, listOf("DEBUG", "INFO", "WARN", "ERROR")),
+                SettingsField("app.log.dir", "日志目录", "相对数据目录", SettingsKind.TEXT),
+                SettingsField("app.log.keep_days", "保留天数", null, SettingsKind.NUMBER),
+                SettingsField("app.log.max_files", "最多文件数", null, SettingsKind.NUMBER),
+                SettingsField("app.log.also_stderr", "同时输出到控制台", null, SettingsKind.BOOLEAN),
             ),
         ),
     )
@@ -254,22 +271,46 @@ object SettingsCatalog {
     /**
      * 按可用性生成左栏分组。
      *
-     * 「调试」只在检测到官方桌面端时出现（[debugAvailable]）—— 不做置灰占位，
+     * 一级分组按「用户要解决什么问题」切：连接（能不能连上）、外观（看起来怎样）、
+     * 智能体（它怎么思考）、提供方（用谁的模型）、安全（敢不敢放它跑）、
+     * 桌面（这台机器上怎么用）、应用（程序本身）、集成（外部程序）。
+     *
+     * 「集成」只在检测到官方桌面端时出现（[debugAvailable]）—— 不做置灰占位，
      * 否则用户会以为点了没反应。
      */
     fun sections(debugAvailable: Boolean): List<SettingsSection> = buildList {
         add(
             SettingsSection(
-                key = "options",
-                title = "选项",
-                pages = groups.mapIndexed { index, group -> group.title to SettingsPage.Catalog(index) },
+                key = "connection",
+                title = "连接",
+                pages = listOf(
+                    "后端" to SettingsPage.Catalog(0),
+                    "网络" to SettingsPage.Catalog(1),
+                ),
             ),
         )
         add(
             SettingsSection(
-                key = "terminal",
-                title = "终端",
-                pages = listOf("外观" to SettingsPage.TerminalAppearance),
+                key = "appearance",
+                title = "外观",
+                pages = listOf(
+                    "界面" to SettingsPage.Catalog(2),
+                    "窗口" to SettingsPage.Catalog(3),
+                    "终端外观" to SettingsPage.TerminalAppearance,
+                ),
+            ),
+        )
+        add(
+            SettingsSection(
+                key = "agent",
+                title = "智能体",
+                pages = listOf(
+                    "主模型" to SettingsPage.MainModel,
+                    "辅助模型" to SettingsPage.AuxModels,
+                    "备用模型" to SettingsPage.FallbackModels,
+                    "混合代理 MoA" to SettingsPage.MoaModels,
+                    "配置档案" to SettingsPage.Profiles,
+                ),
             ),
         )
         add(
@@ -279,25 +320,6 @@ object SettingsCatalog {
                 pages = listOf(
                     "密钥" to SettingsPage.ProviderKeys,
                     "自定义端点" to SettingsPage.CustomEndpoints,
-                ),
-            ),
-        )
-        add(
-            SettingsSection(
-                key = "profiles",
-                title = "配置档案",
-                pages = listOf("档案" to SettingsPage.Profiles),
-            ),
-        )
-        add(
-            SettingsSection(
-                key = "model",
-                title = "模型",
-                pages = listOf(
-                    "主模型" to SettingsPage.MainModel,
-                    "辅助模型" to SettingsPage.AuxModels,
-                    "备用模型" to SettingsPage.FallbackModels,
-                    "混合代理 MoA" to SettingsPage.MoaModels,
                 ),
             ),
         )
@@ -321,12 +343,29 @@ object SettingsCatalog {
                     "浏览器" to SettingsPage.Browser,
                     "外部编辑器" to SettingsPage.Editors,
                     "快捷键" to SettingsPage.Shortcuts,
+                ),
+            ),
+        )
+        add(
+            SettingsSection(
+                key = "app",
+                title = "应用",
+                pages = listOf(
+                    "常规" to SettingsPage.Catalog(4),
+                    "启动与权限" to SettingsPage.Catalog(5),
+                    "日志" to SettingsPage.Catalog(6),
                     "关于" to SettingsPage.About,
                 ),
             ),
         )
         if (debugAvailable) {
-            add(SettingsSection(key = "debug", title = "调试", pages = listOf("官方桌面端" to SettingsPage.Debug)))
+            add(
+                SettingsSection(
+                    key = "integration",
+                    title = "集成",
+                    pages = listOf("官方桌面端" to SettingsPage.Debug),
+                ),
+            )
         }
     }
 

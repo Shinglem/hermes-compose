@@ -10,8 +10,10 @@ import java.io.File
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /** 官方桌面端的查找顺序（payload 自动探测 / config 覆盖 / 都没有 → 不出现入口）。 */
 class OfficialDesktopDetectTest {
@@ -118,6 +120,81 @@ class OfficialDesktopDetectTest {
         assertEquals(false, isUsableBackendUrl("http://127.0.0.1"), "缺端口")
         assertEquals(false, isUsableBackendUrl(""), "空串")
         assertEquals(false, isUsableBackendUrl("127.0.0.1:9119"), "缺 scheme")
+    }
+
+    @Test
+    fun `sharedBackend 三态`() {
+        assertTrue(launcher(url = { "http://127.0.0.1:0" }, token = { "tok" }).sharedBackend is SharedBackendState.Unavailable)
+        assertTrue(launcher(url = { "http://127.0.0.1:57586" }, token = { null }).sharedBackend is SharedBackendState.Unavailable)
+        assertEquals(
+            SharedBackendState.Ready("http://127.0.0.1:57586"),
+            launcher(url = { "http://127.0.0.1:57586" }, token = { "tok" }).sharedBackend,
+        )
+    }
+
+    @Test
+    fun `后端不可用时拒绝启动且不创建任何进程`() {
+        var started = 0
+        val launcher = launcher(
+            url = { "http://127.0.0.1:0" },
+            token = { "tok" },
+            starter = { _, _, _ -> started++ },
+        )
+
+        val result = launcher.launch()
+
+        assertIs<LaunchResult.Refused>(result)
+        assertEquals(0, started, "后端没就绪时绝不能起进程 —— 那会另起一套后端")
+    }
+
+    @Test
+    fun `探活失败时拒绝启动`() {
+        var started = 0
+        val launcher = launcher(
+            url = { "http://127.0.0.1:57586" },
+            token = { "tok" },
+            probe = { _, _ -> false },
+            starter = { _, _, _ -> started++ },
+        )
+
+        assertIs<LaunchResult.Refused>(launcher.launch())
+        assertEquals(0, started)
+    }
+
+    @Test
+    fun `就绪时带 REMOTE_URL 与 REMOTE_TOKEN 启动`() {
+        var captured: Map<String, String>? = null
+        val launcher = launcher(
+            url = { "http://127.0.0.1:57586" },
+            token = { "tok-abc" },
+            probe = { _, _ -> true },
+            starter = { _, _, env -> captured = env },
+        )
+
+        val result = launcher.launch()
+
+        assertEquals(LaunchResult.Started("http://127.0.0.1:57586"), result)
+        assertEquals("http://127.0.0.1:57586", captured?.get("HERMES_DESKTOP_REMOTE_URL"))
+        assertEquals("tok-abc", captured?.get("HERMES_DESKTOP_REMOTE_TOKEN"))
+    }
+
+    private fun launcher(
+        url: () -> String?,
+        token: () -> String?,
+        probe: (String, Long) -> Boolean = { _, _ -> true },
+        starter: (File, File, Map<String, String>) -> Unit = { _, _, _ -> },
+    ): OfficialDesktopLauncherImpl {
+        val exe = File(root, "hermes${File.separator}official-desktop${File.separator}Hermes.exe")
+        exe.parentFile.mkdirs()
+        if (!exe.isFile) exe.writeText("stub")
+        return OfficialDesktopLauncherImpl(
+            exe = exe,
+            dataRoot = File(root, "data${File.separator}official-desktop"),
+            backendUrl = url,
+            sessionToken = token,
+            probe = probe,
+            starter = starter,
+        )
     }
 
     private fun config(officialDesktop: String? = null) = AppConfig(

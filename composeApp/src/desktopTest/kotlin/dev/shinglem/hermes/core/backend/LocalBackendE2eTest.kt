@@ -66,7 +66,6 @@ class LocalBackendE2eTest {
             val target = ready.target
             assertTrue(target.baseUrl.startsWith("http://127.0.0.1:"))
             assertTrue(portOf(target) > 0)
-            assertNotNull(ready.dashboardUrl, "dashboard 未被拉起")
 
             // 归属标记必须落在我们自己的 home 里
             val marker = File(home, ".hermes-portable-owner")
@@ -83,9 +82,7 @@ class LocalBackendE2eTest {
 
             // 关停必须真的把子进程收掉：端口不再可连。
             val servePort = portOf(target)
-            val dashPort = ready.dashboardUrl.substringAfterLast(':').toIntOrNull() ?: 0
             assertTrue(waitUntilClosed(servePort), "serve 端口 $servePort 仍在监听，子进程未退出")
-            assertTrue(waitUntilClosed(dashPort), "dashboard 端口 $dashPort 仍在监听，子进程未退出")
         } finally {
             provider.shutdown()
             scope.cancel()

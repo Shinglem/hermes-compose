@@ -10,7 +10,8 @@
       "ready_timeout_ms": 90000,
       "extra_args": [],
       "run_cron": true,
-      "home_dir": "data/agent"
+      "home_dir": "data/agent",
+      "engine": "gateway"
     },
     "remote": {
       "base_url": "http://127.0.0.1:9119",

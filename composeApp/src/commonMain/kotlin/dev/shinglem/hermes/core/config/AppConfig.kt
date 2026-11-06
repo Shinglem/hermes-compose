@@ -108,10 +108,28 @@ data class LocalSection(
      * 必须是本程序独占的目录：指向 `~/.hermes` 之类的既有 home 会被启动校验直接拒绝。
      */
     @SerialName("home_dir") val homeDir: String = "data/agent",
+    /**
+     * `local` 模式用哪条后端路线。
+     *
+     * [LocalEngine.GATEWAY]：`hermes gateway ensure` 拉起上游的**机器级 gateway** 再 attach
+     * （0.23+ 的 canonical 路线；会话队列/history/steer 由 owner 统一保证）。
+     * [LocalEngine.ISOLATED]：我们自己 spawn `dashboard --isolated`（旧路线，留作回退）。
+     *
+     * attach 之后 [host] / [port] / [extraArgs] 都不再生效 —— 端口由 daemon 决定，
+     * 通过 endpoint 的 `api_origin` 告知。
+     */
+    @SerialName("engine") val engine: LocalEngine = LocalEngine.GATEWAY,
 ) {
     companion object {
         const val DEFAULT_HOST: String = "127.0.0.1"
     }
+}
+
+/** `local` 模式的两种后端路线，见 [LocalSection.engine]。 */
+@Serializable
+enum class LocalEngine {
+    @SerialName("gateway") GATEWAY,
+    @SerialName("isolated") ISOLATED,
 }
 
 @Serializable

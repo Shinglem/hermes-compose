@@ -197,7 +197,6 @@ fun SettingsDetailPane(
                 logDir = logDir,
                 update = updateState,
                 onCheckUpdate = onCheckUpdate,
-                officialDesktop = officialDesktop,
                 modifier = modifier,
             )
             return

@@ -10,19 +10,15 @@ import dev.shinglem.hermes.core.backend.ProbeState
  * 状态栏只有 28dp，文案必须能一眼区分「正在启动 / 已就绪 / 失败」；
  * 详细信息（失败原因 + 后端输出）在点击后弹出的对话框里。
  *
- * Local 模式后端是**一个** `dashboard` 进程，同一个端口同时提供 JSON-RPC/REST（网关）
- * 与 Web UI（服务）。两者可以一好一坏 —— payload 缺 `web_dist` 时网关正常、服务是占位页 ——
- * 所以拆成两条独立显示，各自带心跳延迟。
+ * 只有一个后端：官方 gateway。它同时提供 JSON-RPC 与 REST，所以状态栏只有一项。
+ * （历史：isolated 路线额外显示「服务 7ms」表示 dashboard 的 Web UI 能否打开；
+ * Web UI 已不再使用，见 `CHANGELOG` 0.5.0。）
  */
 object BackendStatusText {
 
     /** 网关（JSON-RPC / REST）一项；remote 模式下也显示，方便看出对端是否可达。 */
     fun gatewayLabel(kind: BackendKind, state: BackendBootState, probe: ProbeState): String =
         chip("网关", kind, state, probe)
-
-    /** 服务（Web UI）一项；只有拿得到 Web UI 地址时才显示。 */
-    fun serviceLabel(kind: BackendKind, state: BackendBootState, probe: ProbeState): String? =
-        if (probe is ProbeState.Idle) null else chip("服务", kind, state, probe)
 
     private fun chip(
         name: String,
@@ -50,9 +46,6 @@ object BackendStatusText {
     fun isFailure(state: BackendBootState): Boolean = state is BackendBootState.Failed
 
     fun isGatewayFailing(state: BackendBootState, probe: ProbeState): Boolean =
-        isFailure(state) || probe is ProbeState.Fail
-
-    fun isServiceFailing(state: BackendBootState, probe: ProbeState): Boolean =
         isFailure(state) || probe is ProbeState.Fail
 
     /** `http://127.0.0.1:57586` → `57586`，解析失败则为 null。 */

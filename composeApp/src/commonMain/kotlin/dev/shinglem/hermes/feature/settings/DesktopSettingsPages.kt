@@ -282,7 +282,6 @@ fun AboutPage(
     logDir: String,
     update: UpdateState,
     onCheckUpdate: () -> Unit,
-    officialDesktop: OfficialDesktopLauncher? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -348,18 +347,6 @@ fun AboutPage(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-
-        if (officialDesktop != null) {
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Text(
-                text = "官方桌面端对照包已随 payload 附带（v1.0.0 移除）。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Button(onClick = { runCatching { officialDesktop.launch() } }) {
-                Text("启动官方桌面端")
-            }
         }
     }
 }

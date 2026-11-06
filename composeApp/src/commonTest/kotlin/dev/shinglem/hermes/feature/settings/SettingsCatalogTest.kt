@@ -73,6 +73,53 @@ class SettingsCatalogTest {
             SettingsField("app.close_to_tray", "x", null, SettingsKind.BOOLEAN).scope,
         )
     }
+
+    @Test
+    fun `every catalog group is reachable from a section`() {
+        val sections = SettingsCatalog.sections(debugAvailable = true)
+        val referenced = sections
+            .flatMap { it.pages }
+            .mapNotNull { (it.second as? SettingsPage.Catalog)?.index }
+            .toSet()
+        assertEquals(
+            SettingsCatalog.groups.indices.toSet(),
+            referenced,
+            "有字段组没挂到左栏（会变成不可达页面），或索引越界",
+        )
+    }
+
+    @Test
+    fun `no section is empty and no page is duplicated`() {
+        val sections = SettingsCatalog.sections(debugAvailable = true)
+        sections.forEach { assertTrue(it.pages.isNotEmpty(), "空分组：${it.title}") }
+        val pages = sections.flatMap { it.pages }.map { it.second }
+        assertEquals(pages.size, pages.toSet().size, "同一个页面被挂到多个分组：$pages")
+        val keys = sections.map { it.key }
+        assertEquals(keys.size, keys.toSet().size, "分组 key 重复：$keys")
+    }
+
+    @Test
+    fun `default page is the first page of the first section`() {
+        val first = SettingsCatalog.sections(debugAvailable = false).first()
+        assertEquals(first.pages.first().second, SettingsCatalog.defaultPage)
+    }
+
+    @Test
+    fun `integration section only appears when the official desktop is available`() {
+        val without = SettingsCatalog.sections(debugAvailable = false).map { it.key }
+        val with = SettingsCatalog.sections(debugAvailable = true).map { it.key }
+        assertTrue("integration" !in without)
+        assertTrue("integration" in with)
+        assertEquals(with.size, without.size + 1)
+    }
+
+    @Test
+    fun `catalog groups keep the curated order`() {
+        assertEquals(
+            listOf("后端", "网络", "界面", "窗口", "常规", "启动与权限", "日志"),
+            SettingsCatalog.groups.map { it.title },
+        )
+    }
 }
 
 class SettingsViewModelTest {

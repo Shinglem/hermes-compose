@@ -47,10 +47,8 @@ import dev.shinglem.hermes.resources.Res
 import dev.shinglem.hermes.resources.icon
 import dev.shinglem.hermes.terminal.terminalSelectedText
 import dev.shinglem.hermes.terminal.terminalTailText
-import java.awt.Desktop
 import java.awt.Dimension
 import java.io.File
-import java.net.URI
 import kotlinx.coroutines.launch
 import javax.swing.JOptionPane
 import javax.swing.UIManager
@@ -304,15 +302,8 @@ fun main(args: Array<String>) {
                 tooltip = ProductInfo.DISPLAY_NAME,
                 onActivate = { windowVisible = true },
                 menu = {
-                    val dashboardUrl = (boot.value as? BackendBootState.Ready)?.dashboardUrl
                     listOf(
                         TrayMenuItem.Action("显示主窗口") { windowVisible = true },
-                        TrayMenuItem.Action(
-                            text = "打开 Web 界面",
-                            enabled = dashboardUrl != null,
-                        ) {
-                            (boot.value as? BackendBootState.Ready)?.dashboardUrl?.let(::openInBrowser)
-                        },
                         TrayMenuItem.Separator,
                         TrayMenuItem.Action("退出") { quit() },
                     )
@@ -376,10 +367,6 @@ private fun WindowState.toBounds(): WindowBounds? {
         width = size.width.value.toInt(),
         height = size.height.value.toInt(),
     )
-}
-
-private fun openInBrowser(url: String) {
-    runCatching { Desktop.getDesktop().browse(URI(url)) }
 }
 
 /** 配置/装配阶段既没有日志、也没有窗口，只能用 Swing 的原生对话框。 */

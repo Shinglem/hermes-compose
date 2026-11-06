@@ -7,6 +7,8 @@ import dev.shinglem.hermes.core.app.ScheduledAutostart
 import dev.shinglem.hermes.core.backend.BackendProvider
 import dev.shinglem.hermes.core.backend.DesktopBackendLauncher
 import dev.shinglem.hermes.core.backend.DesktopFsProbe
+import dev.shinglem.hermes.core.backend.DesktopOneShotRunner
+import dev.shinglem.hermes.core.backend.GatewayAttachBackendProvider
 import dev.shinglem.hermes.core.backend.LocalBackendPlanner
 import dev.shinglem.hermes.core.backend.LocalBackendProvider
 import dev.shinglem.hermes.core.backend.RemoteBackendProvider
@@ -18,6 +20,7 @@ import dev.shinglem.hermes.core.config.ConfigPaths
 import dev.shinglem.hermes.core.config.ElevateMode
 import dev.shinglem.hermes.core.config.FileSettingsStore
 import dev.shinglem.hermes.core.config.LoadedConfig
+import dev.shinglem.hermes.core.config.LocalEngine
 import dev.shinglem.hermes.core.config.OptionsWatcher
 import dev.shinglem.hermes.core.config.SystemConfigSource
 import dev.shinglem.hermes.core.config.TokenSource
@@ -181,35 +184,55 @@ object DesktopContainer {
         return when (config.backend.mode) {
             BackendMode.REMOTE -> RemoteBackendProvider(fallback, resolveToken(config))
 
-            BackendMode.LOCAL -> LocalBackendProvider(
-                payloadDir = paths.hermesDir(config).absolutePath,
-                homeDir = paths.hermesHomeDir(config).absolutePath,
-                dataDir = paths.dataDir(config).absolutePath,
-                token = config.backend.local.token?.takeIf { it.isNotBlank() } ?: randomHex(16),
-                nonce = randomHex(8),
-                parentPid = ProcessHandle.current().pid(),
-                // `winms:` 必须是**父进程的创建时间**（Unix 毫秒），不是当前时间：
-                // 后端拿它和真实 FILETIME 比，不相等就判定「桌面端已被替换」并自杀。
-                // 之前传 System.currentTimeMillis() 导致启动了约 2 秒就被 watchdog 收掉，
-                // 客户端于是一路重连。
-                parentStartMarker = "winms:" + parentStartMillis(),
-                local = config.backend.local,
-                foreignHomes = LocalBackendPlanner.foreignHomes(
-                    userHome = System.getProperty("user.home").orEmpty(),
-                    appData = System.getenv("APPDATA"),
-                    localAppData = System.getenv("LOCALAPPDATA"),
-                ),
-                launcher = DesktopBackendLauncher(),
-                fs = DesktopFsProbe,
-                osEnv = System.getenv(),
-                logger = logger,
-                scope = scope,
-                browserHeaded = config.app.browser.headed,
-                browserArgs = config.app.browser.args,
-                elevated = Elevation.isElevated(),
-            )
+            BackendMode.LOCAL -> when (config.backend.local.engine) {
+                LocalEngine.GATEWAY -> GatewayAttachBackendProvider(
+                    payloadDir = paths.hermesDir(config).absolutePath,
+                    homeDir = paths.hermesHomeDir(config).absolutePath,
+                    token = config.backend.local.token?.takeIf { it.isNotBlank() } ?: randomHex(16),
+                    local = config.backend.local,
+                    foreignHomes = foreignHomes(),
+                    runner = DesktopOneShotRunner,
+                    fs = DesktopFsProbe,
+                    osEnv = System.getenv(),
+                    logger = logger,
+                    scope = scope,
+                    browserHeaded = config.app.browser.headed,
+                    browserArgs = config.app.browser.args,
+                    elevated = Elevation.isElevated(),
+                )
+
+                LocalEngine.ISOLATED -> LocalBackendProvider(
+                    payloadDir = paths.hermesDir(config).absolutePath,
+                    homeDir = paths.hermesHomeDir(config).absolutePath,
+                    dataDir = paths.dataDir(config).absolutePath,
+                    token = config.backend.local.token?.takeIf { it.isNotBlank() } ?: randomHex(16),
+                    nonce = randomHex(8),
+                    parentPid = ProcessHandle.current().pid(),
+                    // `winms:` 必须是**父进程的创建时间**（Unix 毫秒），不是当前时间：
+                    // 后端拿它和真实 FILETIME 比，不相等就判定「桌面端已被替换」并自杀。
+                    // 之前传 System.currentTimeMillis() 导致启动了约 2 秒就被 watchdog 收掉，
+                    // 客户端于是一路重连。
+                    parentStartMarker = "winms:" + parentStartMillis(),
+                    local = config.backend.local,
+                    foreignHomes = foreignHomes(),
+                    launcher = DesktopBackendLauncher(),
+                    fs = DesktopFsProbe,
+                    osEnv = System.getenv(),
+                    logger = logger,
+                    scope = scope,
+                    browserHeaded = config.app.browser.headed,
+                    browserArgs = config.app.browser.args,
+                    elevated = Elevation.isElevated(),
+                )
+            }
         }
     }
+
+    private fun foreignHomes(): List<String> = LocalBackendPlanner.foreignHomes(
+        userHome = System.getProperty("user.home").orEmpty(),
+        appData = System.getenv("APPDATA"),
+        localAppData = System.getenv("LOCALAPPDATA"),
+    )
 
     private fun randomHex(bytes: Int): String {
         val buffer = ByteArray(bytes)

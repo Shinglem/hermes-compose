@@ -2,12 +2,14 @@ package dev.shinglem.hermes.ui.component
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -77,6 +79,10 @@ fun NavRow(
 
 /**
  * 中栏分组的可折叠标题（普通标题行，不用 `stickyHeader` —— `AGENTS.md` 硬约束 10）。
+ *
+ * 组标题必须和下面的页行**看得出层级**：之前它用 `labelMedium + onSurfaceVariant`，
+ * 与 `NavRow`（`bodyMedium + onSurface`）几乎同色同字号，展开后就是一长串等距文字。
+ * 现在靠三件事拉开：上方 12dp 呼吸间距、`titleSmall` 字号、下方一条分隔线。
  */
 @Composable
 fun NavSectionHeader(
@@ -85,23 +91,29 @@ fun NavSectionHeader(
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .selectable(selected = false, onClick = onToggle)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text(
-            text = if (expanded) "⌄" else "›",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+    Column(modifier = modifier.fillMaxWidth().padding(top = 12.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .selectable(selected = false, onClick = onToggle)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = if (expanded) "⌄" else "›",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        HorizontalDivider(
+            modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 4.dp),
+            color = MaterialTheme.colorScheme.outlineVariant,
         )
     }
 }

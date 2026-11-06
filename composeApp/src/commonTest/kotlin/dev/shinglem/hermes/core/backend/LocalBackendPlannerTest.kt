@@ -112,12 +112,6 @@ class LocalBackendPlannerTest {
     }
 
     @Test
-    fun `web dist presence is detected from the payload layout`() {
-        assertTrue(LocalBackendPlanner.hasWebDist(payload) { it.endsWith("web_dist/index.html") })
-        assertFalse(LocalBackendPlanner.hasWebDist(payload) { false })
-    }
-
-    @Test
     fun `env is a whitelist - parent secrets never leak`() {
         val env = spec().env
         assertEquals(home, env["HERMES_HOME"])

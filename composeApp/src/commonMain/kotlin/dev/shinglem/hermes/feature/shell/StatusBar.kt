@@ -69,7 +69,7 @@ fun StatusBar(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            // 后端两项（远端模式也有网关那一项）：都可点击看详情与后端输出。
+            // 后端只有一项（远端模式也显示）：可点击看详情与后端输出。
             // 界面先渲染，后端没起来也不该让用户无处可点。
             val gatewayLabel = BackendStatusText.gatewayLabel(
                 state.backendKind,
@@ -82,14 +82,6 @@ fun StatusBar(
                 failing = BackendStatusText.isGatewayFailing(state.backend, state.gatewayProbe),
                 onClick = onShowBackendDetail,
             )
-            BackendStatusText.serviceLabel(state.backendKind, state.backend, state.dashboardProbe)?.let { label ->
-                Spacer(Modifier.width(8.dp))
-                StatusChip(
-                    text = label,
-                    failing = BackendStatusText.isServiceFailing(state.backend, state.dashboardProbe),
-                    onClick = onShowBackendDetail,
-                )
-            }
             Spacer(Modifier.width(8.dp))
             Text(
                 text = state.connection.text(),

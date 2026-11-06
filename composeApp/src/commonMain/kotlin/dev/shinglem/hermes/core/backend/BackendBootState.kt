@@ -15,11 +15,6 @@ sealed interface BackendBootState {
 
     data class Ready(
         val target: GatewayTarget,
-        /**
-         * Web UI 地址。Local 模式与 [target] **同端口**（`dashboard` 一个进程同时提供两者）；
-         * Remote 模式由远端自己决定，这里不填。
-         */
-        val dashboardUrl: String? = null,
     ) : BackendBootState
 
     data class Failed(

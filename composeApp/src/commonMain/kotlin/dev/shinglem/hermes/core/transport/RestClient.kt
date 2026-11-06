@@ -122,8 +122,7 @@ class RestClient(
     /**
      * 按**任意** baseUrl 探一次 `/api/status`（免鉴权），返回往返毫秒。
      *
-     * 与 [probeWeb] 是两个探针：Local 模式下二者同端口但语义不同 ——
-     * `/api/status` 好而 `/` 是占位页，正是「payload 缺 web_dist」的形态。
+     * 只探这一个端点：客户端唯一的后端是官方 gateway，JSON-RPC / REST 都在这台 listener 上。
      */
     suspend fun probeStatus(baseUrl: String, timeoutMs: Long = Timeouts.HEALTH_MS): Long {
         val url = baseUrl.trim().trimEnd('/') + "/api/status"
@@ -131,32 +130,6 @@ class RestClient(
         try {
             val status = withTimeout(timeoutMs) { http.get(url).status }
             if (status.value >= 400) throw AppError.Server(status.value, "probe $url")
-            return Clock.System.now().toEpochMilliseconds() - started
-        } catch (timeout: TimeoutCancellationException) {
-            throw AppError.Timeout("probe $url")
-        } catch (error: AppError) {
-            throw error
-        } catch (throwable: Throwable) {
-            throw ErrorMapper.from(throwable, "probe $url")
-        }
-    }
-
-    /**
-     * 探 Web UI 是否可用：`GET /` 必须 2xx **且**返回 HTML。
-     *
-     * 只判状态码不够 —— 缺 `web_dist` 时上游在 `/` 返回的是一个占位页（也是 200），
-     * 浏览器里看到的不是界面，所以还要看 content-type。
-     */
-    suspend fun probeWeb(baseUrl: String, timeoutMs: Long = Timeouts.HEALTH_MS): Long {
-        val url = baseUrl.trim().trimEnd('/') + "/"
-        val started = Clock.System.now().toEpochMilliseconds()
-        try {
-            val response = withTimeout(timeoutMs) { http.get(url) }
-            if (response.status.value >= 400) throw AppError.Server(response.status.value, "probe $url")
-            val contentType = response.headers[HttpHeaders.ContentType].orEmpty()
-            if (!contentType.contains("text/html", ignoreCase = true)) {
-                throw AppError.Server(response.status.value, "probe $url（非 HTML，Web UI 缺失）")
-            }
             return Clock.System.now().toEpochMilliseconds() - started
         } catch (timeout: TimeoutCancellationException) {
             throw AppError.Timeout("probe $url")

@@ -57,16 +57,18 @@ object LocalBackendPlanner {
     }
 
     /**
-     * 后端只有**一个**进程：`dashboard`。
+     * `isolated` 路线（回退用）的后端进程：`dashboard`。
+     *
+     * 默认路线是 `gateway`（见 [GatewayAttachPlanner]），这条只在
+     * `backend.local.engine = isolated` 时启用。
      *
      * `serve` 与 `dashboard` 提供同一套 WS JSON-RPC + REST（上游 help：`serve` 是
      * "Start the Hermes backend server (headless; powers the desktop app and remote backends)"），
-     * 区别只有 `dashboard` 额外提供 Web UI 静态资源。既然客户端和浏览器可以共用同一个端口，
-     * 就没有理由起两个进程 —— 也就不需要 `serve`。
+     * 区别只有 `dashboard` 额外提供 Web UI 静态资源。客户端只用 JSON-RPC + REST，
+     * 但 `dashboard` 的 `--skip-build`/`--isolated` 语义更明确，所以回退路线仍用它。
      *
-     * `--no-open`：别让它自己拉起系统浏览器，界面在客户端里。
-     * `--skip-build`：运行时不构建前端（要几十秒且要 npm 依赖）；payload 必须自带 `web_dist`，
-     * 由 `bundle-windows` 构建时保证，[hasWebDist] 用于启动前自检。
+     * `--no-open`：别让它自己拉起系统浏览器。
+     * `--skip-build`：运行时不构建前端（要几十秒且要 npm 依赖）。
      * `--isolated`：**必须加**。缺了它，机器上已有别的 dashboard（例如官方桌面端占着 9119）时，
      * 新起的进程会 attach 到那台 host 后端并 exit 0（`Hermes dashboard already running on this host`），
      * 我们的就绪判定只能看到"进程立刻退出"，本地后端就永远起不来（实测）。
@@ -110,15 +112,6 @@ object LocalBackendPlanner {
         browserArgs = browserArgs,
         elevated = elevated,
     )
-
-    /**
-     * payload 是否带 Web UI 静态资源。
-     *
-     * 缺了不影响 JSON-RPC / REST（客户端照常工作），但浏览器打开同一端口会是占位页 ——
-     * 状态栏的「服务」一项就靠这个显示无响应，所以启动时先判一次并写进日志。
-     */
-    fun hasWebDist(payloadDir: String, exists: (String) -> Boolean): Boolean =
-        exists(path(payloadDir, "hermes-agent", "hermes_cli", "web_dist", "index.html"))
 
     fun readyFile(dataDir: String, name: String): String = path(dataDir, "runtime", name)
 

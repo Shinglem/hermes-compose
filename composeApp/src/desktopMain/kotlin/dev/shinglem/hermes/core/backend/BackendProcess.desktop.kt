@@ -69,8 +69,61 @@ class DesktopBackendProcess(private val spec: BackendLaunchSpec) : BackendProces
     }
 }
 
-/** ready 文件与 payload 探测走 `java.io.File`；只在 desktop 目标使用。 */
-object DesktopFsProbe : FsProbe {
+/**
+ * 一次性执行（`gateway ensure` / `gateway stop`）。
+ *
+ * **刻意不把进程绑进 Job Object**：`ensure` 拉起的 gateway daemon 用
+ * `CREATE_BREAKAWAY_FROM_JOB` 脱离父作业，而 Windows 只允许在作业显式设置
+ * `JOB_OBJECT_LIMIT_BREAKAWAY_OK` 时 breakaway。把 ensure 塞进我们那个不允许 breakaway 的作业，
+ * 就等于让 daemon 永远起不来 —— 这是这条路线最隐蔽的坑。
+ *
+ * stdout / stderr 分两路各起一个读线程：只读一路会让另一路的管道缓冲区写满，把子进程憋死。
+ */
+object DesktopOneShotRunner : OneShotRunner {
+
+    override fun run(spec: BackendLaunchSpec): OneShotResult {
+        val builder = ProcessBuilder(listOf(spec.exe) + spec.args).apply {
+            directory(File(spec.workDir))
+            redirectErrorStream(false)
+            environment().clear()
+            environment().putAll(spec.env)
+        }
+        val process = builder.start()
+
+        val stdout = StringBuilder()
+        val stderr = StringBuilder()
+        val outPump = thread(isDaemon = true, name = "hermes-oneshot-out") {
+            runCatching {
+                process.inputStream.bufferedReader(Charsets.UTF_8).forEachLine { stdout.appendLine(it) }
+            }
+        }
+        val errPump = thread(isDaemon = true, name = "hermes-oneshot-err") {
+            runCatching {
+                process.errorStream.bufferedReader(Charsets.UTF_8).forEachLine { stderr.appendLine(it) }
+            }
+        }
+
+        val finished = runCatching {
+            process.waitFor(spec.timeoutMs, TimeUnit.MILLISECONDS)
+        }.getOrDefault(false)
+        if (!finished) {
+            process.descendants().forEach { runCatching { it.destroyForcibly() } }
+            process.destroyForcibly()
+            runCatching { process.waitFor(3, TimeUnit.SECONDS) }
+        }
+        // 读线程是 daemon：进程结束后它们会自行收尾，但这里等一下才能拿到完整输出。
+        outPump.join(2_000)
+        errPump.join(2_000)
+
+        return OneShotResult(
+            exitCode = if (finished) runCatching { process.exitValue() }.getOrDefault(-1) else -1,
+            stdout = stdout.toString(),
+            stderr = stderr.toString(),
+        )
+    }
+}
+
+/** ready 文件与 payload 探测走 `java.io.File`；只在 desktop 目标使用。 */object DesktopFsProbe : FsProbe {
     override fun exists(path: String): Boolean = path.isNotBlank() && File(path).exists()
 
     override fun readTextOrNull(path: String): String? = runCatching {

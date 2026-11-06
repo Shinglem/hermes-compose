@@ -24,7 +24,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import dev.shinglem.hermes.core.app.LaunchResult
 import dev.shinglem.hermes.core.app.OfficialDesktopLauncher
+import dev.shinglem.hermes.core.app.SharedBackendState
 
 /**
  * 调试页（v0.2.0~，v1.0.0 移除；见 ADR-045）。
@@ -74,9 +76,39 @@ fun DebugPage(
             launcher.dataDir,
             style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
         )
+        Spacer(Modifier.height(8.dp))
+        Text("共用后端", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        when (val shared = launcher.sharedBackend) {
+            is SharedBackendState.Ready -> Text(
+                shared.origin,
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            )
+
+            is SharedBackendState.Unavailable -> Text(
+                shared.reason,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "官方桌面端会以 remote 客户端身份连到上面这个地址，不会再起自己的后端。" +
+                "后端未就绪时按钮不可用 —— 否则它会另起一套后端，两边的会话就分叉了。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = { result = if (launcher.launch()) "已启动官方桌面端" else "启动失败（详见日志）" }) {
+            Button(
+                onClick = {
+                    result = when (val outcome = launcher.launch()) {
+                        is LaunchResult.Started -> "已启动，共用后端 ${outcome.origin}"
+                        is LaunchResult.Refused -> "已拒绝：${outcome.reason}"
+                        is LaunchResult.Failed -> "启动失败：${outcome.reason}"
+                    }
+                },
+                enabled = launcher.sharedBackend is SharedBackendState.Ready,
+            ) {
                 Text("启动官方桌面端")
             }
             OutlinedButton(onClick = { result = null }) { Text("清除提示") }

@@ -20,6 +20,26 @@ interface BackendLauncher {
     fun launch(spec: BackendLaunchSpec): BackendProcess
 }
 
+/** 一次性命令的结果（`gateway ensure` / `gateway stop` 这类「跑完就退」的调用）。 */
+data class OneShotResult(
+    val exitCode: Int,
+    val stdout: String,
+    val stderr: String,
+) {
+    /** 上游把协议数据放 stdout、把日志放 stderr，所以诊断只取 stderr 尾部。 */
+    fun stderrTail(lines: Int = 8): String? =
+        stderr.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+            .takeLast(lines).joinToString("\n").ifBlank { null }
+}
+
+/**
+ * 阻塞式一次性执行。与 [BackendLauncher] 分开：那个返回长期存活的进程句柄，
+ * 这个只关心「跑完、退出码、输出」，且必须在 [BackendLaunchSpec.timeoutMs] 内结束。
+ */
+interface OneShotRunner {
+    fun run(spec: BackendLaunchSpec): OneShotResult
+}
+
 /** ready 文件与 payload 的存在性探测（desktop 用 `java.io.File` 实现）。 */
 interface FsProbe {
     fun exists(path: String): Boolean

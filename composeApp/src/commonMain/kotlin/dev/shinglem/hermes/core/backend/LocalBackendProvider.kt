@@ -69,11 +69,7 @@ class LocalBackendProvider(
             // 那会连到机器上另一个 Hermes（本机就有 9119），把会话串到别人的数据上。
             ?: GatewayTarget(baseUrl = "http://127.0.0.1:0")
 
-    /** Web UI 地址（浏览器里打开 dashboard）。 */
-    val dashboardUrl: String? get() = (state.value as? BackendBootState.Ready)?.dashboardUrl
-
-    override suspend fun start() {
-        if (state.value is BackendBootState.Ready) return
+    override suspend fun start() {        if (state.value is BackendBootState.Ready) return
         stopProcesses()
 
         if (!LocalBackendPlanner.isSealedPayload(payloadDir, fs::exists)) {
@@ -118,14 +114,6 @@ class LocalBackendProvider(
         if (actualOwner == null) fs.writeText(marker, expectedOwner)
 
         step("启动后端（dashboard）")
-        if (!LocalBackendPlanner.hasWebDist(payloadDir, fs::exists)) {
-            // 不阻断启动：JSON-RPC / REST 正常，只是浏览器打不开 Web UI。
-            logger.log(
-                LogLevel.WARN,
-                "local backend: payload 缺 hermes_cli/web_dist，Web UI 不可用" +
-                    "（重新从 hermes-bundle 的 Release 下载完整 payload）",
-            )
-        }
         val spec = LocalBackendPlanner.backendSpec(
             payloadDir, homeDir, dataDir, token, nonce, parentPid, parentStartMarker, local, osEnv,
             browserHeaded = browserHeaded,
@@ -138,12 +126,8 @@ class LocalBackendProvider(
         val connectHost = localConnectHost(local.host)
         logger.log(LogLevel.INFO, "local backend ready on $connectHost:$port")
 
-        // 同一个端口同时是 gateway 与 Web UI：浏览器开 http://<connectHost>:<port> 即可。
         val baseUrl = "http://$connectHost:$port"
-        _state.value = BackendBootState.Ready(
-            target = GatewayTarget(baseUrl = baseUrl, token = token),
-            dashboardUrl = baseUrl,
-        )
+        _state.value = BackendBootState.Ready(target = GatewayTarget(baseUrl = baseUrl, token = token))
     }
 
     override suspend fun stop() {

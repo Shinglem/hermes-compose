@@ -38,9 +38,8 @@ data class ShellState(
     val backendKind: BackendKind = BackendKind.REMOTE,
     val backend: BackendBootState = BackendBootState.Idle,
     val backendLogs: List<BackendLogLine> = emptyList(),
-    /** 心跳：gateway（JSON-RPC/REST）与 dashboard（Web UI）分别探测。 */
+    /** 心跳：后端只有官方 gateway 一条链路，只探它。 */
     val gatewayProbe: ProbeState = ProbeState.Idle,
-    val dashboardProbe: ProbeState = ProbeState.Idle,
 ) {
     val profilesOrEmpty: List<ProfileSummary> get() = profiles.valueOrNull.orEmpty()
 
@@ -107,8 +106,7 @@ class ShellViewModel(
     }
 
     /**
-     * 心跳：同端口的两个能力分开探 —— `网关` 探 `/api/status`（JSON-RPC / REST），
-     * `服务` 探 `/`（Web UI）。两者可以一好一坏：payload 缺 `web_dist` 时正是这种形态。
+     * 心跳：只探官方 gateway（`/api/status`，JSON-RPC / REST 都在这台 listener 上）。
      *
      * 探 HTTP 而不是只看 WS 连接 —— WS 半死时 socket 可能还在，而 HTTP 已经不通。
      */
@@ -126,31 +124,11 @@ class ShellViewModel(
         // 本地后端还没就绪时探活只会刷失败：跳过，等 Ready。
         if (boot !is BackendBootState.Ready && backend.kind == BackendKind.LOCAL) return
 
-        val gatewayBase = backend.currentTarget().baseUrl
-        val gatewayProbe = probe(gatewayBase)
-        // 服务（Web UI）地址：Local 由后端报告；Remote 没有报告，但 dashboard 的 Web UI
-        // 与网关**同端口**（9119），所以直接探同一个 base —— 否则 remote 模式永远看不到「服务」。
-        val serviceUrl = (boot as? BackendBootState.Ready)?.dashboardUrl
-            ?: gatewayBase.takeIf { backend.kind == BackendKind.REMOTE }
-        val dashboardProbe = if (serviceUrl.isNullOrBlank()) {
-            ProbeState.Idle
-        } else {
-            probeService(serviceUrl)
-        }
-
-        _state.update { it.copy(gatewayProbe = gatewayProbe, dashboardProbe = dashboardProbe) }
+        _state.update { it.copy(gatewayProbe = probe(backend.currentTarget().baseUrl)) }
     }
 
     private suspend fun probe(baseUrl: String): ProbeState = try {
         ProbeState.Ok(restClient.probeStatus(baseUrl))
-    } catch (cancelled: CancellationException) {
-        throw cancelled
-    } catch (throwable: Throwable) {
-        ProbeState.Fail(throwable.message?.takeIf { it.isNotBlank() } ?: "无响应")
-    }
-
-    private suspend fun probeService(baseUrl: String): ProbeState = try {
-        ProbeState.Ok(restClient.probeWeb(baseUrl))
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (throwable: Throwable) {
