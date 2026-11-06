@@ -1186,59 +1186,65 @@ class ChatViewModel(
     private fun adoptSnapshotPrompts(key: SessionKey, resumed: ResumedSession) {
         adoptSnapshotQueue(key, resumed)
         if (resumed.prompts.isEmpty()) return
-        val knownApprovals = _state.value.pendingApprovals.map { it.requestId }.toSet()
-        val knownClarify = _state.value.pendingClarify.map { it.requestId }.toSet()
+        val added = resumed.prompts.sumOf { adoptOnePrompt(key, it, resumed.runtimeId) }
+        if (added == 0) return
+        Log.info("pending prompts restored from snapshot: total=${resumed.prompts.size} added=$added")
+    }
 
-        val approvals = mutableListOf<PendingApproval>()
-        val clarifies = mutableListOf<PendingClarify>()
-        resumed.prompts.forEach { prompt ->
-            // 新增"等待用户"的类型必须在这里显式加分支（见
-            // `.design/详细设计/工程与代码/11-后端API调用规范.md` §5）：
-            // 漏一个就是"后端在等、界面上什么都没有"，静默卡死且没有任何错误日志。
-            when (prompt.kind) {
-                "approval" -> if (prompt.promptId !in knownApprovals) {
-                    approvals += PendingApproval(
-                        requestId = prompt.promptId,
-                        command = prompt.command,
-                        description = prompt.description,
-                        choices = prompt.choices,
-                        runtimeSessionId = resumed.runtimeId,
-                        // 帧已经不存在，只能走 `approval.respond`。
-                        fromRequest = false,
-                        sessionKey = key,
-                    )
-                }
-                "clarify" -> if (prompt.promptId !in knownClarify) {
-                    clarifies += PendingClarify(
-                        requestId = prompt.promptId,
-                        frameId = "",
-                        questions = listOf(
-                            ClarifyQuestion(
-                                qid = prompt.promptId,
-                                question = prompt.question,
-                                choices = prompt.choices,
-                                multiSelect = prompt.multiSelect,
-                            ),
+    /**
+     * 把一条待应答请求补成卡片；返回是否真的加进去了（已存在则跳过）。
+     *
+     * **两条来源共用**（快照 `prompts[]` 与事件 `approval.request` / `clarify.request`）：
+     * 0.23.0 的 gateway 路线只发事件、不发 server→client 请求帧，只做后者卡片永远不弹。
+     */
+    private fun adoptOnePrompt(key: SessionKey, prompt: ResumedPrompt, runtimeId: String?): Int {
+        val sessionId = runtimeId ?: runtimeIds[key]
+        return when (prompt.kind) {
+            "approval" -> {
+                if (_state.value.pendingApprovals.any { it.requestId == prompt.promptId }) return 0
+                val approval = PendingApproval(
+                    requestId = prompt.promptId,
+                    command = prompt.command,
+                    description = prompt.description,
+                    choices = prompt.choices,
+                    runtimeSessionId = sessionId,
+                    // 没有请求帧可回，只能走 `approval.respond`。
+                    fromRequest = false,
+                    sessionKey = key,
+                )
+                _state.update { it.copy(pendingApprovals = it.pendingApprovals + approval) }
+                onApprovalRequested?.invoke(approval, key)
+                1
+            }
+            "clarify" -> {
+                if (_state.value.pendingClarify.any { it.requestId == prompt.promptId }) return 0
+                val clarify = PendingClarify(
+                    requestId = prompt.promptId,
+                    frameId = "",
+                    questions = listOf(
+                        ClarifyQuestion(
+                            qid = prompt.promptId,
+                            question = prompt.question,
+                            choices = prompt.choices,
+                            multiSelect = prompt.multiSelect,
                         ),
-                        runtimeSessionId = resumed.runtimeId,
-                        sessionKey = key,
-                        promptId = prompt.promptId,
-                        executionGeneration = prompt.executionGeneration ?: resumed.executionGeneration,
-                    )
-                }
-                else -> Log.warn("snapshot prompt kind=${prompt.kind} 未处理（可能会卡住这一轮）")
+                    ),
+                    runtimeSessionId = sessionId,
+                    sessionKey = key,
+                    promptId = prompt.promptId,
+                    executionGeneration = prompt.executionGeneration ?: generations[key],
+                )
+                _state.update { it.copy(pendingClarify = it.pendingClarify + clarify) }
+                onClarifyRequested?.invoke(clarify, key)
+                1
+            }
+            // 新增"等待用户"的类型必须在这里显式加分支（见 11-后端API调用规范.md §5）：
+            // 漏一个就是"后端在等、界面上什么都没有"，静默卡死且没有任何错误日志。
+            else -> {
+                Log.warn("snapshot/event prompt kind=${prompt.kind} 未处理（可能会卡住这一轮）")
+                0
             }
         }
-        if (approvals.isEmpty() && clarifies.isEmpty()) return
-        _state.update { current ->
-            current.copy(
-                pendingApprovals = current.pendingApprovals + approvals,
-                pendingClarify = current.pendingClarify + clarifies,
-            )
-        }
-        Log.info("pending prompts restored from snapshot: approvals=${approvals.size} clarify=${clarifies.size}")
-        approvals.forEach { onApprovalRequested?.invoke(it, key) }
-        clarifies.forEach { onClarifyRequested?.invoke(it, key) }
     }
 
     override val storedSessionId: String? get() = _state.value.key?.sessionId
@@ -1291,6 +1297,34 @@ class ChatViewModel(
         // 认不出归属的事件（sessionId 为空，或不是本端已知的 runtime）按原规则过滤。
         if (event.sessionId != null && event.sessionId != runtimeId) {
             Log.debug("chat event ignored ${event.type} sid=${event.sessionId} (current=$runtimeId)")
+            return
+        }
+        // 后端在等人：gateway 路线**只发事件**，不发 server→client 请求帧。
+        // 漏了这两条，卡片永远不弹（只有刷新才从快照里补出来 —— 实测踩过）。
+        if (event.type == GatewayEventTypes.APPROVAL_REQUEST ||
+            event.type == GatewayEventTypes.CLARIFY_REQUEST
+        ) {
+            (event.payload as? JsonObject)?.toResumedPrompt()?.let { prompt ->
+                if (adoptOnePrompt(key, prompt, runtimeId) > 0) {
+                    Log.info("pending prompt from event: kind=${prompt.kind} id=${prompt.promptId}")
+                }
+            }
+            return
+        }
+        if (event.type == GatewayEventTypes.REQUEST_CANCEL) {
+            val payload = event.payload as? JsonObject
+            val id = (payload?.get("id") as? JsonPrimitive)?.contentOrNull
+            val method = (payload?.get("method") as? JsonPrimitive)?.contentOrNull
+            if (id != null) {
+                _state.update { current ->
+                    current.copy(
+                        pendingApprovals = current.pendingApprovals.filterNot { it.requestId == id },
+                        pendingClarify = current.pendingClarify.filterNot { it.requestId == id },
+                    )
+                }
+                approvalDecisions.remove(id)?.complete(CHOICE_DENY)
+                Log.info("request.cancel method=$method id=$id")
+            }
             return
         }
         Log.debug("chat event ${event.type} sid=${event.sessionId}")

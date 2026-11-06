@@ -25,6 +25,21 @@ object GatewayEventTypes {
     const val READY = "gateway.ready"
     const val SKIN_CHANGED = "skin.changed"
     const val SESSIONS_CHANGED = "sessions.changed"
+
+    /**
+     * 后端在等人：`kind=approval` / `kind=clarify`。
+     *
+     * **0.23.0 的 gateway 路线用事件通知，不发 `server→client` 请求帧**（实测：
+     * 触发审批时只收到 `approval.request` 事件，`saw_approval_frame=False`）。
+     * payload 里带 `prompt_id` + `execution_generation`，作答走 `approval.respond` /
+     * `clarify.respond`。只实现请求帧路径的话，卡片永远不弹，只有刷新时从
+     * `session.resume` 的 `prompts[]` 补出来。
+     */
+    const val APPROVAL_REQUEST = "approval.request"
+    const val CLARIFY_REQUEST = "clarify.request"
+
+    /** 后端撤回了请求（超时 / 中断 / 别的客户端已答）：卡片要关掉。 */
+    const val REQUEST_CANCEL = "request.cancel"
     const val MESSAGE_START = "message.start"
     const val MESSAGE_DELTA = "message.delta"
     const val MESSAGE_INTERIM = "message.interim"
@@ -37,9 +52,6 @@ object GatewayEventTypes {
     const val SESSION_USAGE = "session.usage"
     const val STATUS_UPDATE = "status.update"
     const val ERROR = "error"
-
-    /** 后端撤回一个等待中的 server→client 请求（审批超时 / 中断）。 */
-    const val REQUEST_CANCEL = "request.cancel"
 
     /** agent 自己的后台进程输出增量（只读镜像 / 后台任务详情）。 */
     const val AGENT_TERMINAL_OUTPUT = "agent.terminal.output"

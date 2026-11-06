@@ -116,21 +116,7 @@ class ChatRepository(
             ?: throw AppError.Protocol("session.resume returned no session_id")
         val info = obj["info"] as? JsonObject
         val prompts = (obj["prompts"] as? JsonArray)?.mapNotNull { row ->
-            val item = row as? JsonObject ?: return@mapNotNull null
-            val kind = item.stringOrNull("kind") ?: return@mapNotNull null
-            val promptId = item.stringOrNull("prompt_id") ?: return@mapNotNull null
-            ResumedPrompt(
-                kind = kind,
-                promptId = promptId,
-                executionGeneration = (item["execution_generation"] as? JsonPrimitive)?.intOrNull,
-                question = item.stringOrNull("question").orEmpty(),
-                choices = (item["choices"] as? JsonArray)
-                    ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
-                    ?: emptyList(),
-                multiSelect = (item["multi_select"] as? JsonPrimitive)?.booleanOrNull == true,
-                command = item.stringOrNull("command").orEmpty(),
-                description = item.stringOrNull("description").orEmpty(),
-            )
+            (row as? JsonObject)?.toResumedPrompt()
         }.orEmpty()
         val pending = (obj["pending"] as? JsonArray)?.mapNotNull { row ->
             val item = row as? JsonObject ?: return@mapNotNull null
@@ -606,6 +592,28 @@ data class PromptAck(
 
 private fun JsonObject.stringOrNull(key: String): String? =
     (this[key] as? JsonPrimitive)?.contentOrNull
+
+/**
+ * 一条 `kind=approval|clarify` 的待应答请求。
+ *
+ * **快照的 `prompts[]` 与事件 `approval.request` / `clarify.request` 的 payload 是同构的**，
+ * 所以两条来源共用这一个解析器（见 `.design/详细设计/工程与代码/11-后端API调用规范.md` §5）。
+ */
+internal fun JsonObject.toResumedPrompt(): ResumedPrompt? {
+    val kind = stringOrNull("kind") ?: return null
+    val promptId = stringOrNull("prompt_id") ?: return null
+    return ResumedPrompt(
+        kind = kind,
+        promptId = promptId,
+        executionGeneration = (this["execution_generation"] as? JsonPrimitive)?.intOrNull,
+        question = stringOrNull("question").orEmpty(),
+        choices = (this["choices"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+            ?: emptyList(),
+        multiSelect = (this["multi_select"] as? JsonPrimitive)?.booleanOrNull == true,
+        command = stringOrNull("command").orEmpty(),
+        description = stringOrNull("description").orEmpty(),
+    )
+}
 
 data class TranscriptPage(
     val sessionId: String,
