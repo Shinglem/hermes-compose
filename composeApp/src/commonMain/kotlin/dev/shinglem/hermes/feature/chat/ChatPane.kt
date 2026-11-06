@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.geometry.Offset
+import kotlin.math.abs
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -221,9 +223,13 @@ fun ChatPane(
                 // 触屏拖动（`scrollable` 不认鼠标类型拖动，见 touchDragScroll 说明）。
                 .touchDragScroll(listState, onUserDrag = { followTail = false })
                 .onPointerEvent(PointerEventType.Scroll) { event ->
-                    val delta = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                    val delta = event.changes.firstOrNull()?.scrollDelta ?: Offset.Zero
+                    // 只处理**垂直**滚动。Shift+滚轮 / 触摸板双指横划（以及公式块的横向滚动）
+                    // 的 delta 全在 x 上、y 为 0；按 `y >= 0` 判定会被当成「向下滚」，
+                    // 于是整篇文档跳到最底部 —— 真机反馈的就是这个。
+                    if (abs(delta.x) >= abs(delta.y) || delta.y == 0f) return@onPointerEvent
                     // 向上滚 = 看历史，暂停跟随；向下滚 = 恢复跟随。
-                    followTail = delta >= 0f
+                    followTail = delta.y > 0f
                 },
         ) {
             // 两侧留白随窗宽变化：触屏上手指落在文字里会被 SelectionContainer 接走变成**选中**
