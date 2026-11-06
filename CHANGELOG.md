@@ -5,6 +5,81 @@
 
 ---
 
+## [0.4.2] · 2026-11-06（hermes 0.22.5）
+
+> **patch 版本**：相对 `v0.4.1` 只改客户端外壳（`bin/App.jar` + 2 个 `lib/*.jar` + `app/*.cfg`），
+> 覆盖式升级，`config/` 与 `data/` 不动。payload 与工具链都不变，仍是 hermes 0.22.5 / `toolchain-v1`。
+
+### 新增
+
+- **外部编辑器唤起**（设置 → 桌面 → 外部编辑器）：工具卡片（`write_file` / `read_file` / `patch`）
+  标题行出现「打开」按钮，用配置好的编辑器打开文件、文件所在文件夹、会话项目根，或对比两个文件。
+  支持多个编辑器配置、五种动作各自开关与参数模板（`{path}` / `{line}` / `{dir}` / `{file1}` / `{file2}`），
+  某动作关闭时回退到「打开文件」。默认模板走新窗口（`--new-window {path}`），不顶掉你正在用的窗口。
+- **代码高亮引擎换成 SyntaxMP**：54 个语言标签，另外用手写 extension 补上 bat / cmd / vue / xaml /
+  svg / cfg / jsonc / scala / lua 等 GFM 词法器没有的语言。
+- **代码块行号 + 整行高亮**：围栏信息串可写 ```` ```kotlin {3,5-7} ````，左侧独立行号列（右对齐），
+  高亮行是整行通栏底色 + 左侧强调条。
+- **文内锚点跳转**：标题按 GitHub slug 生成锚点，`[文字](#标题)` 在应用内滚动而不打开浏览器；
+  脚注引用渲染成上标且可点，脚注定义区每条末尾加「↩」回跳。
+- **图片块级化 + 点击放大**：独占一行的图片升级为块级（受视口限高），点击全屏预览。
+- **长公式横向滚动**：块级公式溢出时横向滚动，并显示滚动条（桌面端默认不画，溢出了也看不出来）。
+- **浏览器相关两个设置项**（设置 → 桌面 → 浏览器）：「显示浏览器窗口」（`app.browser.headed`）与
+  Chromium 启动参数（`app.browser.args`，以管理员运行时自动补 `--no-sandbox`）。
+  **当前受上游阻塞不可用**，见「已知问题」。
+
+### 变更
+
+- **会话创建时注入渲染能力说明**：通过 `session.create` 的 `client_env`
+  （`HERMES_EPHEMERAL_SYSTEM_PROMPT`）告诉 agent 本客户端真实的渲染能力，**不写任何后端配置文件**。
+  起因见下面「修复」的第 2 条 —— 会话面改成 `tui` 后，agent 把整个会话当成终端自我审查
+  （说过「这是 TUI，没有附件通道」「终端里公式不渲染」，对本客户端都是错的）。
+  只对**新建**会话生效；`resume` 与「复制为新会话」不接受这个字段。
+
+### 修复
+
+- **多个审批只弹出一条系统通知**：`tag` 原本是常量，WinRT 语义下同 `tag`+`group` 是「更新同一条」，
+  后发的直接替换先发的；token 表也在每次 `show()` 里整体清空，导致前一条的按钮点了没反应。
+  现在 `tag` 按请求唯一（16 字符上限内），token 表按 `tag` 分桶。
+- **回答退化成命令行风格（丢 Markdown 排版）**：我们拉起后端时设了 `HERMES_DESKTOP=1`，后端据此把会话
+  判成 `desktop`，下发 `desktop_ui` 工具集；那套工具要求客户端有 Electron 渲染进程里的预览面板应答
+  `preview.read` 这类阻塞请求，我们没有，于是 agent 用 `desktop_preview` 一律 45 秒超时。
+  改成显式传会话面后工具集变干净，但一开始选的是 `cli`，而后端 `cli` 的提示词明确要求「不许用
+  Markdown」。现在统一用 `tui`（工具集与 `cli` 相同，提示词不禁止 Markdown）。
+- **块级公式显示成源码**：GFM 只认「整段 `$$…$$`」，块内某行像别的块语法时（真机案例：续行以
+  ` + \left(…` 开头被当成无序列表）整段会被拆成「段落 + 列表」，公式再也拼不回来，
+  还连带把 `\sum_{i=1}` 里的 `_` 当强调吃掉。现在解析前把独占一行的 `$$…$$` 改写成 ` ```math ` 围栏
+  （围栏内部不参与块语法），渲染时再还原成公式块。
+- **在公式区横向滚动会把整篇文档弹到底部**：滚动监听用 `scrollDelta.y >= 0` 判定「向下滚 → 恢复跟随」，
+  而横向滚事件的 `y` 恒为 0，`0 >= 0` 成立，于是立刻补滚到底。现在只认垂直主导向的滚动。
+- **外部编辑器菜单出现 3 条一模一样的「打开文件」**：菜单项复用了「动作不可用时回退到打开文件」
+  的逻辑，于是「打开所在文件夹」「对比两个文件」「定位到行」全塌成同一条。现在菜单不回退并按命令去重。
+- **公式引擎失效时无任何提示**：ratex 把 native dll 解压到 `%LOCALAPPDATA%\RaTeX`，解压是「先删后拷」，
+  目标被别的进程占用时整条公式渲染会静默退化成源码。现在 `startup.log` 启动时记一行
+  `formula ratex=ok` / `ratex=FAILED <路径>`。
+- **从桌面端启动官方对照客户端后停在「配置后端」向导**：缺 `HERMES_DESKTOP_REMOTE_URL` 与
+  `HERMES_DESKTOP_REMOTE_TOKEN`（两者必须同时给，只给 URL 会直接抛错），于是它走「自己拉起后端」
+  的本地路径。现在把正在跑的后端地址与会话 token 一起传过去，启动后直接进会话列表。
+
+### 已知问题
+
+- **`browser_exec` 在管理员权限下起不来**（`Chrome exited early (exit code: 0) without writing
+  DevToolsActivePort`）。后端 `_needs_chromium_sandbox_bypass()` 只判 Linux root / Docker / AppArmor，
+  Windows 恒 false；我们已按提权状态注入 `AGENT_BROWSER_ARGS=--no-sandbox,--disable-dev-shm-usage`，
+  但上游修复（#1430）未合并，稳定版仍拿不到。**本版不承诺浏览器工具可用**；
+  设置页的两个开关会保留，等上游修好。
+  同一台机器上管理员运行的后端也解释了为什么官方对照客户端没这个问题 —— 它用 Electron 内置的
+  渲染进程，不起外部 Chrome。
+
+### 升级
+
+1. 下载 `hermes-desktop-compose-0.4.2-patch.zip` 与 `SHA256SUMS.txt`，先核对 SHA-256；
+2. 退出正在运行的客户端（托盘图标 → 退出）；
+3. 把 zip 里的 `bin/`、`lib/`、`app/` 覆盖到安装目录（保持相对结构，`config/` 与 `data/` 不要动）；
+4. 确认 `lib/syntaxmp-tokenizer-jvm-0.3.0.jar` 已就位 —— 它是本版**新增**的依赖，
+   缺了会在打开带代码块的消息时 `NoClassDefFoundError`；
+5. 重新启动客户端。`logs/startup.log` 里应出现 `formula ratex=ok`。
+
 ## [0.4.1] · 2026-11-05（hermes 0.22.5）
 
 > **patch 版本**：相对 `v0.4.0-0.22.5` 只改客户端外壳（`bin/App.jar` + 若干 `lib/*.jar` + `app/*.cfg`），
@@ -381,7 +456,7 @@ jlink 裁剪运行时、原生启动器打包、单实例与自启任务清理�
 
 | 数字 | 在哪 | 谁生成 | 谁消费 |
 |---|---|---|---|
-| `appVersion = "0.4.1"` | `composeApp/build.gradle.kts` | 手工 | jpackage 的 `packageVersion` / `-Djpackage.app-version`、启动器 cfg、发布资产文件名 |
+| `appVersion = "0.4.2"` | `composeApp/build.gradle.kts` | 手工 | jpackage 的 `packageVersion` / `-Djpackage.app-version`、启动器 cfg、发布资产文件名 |
 | `v<桌面版本>-<hermes版本>` | GitHub Release tag | `desktop-release` 按输入拼 | 发布资产入口、`gh release download` |
 
 **tag 就是唯一版本号**，形如 `v0.4.0-0.22.5`：前半是桌面端版本（对应 `appVersion`），
@@ -395,6 +470,7 @@ jlink 裁剪运行时、原生启动器打包、单实例与自启任务清理�
 |---|---|---|
 | 桌面端 | `v0.4.0-0.22.5` | `hermes-desktop-compose-0.4.0-0.22.5-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
 | 桌面端 patch | `v0.4.1` | `hermes-desktop-compose-0.4.1-patch.zip` + `SHA256SUMS.txt`（覆盖式升级，无完整包） |
+| 桌面端 patch | `v0.4.2` | `hermes-desktop-compose-0.4.2-patch.zip` + `SHA256SUMS.txt`（同上） |
 | 工具链 | `toolchain-v1` | `launcher-windows-x64.zip` / `runtime-windows-x64.zip` / `SHA256SUMS.txt` |
 | payload | 另一个仓库 `Shinglem/hermes-bundle` 的 `v0.22.5` | payload 压缩分卷 |
 
