@@ -5,6 +5,26 @@
 
 ---
 
+## [0.5.2] · 2026-11-06（hermes 0.23.0）
+
+> **patch 版本**：只改客户端外壳（`bin/App.jar`），覆盖式升级。修的是 0.5.1 引入的回归 ——
+> 会话列表整片空。
+
+### 修复
+
+- **会话列表一条都不显示**：0.5.1 把列表读取从 RPC `session.list` 改成 REST `GET /api/sessions`
+  （0.23.0 的 RPC 默认只返回运行中的会话），但 `limit` 沿用了旧 RPC 时代的 **200**，
+  而上游该接口的校验是 `Query(le=100)` —— 每次请求都 `422 less_than_equal`，异常被吞成空列表。
+  现在上限统一 clamp 到 100，`RestClient.listSessions` 内部兜底，调用方不再各自记这个数。
+
+### 变更
+
+- 会话加载加了可观测日志（`sessions refresh requested` / `sessions loaded: … count=` /
+  `sessions load failed …`）：空列表最容易误判成"数据丢了"，有了这三行就能立刻分清是
+  后端没给、解析丢了，还是请求根本没发。
+
+---
+
 ## [0.5.1] · 2026-11-06（hermes 0.23.0）
 
 > **patch 版本**：只改客户端外壳（`bin/App.jar`），覆盖式升级，`config/`、`data/` 与 payload 都不动。
@@ -542,6 +562,7 @@ jlink 裁剪运行时、原生启动器打包、单实例与自启任务清理�
 | Release | tag 形式 | 资产 |
 |---|---|---|
 | 桌面端 | `v0.5.0-0.23.0` | `hermes-desktop-compose-0.5.0-0.23.0-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
+| 桌面端 patch | `v0.5.2` | `hermes-desktop-compose-0.5.2-patch.zip` + `SHA256SUMS.txt`（覆盖式升级，无完整包） |
 | 桌面端 patch | `v0.5.1` | `hermes-desktop-compose-0.5.1-patch.zip` + `SHA256SUMS.txt`（覆盖式升级，无完整包） |
 | 桌面端 patch | `v0.4.2` | `hermes-desktop-compose-0.4.2-patch.zip` + `SHA256SUMS.txt`（同上） |
 | 工具链 | `toolchain-v1` | `launcher-windows-x64.zip` / `runtime-windows-x64.zip` / `SHA256SUMS.txt` |
