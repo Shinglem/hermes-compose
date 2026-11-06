@@ -100,7 +100,9 @@ enum class EditorActionKind(val label: String) {
     /** 内置默认模板（VSCode 可直接用；其它编辑器由用户改）。 */
     val defaultTemplate: String
         get() = when (this) {
-            OPEN_FILE -> "{path}"
+            // `--new-window`：不加的话 VS Code 会把文件塞进**当前已有窗口**，
+            // 用户原本的工程上下文就被顶掉了（真机反馈）。
+            OPEN_FILE -> "--new-window {path}"
             OPEN_FILE_AT_LINE -> "--goto {path}:{line}"
             OPEN_FOLDER, OPEN_PROJECT -> "{dir}"
             OPEN_DIFF -> "--diff {file1} {file2}"

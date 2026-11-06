@@ -67,6 +67,19 @@ private fun isSilent(args: Array<String>): Boolean =
     args.any { it.equals("--silent", ignoreCase = true) || it.equals("--tray", ignoreCase = true) }
 
 /**
+ * 公式引擎能否初始化（写进 startup.log 的一行状态）。
+ *
+ * ratex 的 native dll 走「先删后拷」解压，目标被占用时只会静默退化 —— 没有这一行，
+ * 「公式显示成源码」在日志里完全看不出来。
+ */
+private fun ratexStatus(): String =
+    runCatching { Class.forName("io.ratex.RaTeXEngine") }
+        .fold(
+            onSuccess = { "ratex=ok" },
+            onFailure = { error -> "ratex=FAILED ${error.cause?.message ?: error.message}" },
+        )
+
+/**
  * `<home>` 的早期定位：只依赖 `-Dhdc.home` / `HDC_HOME` / exe 位置，**不读配置文件**。
  * 与 [dev.shinglem.hermes.core.config.ConfigPaths.resolveHome] 同一套规则，这里再取一次是为了
  * 在配置解析之前就能建 [StartupLog]。
@@ -134,6 +147,10 @@ fun main(args: Array<String>) {
     startup.info("args", args.joinToString(" ").ifBlank { "(none)" })
     startup.info("cwd", System.getProperty("user.dir").orEmpty())
     startup.info("home", startup.homePath)
+    // 公式引擎的 native dll 由 ratex 自己解压到 `%LOCALAPPDATA%\RaTeX\…`，解压是「先删后拷」：
+    // 目标被别的进程占用时整条公式渲染会**静默**退化成源码。这里提前触发一次并把结果写进日志，
+    // 否则「公式显示成源码」只能靠猜（实测踩过：上一个实例没退干净，新实例全篇公式都是源码）。
+    startup.info("formula", ratexStatus())
 
     // 配置解析在 application{} 之外：失败时只该弹一个原生对话框然后退出，
     // 不要先起一个空窗口再报错。

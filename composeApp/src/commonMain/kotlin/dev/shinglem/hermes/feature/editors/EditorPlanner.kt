@@ -26,6 +26,13 @@ fun planEditorOpen(
     line: Int? = null,
     file1: String? = null,
     file2: String? = null,
+    /**
+     * 该动作自身不可用时是否回退到「打开文件」。
+     *
+     * 直开（[preferredEditorOpen]）要回退；**菜单不要** —— 回退会让「打开所在文件夹」「对比两个文件」
+     * 等好几项都变成同一条「打开文件」，用户看到多个一模一样的菜单项。
+     */
+    allowFallback: Boolean = true,
 ): EditorOpenRequest? {
     if (profile.exePath.isBlank()) return null
     val vars = buildMap {
@@ -79,8 +86,9 @@ fun planEditorOpen(
         )
     }
 
-    // 首选动作拿不到参数就回退到「打开文件」
-    val args = argsFor(kind) ?: if (kind != EditorActionKind.OPEN_FILE) argsFor(EditorActionKind.OPEN_FILE) else null
+    // 首选动作拿不到参数就回退到「打开文件」（菜单项不走这条路，见 allowFallback）
+    val args = argsFor(kind)
+        ?: if (allowFallback && kind != EditorActionKind.OPEN_FILE) argsFor(EditorActionKind.OPEN_FILE) else null
     val actualKind = if (argsFor(kind) != null) kind else EditorActionKind.OPEN_FILE
     return args?.let { EditorOpenRequest(profile, actualKind, it) }
 }
@@ -88,7 +96,13 @@ fun planEditorOpen(
 /**
  * 菜单里该显示哪些「编辑器 × 动作」项。
  *
- * 只有可用的组合才出现：配置被关掉的动作、算不出参数的组合（例如没有 cwd 时的「打开项目」）都不显示。
+ * 只有**该动作自身可用**的组合才出现：配置被关掉的动作、算不出参数的组合（例如没有 cwd 时的
+ * 「打开项目」、没有 diff 上下文时的「对比两个文件」）都不显示。
+ *
+ * 这里**不做回退**（`allowFallback = false`）：回退只在直开时才有意义，放进菜单会让
+ * 「打开所在文件夹」「对比两个文件」等好几项都塌成同一条「打开文件」，出现 3 个一模一样的菜单项。
+ * 最后再按「同一编辑器 + 同一条命令」去重 —— `--goto {path}:{line}` 在没有行号时解析出来
+ * 与「打开文件」完全相同，也属于重复。
  */
 fun editorMenuItems(
     editors: EditorsOptions,
@@ -100,9 +114,10 @@ fun editorMenuItems(
     .filter { it.usable }
     .flatMap { profile ->
         EditorActionKind.entries.mapNotNull { kind ->
-            planEditorOpen(profile, kind, path, dir, cwd, line)
+            planEditorOpen(profile, kind, path, dir, cwd, line, allowFallback = false)
         }
     }
+    .distinctBy { it.profile.id to it.args }
 
 /** 直开（有默认配置时）：只算一个请求，避免弹菜单。 */
 fun preferredEditorOpen(
