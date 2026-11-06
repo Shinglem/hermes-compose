@@ -36,6 +36,7 @@ fun AppError.text(): String = when (this) {
     is AppError.Timeout -> stringResource(Res.string.error_timeout, operation)
     is AppError.Protocol -> stringResource(Res.string.error_protocol, detail)
     is AppError.Server -> stringResource(Res.string.error_server, code, reason)
+    is AppError.Notice -> text
     is AppError.Unknown -> stringResource(Res.string.error_unknown, summary)
 }
 

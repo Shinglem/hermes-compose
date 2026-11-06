@@ -14,5 +14,6 @@ fun AppError.toNotice(): String = when (this) {
     is AppError.Timeout -> "后端响应超时（$operation），稍后重试"
     is AppError.Protocol -> "响应格式异常：$detail"
     is AppError.Server -> "后端返回 $code：$reason"
+    is AppError.Notice -> text
     is AppError.Unknown -> summary
 }

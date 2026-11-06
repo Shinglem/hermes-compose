@@ -27,6 +27,14 @@ sealed class AppError(message: String) : Exception(message) {
     data class Server(val code: Int, val reason: String, val data: JsonElement? = null) :
         AppError("server $code: $reason")
 
+    /**
+     * 面向用户的**业务提示**（不是故障）。
+     *
+     * 例：中途插入被后端拒绝（`unsupported_control`）时说"当前模型不支持中途插入"。
+     * 这类文案不该被套上"响应格式异常 / 后端返回 4001"的外壳。
+     */
+    data class Notice(val text: String) : AppError(text)
+
     data class Unknown(val summary: String) : AppError("unknown: $summary")
 }
 
@@ -38,5 +46,6 @@ fun AppError.technicalSummary(): String = when (this) {
     is AppError.Timeout -> "timeout: $operation"
     is AppError.Protocol -> "protocol: $detail"
     is AppError.Server -> "server $code: $reason"
+    is AppError.Notice -> text
     is AppError.Unknown -> "unknown: $summary"
 }

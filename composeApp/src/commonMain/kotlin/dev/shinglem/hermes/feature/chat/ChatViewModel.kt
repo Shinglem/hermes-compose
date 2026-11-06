@@ -361,8 +361,30 @@ class ChatViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update {
-                    it.copy(sendError = ErrorMapper.from(throwable, RpcMethods.PROMPT_STEER_QUEUED))
+                // `steer_unavailable` / `unsupported_control` 是"当前这一轮接不了中途插入"
+                // （agent 还没起来，或该模型不支持 mid-turn steer），不是参数错误 ——
+                // 直接甩 4001 只会让人以为程序坏了。
+                val reason = (throwable as? AppError.Server)?.reason
+                val notice = when {
+                    reason == null -> null
+                    "steer_unavailable" in reason ->
+                        "这一轮还没开始跑，暂时插不进去；等它跑起来再点，或点「取消」重新发"
+                    "unsupported_control" in reason ->
+                        "当前模型不支持中途插入；它会排在这一轮结束后自动发送（也可以点「取消」）"
+                    "admission_started" in reason -> "这条已经在跑了，不用再插入"
+                    "session_idle" in reason -> "这一轮已经结束，正在发送"
+                    else -> null
+                }
+                Log.info("prompt.steer_queued refused: ${throwable.message}")
+                if (notice != null) {
+                    _state.update { it.copy(sendError = AppError.Notice(notice)) }
+                    if ("session_idle" in notice || "admission_started" in notice) {
+                        _state.update { state -> state.copy(queuedPrompts = state.queuedPrompts - item) }
+                    }
+                } else {
+                    _state.update {
+                        it.copy(sendError = ErrorMapper.from(throwable, RpcMethods.PROMPT_STEER_QUEUED))
+                    }
                 }
             }
         }
@@ -1545,7 +1567,7 @@ class ChatViewModel(
             _state.update { current ->
                 current.copy(
                     streaming = null,
-                    sendError = AppError.Protocol("这一轮没有开始执行（后端已空闲），请重发或检查后端日志"),
+                    sendError = AppError.Notice("这一轮没有开始执行（后端已空闲），请重发或检查后端日志"),
                 )
             }
             // 重新打开一次，把后端侧可能已经落库的内容拉回来。
