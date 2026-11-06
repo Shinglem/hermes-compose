@@ -398,6 +398,9 @@ fun AppShell(
     // 到达时可能正看着（没弹），切走后就该提醒了。被跳过的那条没有进 ReminderGate，
     // 所以这里重新评估就能补上 —— 少了焦点这一项，切后台前到的那几条永远不会补提醒。
     val windowFocused = LocalWindowInfo.current.isWindowFocused
+    // 把主窗口焦点推给平台层：非 Composable 的回调（onApprovalRequested / onTurnFinished）
+    // 也要用同一个判据，否则两边结论可能不一致 —— 那正是"提醒被吞"的来源。
+    LaunchedEffect(windowFocused) { AppFocus.update(windowFocused) }
     LaunchedEffect(
         chatState.pendingApprovals,
         chatState.pendingClarify,
