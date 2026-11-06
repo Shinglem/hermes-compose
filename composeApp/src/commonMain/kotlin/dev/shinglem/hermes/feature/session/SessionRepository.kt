@@ -177,22 +177,28 @@ class SessionRepository(
     /**
      * 删除会话（含 transcript）。
      *
-     * 同样走 REST：`DELETE /api/sessions/{id}`，并带上 `request_id` + `expected_revision`
-     * （缺这两个后端会判 `409 client_upgrade_required`）。
+     * 走 REST `DELETE /api/sessions/{id}`，但 fence 在 **query string** 上
+     * （`request_id` / `expected_revision` / `expected_generation`）——
+     * `hermes_cli/web_routers/sessions.py::delete_session_endpoint` 只声明了 query 参数，
+     * 放进 body 后端一个都读不到，于是三个全是 `None` → `409 client_upgrade_required`
+     * （它的文案是"客户端版本不同步"，极容易误判成版本问题）。
      */
     suspend fun deleteSession(profile: String?, sessionId: String) {
-        val path = withProfileQuery("/api/sessions/$sessionId", profile)
         var attempt = 0
         while (true) {
             val snapshot = mutationSnapshot(profile, sessionId)
                 ?: throw AppError.Server(409, "读不到会话的 mutation-snapshot")
-            val body = buildJsonObject {
-                put("request_id", newRequestId())
-                put("expected_revision", snapshot.revision)
-                snapshot.generation?.let { put("expected_generation", it) }
+            val query = buildString {
+                append("/api/sessions/").append(sessionId.encodeURLParameter())
+                append("?request_id=").append(newRequestId())
+                append("&expected_revision=").append(snapshot.revision)
+                snapshot.generation?.let { append("&expected_generation=").append(it) }
+                profile?.takeIf { it.isNotBlank() }?.let {
+                    append("&profile=").append(it.encodeURLParameter())
+                }
             }
             try {
-                rest.send(RestMethod.DELETE, path, body)
+                rest.send(RestMethod.DELETE, query)
                 return
             } catch (conflict: AppError.Server) {
                 if (attempt++ >= 1) throw ErrorMapper.from(conflict, "sessions.delete")
