@@ -147,10 +147,6 @@ fun main(args: Array<String>) {
     startup.info("args", args.joinToString(" ").ifBlank { "(none)" })
     startup.info("cwd", System.getProperty("user.dir").orEmpty())
     startup.info("home", startup.homePath)
-    // 公式引擎的 native dll 由 ratex 自己解压到 `%LOCALAPPDATA%\RaTeX\…`，解压是「先删后拷」：
-    // 目标被别的进程占用时整条公式渲染会**静默**退化成源码。这里提前触发一次并把结果写进日志，
-    // 否则「公式显示成源码」只能靠猜（实测踩过：上一个实例没退干净，新实例全篇公式都是源码）。
-    startup.info("formula", ratexStatus())
 
     // 配置解析在 application{} 之外：失败时只该弹一个原生对话框然后退出，
     // 不要先起一个空窗口再报错。
@@ -215,6 +211,11 @@ fun main(args: Array<String>) {
         ?: // 探测与占位之间被别的进程抢先了（两个客户端同时启动）。
         exitAsSecondInstance(startup, silent, home)
     startup.info("instance", "acquired home=${home.absolutePath}")
+    // 公式引擎的 native dll 由 ratex 自己解压到 `%LOCALAPPDATA%\RaTeX\…`，解压是「先删后拷」：
+    // 目标被别的进程占用时整条公式渲染会**静默**退化成源码。这里提前触发一次并把结果写进日志，
+    // 否则「公式显示成源码」只能靠猜（实测踩过：上一个实例没退干净，新实例全篇公式都是源码）。
+    // 必须放在单实例获取**之后**：第二个实例只是去唤醒已有窗口，不该去碰那个 dll。
+    startup.info("formula", ratexStatus())
 
     // 开机自启：写计划任务需要管理员，所以放在提权之后再对账（07 篇 §3.6）。
     val autostartStatus = ScheduledAutostart.reconcile(
