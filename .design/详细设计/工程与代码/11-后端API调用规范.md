@@ -134,6 +134,34 @@ params.profile 存在 → 路由到对应 authority（兄弟 profile）
 
 ---
 
+### 2.3 排队与"插队"
+
+`prompt.submit` 的 ack 是 `AdmissionStatus`：`{admission_id, sequence, status, outcome, authority_epoch, execution_generation}`，
+`status` 取 `queued | started | unknown | terminal`。**`queued` 不代表"不属于这一轮"** ——
+新会话的首条消息在 agent 起来前也是 `queued`，判断归属要看"发送时是否正在生成"。
+
+| 想做 | 方法 | 参数要点 |
+|---|---|---|
+| 看还有几条在等 | `session.resume` 的 `pending[]` | 每条有 `admission_id` / `text` / `status` |
+| 让排队那条**立刻**给当前轮用 | `prompt.steer_queued` | `session_id` + `admission_id`（**不要** generation） |
+| 取消排队那条 | `prompt.cancel` | `session_id` + `admission_id` |
+| 改写排队那条 | `prompt.replace_queued` | 再加 `submission_id` + `text` |
+| 更强的整轮转向 | `session.redirect` | 要 `execution_generation`；agent 不支持时报错 |
+
+`prompt.steer_queued` 的拒绝都要当"当前接不了"处理，不是参数错误：
+
+| reason | 含义 | 客户端动作 |
+|---|---|---|
+| `steer_unavailable` | 这一轮还没起 agent | 提示"等它跑起来再点" |
+| `unsupported_control` | 该模型不支持 mid-turn steer | 提示"会排在这一轮结束后自动发送" |
+| `admission_started` | 这条已经在跑了 | 从队列摘掉 |
+| `session_idle` | 这一轮已结束 | 从队列摘掉 |
+
+**没有** admission 状态推送事件（`EVENTS` 里没有 `admission.*`），所以队列只能靠
+`pending[]` + submit 的 ack + `prompt.receipt` 对齐。
+
+---
+
 ## 7. 错误码 → 处置
 
 | code / message | 含义 | 处置 |
