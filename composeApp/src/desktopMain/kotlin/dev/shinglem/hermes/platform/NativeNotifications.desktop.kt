@@ -18,6 +18,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -59,6 +60,18 @@ actual object NativeNotifications {
 
     private val seq = AtomicLong(0)
     private val tagSeq = AtomicLong(0)
+
+    /**
+     * 两条 toast 的最小间隔。
+     *
+     * Windows 对同一时刻到达的多条 toast 只弹**一条**横幅（其余静默进通知中心），
+     * 所以连发没有意义 —— 用户只会看到一条，以为其余丢了。
+     * 1.5s 足够让上一条横幅播完进入可交互状态，又不至于让后一条等太久。
+     */
+    private const val TOAST_GAP_MS = 1_500L
+
+    /** 下一条 toast 最早可发的时间（毫秒时间戳）。原子更新，[show] 可能来自不同线程。 */
+    private val nextToastSlot = AtomicLong(0)
 
     private var homeDir: File? = null
     private var appName: String = ""
@@ -349,20 +362,38 @@ actual object NativeNotifications {
             }
         }
         tokens[tag] = bucket
-        WindowsNotificationCenter.show(
-            content = content,
-            tag = tag,
-            group = GROUP,
-            callback = { error ->
-                if (error != null) {
-                    failed = true
-                    tokens.remove(tag)
-                    Log.warn("toast failed tag=$tag: $error")
-                } else {
-                    Log.info("toast shown tag=$tag buttons=${buttons.size}")
-                }
-            },
-        )
+        // 同时到达的多条 toast，Windows **只弹一条横幅**，其余静默进通知中心（`getHistory()` 里在，
+        // 但用户看不到、不知道有第二个审批）。3 个审批同时到 → 只看见 1 个，就是这个原因。
+        // 所以按 [TOAST_GAP_MS] 间隔逐条发，让每条都有自己的横幅。
+        val now = System.currentTimeMillis()
+        val wait = (nextToastSlot.updateAndGet { prev -> maxOf(prev + TOAST_GAP_MS, now) } - now)
+            .coerceAtLeast(0L)
+        val send = {
+            WindowsNotificationCenter.show(
+                content = content,
+                tag = tag,
+                group = GROUP,
+                callback = { error ->
+                    if (error != null) {
+                        failed = true
+                        tokens.remove(tag)
+                        Log.warn("toast failed tag=$tag: $error")
+                    } else {
+                        Log.info("toast shown tag=$tag buttons=${buttons.size} delayed=${wait}ms")
+                    }
+                },
+            )
+        }
+        if (wait == 0L) {
+            send()
+        } else {
+            mainScope.launch {
+                delay(wait)
+                send()
+            }
+            // 排队中的那条还没结果，先按"已受理"处理：回退自绘窗只在同步失败时才需要。
+            return true
+        }
         return !failed
     }
 
