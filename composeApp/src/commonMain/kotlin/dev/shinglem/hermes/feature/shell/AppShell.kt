@@ -313,6 +313,7 @@ fun AppShell(
         title: String,
         body: String,
         actions: List<NotificationAction> = emptyList(),
+        foreground: Boolean = AppFocus.isForeground,
     ) {
         if (!container.preferences.notificationsEnabled || !SystemNotifications.supported) {
             Log.info("remind skipped id=$id (enabled=${container.preferences.notificationsEnabled} supported=${SystemNotifications.supported})")
@@ -321,25 +322,29 @@ fun AppShell(
         // 正在看这个会话且窗口在前台：不打扰（判据见 NotificationRules）。
         val remind = shouldRemindForSession(
             target = target,
-            foreground = AppFocus.isForeground,
+            foreground = foreground,
             activeProfile = shellViewModel.state.value.activeProfile,
             selectedSessionId = sessionViewModel.state.value.selectedId,
         )
         if (!remind) {
-            Log.info("remind skipped id=$id (foreground and viewing this session)")
+            Log.info("remind skipped id=$id (foreground=$foreground, viewing this session)")
             return
         }
         if (!reminders.shouldRemind(id)) {
             Log.info("remind skipped id=$id (already reminded)")
             return
         }
-        Log.info("remind show id=$id actions=${actions.size} foreground=${AppFocus.isForeground}")
+        Log.info("remind show id=$id actions=${actions.size} foreground=$foreground")
         SystemNotifications.setPendingAction(target?.let { key -> { notifyScope.launch { jumpToSession(key) } } })
         SystemNotifications.show(title, body.take(180), actions)
     }
 
     /** 审批提醒：带上「允许一次 / 拒绝」按钮，通知里就能就地处理（不必先切窗口）。 */
-    fun remindApproval(approval: PendingApproval, target: SessionKey?) {
+    fun remindApproval(
+        approval: PendingApproval,
+        target: SessionKey?,
+        foreground: Boolean = AppFocus.isForeground,
+    ) {
         remind(
             id = "approval:${approval.requestId}",
             target = target,
@@ -351,6 +356,7 @@ fun AppShell(
                 NotificationAction("允许一次") { chatViewModel.resolveApproval(approval.requestId, "once") },
                 NotificationAction("拒绝") { chatViewModel.resolveApproval(approval.requestId, "deny") },
             ),
+            foreground = foreground,
         )
     }
 
@@ -388,15 +394,20 @@ fun AppShell(
         }
     }
 
-    // 用户切走会话 / 切 profile 之后，仍未处理的审批与提问再判断一次：
-    // 到达时可能正看着（没弹），切走后就该提醒了。
+    // 用户切走会话 / 切 profile / **把窗口切到后台**之后，仍未处理的审批与提问再判断一次：
+    // 到达时可能正看着（没弹），切走后就该提醒了。被跳过的那条没有进 ReminderGate，
+    // 所以这里重新评估就能补上 —— 少了焦点这一项，切后台前到的那几条永远不会补提醒。
+    val windowFocused = LocalWindowInfo.current.isWindowFocused
     LaunchedEffect(
         chatState.pendingApprovals,
         chatState.pendingClarify,
         sessionState.selectedId,
         shellState.activeProfile,
+        windowFocused,
     ) {
-        chatState.pendingApprovals.forEach { approval -> remindApproval(approval, approval.sessionKey) }
+        chatState.pendingApprovals.forEach { approval ->
+            remindApproval(approval, approval.sessionKey, windowFocused)
+        }
         chatState.pendingClarify.forEach { clarify ->
             remind(
                 id = "clarify:${clarify.requestId}",
@@ -404,6 +415,7 @@ fun AppShell(
                 title = "${ProductInfo.DISPLAY_NAME} · 等待回答",
                 body = clarify.questions.firstOrNull()?.question?.trim().orEmpty()
                     .ifBlank { "agent 正在等你回答一个问题" },
+                foreground = windowFocused,
             )
         }
     }

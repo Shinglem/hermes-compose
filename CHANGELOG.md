@@ -119,9 +119,16 @@
   作答走 `approval.respond` / `clarify.respond`（要 `prompt_id` + `execution_generation`）。
 - **提交后长期静默**：加了看门狗（90s 无该会话任何事件就对账一次），
   `running=false` 才收尾并提示，`running=true` 继续等（长工具调用不该被打断）。
-- **系统通知「3 个审批只收到 1 个」**：Windows 对同一时刻到达的多条 toast **只弹一条横幅**，
-  其余静默进通知中心（`getHistory()` 里查得到，用户看不见）。`NativeNotifications.show`
-  改成按 1.5s 间隔**逐条**发送，让每条都有自己的横幅。
+- **系统通知「3 个审批只收到 1 个」**：根因不是通知层，而是**「用户是否正在看」这一判定错了**。
+  `AppFocus.isForeground` 用的是 AWT 的 `window.isFocused`（**进程内**焦点），而
+  `Window.getWindows()` 里除主窗口还有 tooltip / 弹层等辅助窗口 —— 任意一个持有进程内焦点，
+  `any { isFocused }` 就为真，于是「人在别的应用里」被判成「正在看我」，提醒被静默跳过
+  （实测日志：三行 `remind skipped … (foreground and viewing this session)`，只有一条漏网弹出）。
+  改成 `isActive`（AWT 语义 = **系统级**活动窗口）并只认 `Frame` / `Dialog`；
+  同时把窗口焦点状态加进补提醒的 `LaunchedEffect` key —— **切到后台本身也是一次「用户切走了」**，
+  之前因前台被跳过的那几条现在会重新评估、补弹。
+  附带：同时到达的多条 toast，Windows 只弹一条横幅（其余静默进通知中心），
+  所以 `NativeNotifications.show` 按 1.5s 间隔逐条发，让每条都有自己的横幅。
   （顺带排除并记录了另一个假设：同 `group` **不会**折叠 —— `nucleus 2.5.18` 实测连发
   3 条带按钮的 toast，通知中心里 3 条都在。）
 - **`data/logs/desktop.log` 每行写两遍**：`Logging.init` 里在 `doConfigure` 之前没 `reset`，
