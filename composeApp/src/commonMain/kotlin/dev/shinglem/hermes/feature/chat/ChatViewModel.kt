@@ -204,6 +204,12 @@ class ChatViewModel(
                 val saved = savedStates.remove(key)
                 if (saved != null) {
                     restore(key, saved)
+                    // 快照只保证"切回瞬间有内容"。卡片 / 队列是**后端状态**，必须对账：
+                    // 别处（系统通知 / TUI）可能已经把它答掉了，照着快照显示就是一张点不动的卡片。
+                    viewModelScope.launch {
+                        runCatching { ensureRuntime(key, force = true) }
+                            .onFailure { Log.debug("revalidate after restore failed: ${it.message}") }
+                    }
                     return
                 }
             }
@@ -737,6 +743,50 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * 一条等待项已经不需要了：本端应答、后端撤回、或已被别处处理。
+     *
+     * 必须**同时**清当前状态和切走时保存的快照 —— `savedStates` 里的快照同样持有
+     * `pendingApprovals`，切回该会话时会把它恢复出来；用户看到的是一张已经答过的卡片，
+     * 再点一次就撞 `4001 stale_generation`（实测）。
+     */
+    private fun forgetPendingRequest(requestId: String) {
+        _state.update { current ->
+            current.copy(
+                pendingApprovals = current.pendingApprovals.filterNot { it.requestId == requestId },
+                pendingClarify = current.pendingClarify.filterNot { it.requestId == requestId },
+            )
+        }
+        savedStates.keys.toList().forEach { key ->
+            val snapshot = savedStates[key] ?: return@forEach
+            if (snapshot.pendingApprovals.none { it.requestId == requestId } &&
+                snapshot.pendingClarify.none { it.requestId == requestId }
+            ) {
+                return@forEach
+            }
+            savedStates[key] = snapshot.copy(
+                pendingApprovals = snapshot.pendingApprovals.filterNot { it.requestId == requestId },
+                pendingClarify = snapshot.pendingClarify.filterNot { it.requestId == requestId },
+            )
+        }
+        crossSessionApprovals.remove(requestId)
+        crossSessionClarify.remove(requestId)
+    }
+
+    /**
+     * 后端说这条等待项已经不成立（代已推进 / 队列里没有它）。
+     *
+     * 同一件事可能被**别处先处理掉**：系统通知里点过、TUI 里答过、超时被撤回。
+     * 这时再应答必然是 `stale_generation` —— 这不是故障，不该给用户弹红条。
+     */
+    private fun isAlreadySettled(throwable: Throwable): Boolean {
+        val server = throwable as? AppError.Server ?: return false
+        return server.reason == "stale_generation" ||
+            server.reason == "approval_not_found" ||
+            server.reason == "clarify_not_found" ||
+            server.reason == "no_pending_prompt"
+    }
+
     /** 审批卡片点击。 */
     fun resolveApproval(requestId: String, choice: String) {
         // 本连接收到的请求：有等待中的响应帧，直接交付决策即可。
@@ -755,16 +805,19 @@ class ChatViewModel(
         val key = pending.sessionKey ?: _state.value.key ?: return
         val runtimeId = pending.runtimeSessionId ?: runtimeIds[key] ?: return
         val generation = pending.executionGeneration ?: generations[key]
-        _state.update { current ->
-            current.copy(pendingApprovals = current.pendingApprovals.filterNot { it.requestId == requestId })
-        }
+        forgetPendingRequest(requestId)
         viewModelScope.launch {
             try {
                 repository.respondApproval(key.profile, runtimeId, requestId, choice, generation)
-                crossSessionApprovals.remove(requestId)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
+                if (isAlreadySettled(throwable)) {
+                    // 别处已经处理过（系统通知 / TUI / 超时撤回）：静默收掉，不打扰。
+                    Log.info("approval.respond ignored: $requestId already settled (${throwable.message})")
+                    forgetPendingRequest(requestId)
+                    return@launch
+                }
                 Log.info("approval.respond failed: ${throwable.message}")
                 _state.update {
                     it.copy(sendError = ErrorMapper.from(throwable, RpcMethods.APPROVAL_RESPOND))
@@ -783,9 +836,7 @@ class ChatViewModel(
         // `request.cancel` 带的是 JSON-RPC 帧 id；映射不到就当它已经是队列 id。
         val requestId = approvalFrameIds.remove(cancelled.requestId) ?: cancelled.requestId
         approvalDecisions[requestId]?.complete(CHOICE_DENY)
-        _state.update { current ->
-            current.copy(pendingApprovals = current.pendingApprovals.filterNot { it.requestId == requestId })
-        }
+        forgetPendingRequest(requestId)
     }
 
     // ── 后台任务 ─────────────────────────────────────────────────────────
@@ -1125,8 +1176,8 @@ class ChatViewModel(
         }
     }
 
-    private suspend fun ensureRuntime(key: SessionKey): String {
-        runtimeIds[key]?.let { return it }
+    private suspend fun ensureRuntime(key: SessionKey, force: Boolean = false): String {
+        if (!force) runtimeIds[key]?.let { return it }
         val resumed = repository.resumeSession(key.profile, key.sessionId)
         runtimeIds[key] = resumed.runtimeId
         cwds[key] = resumed.cwd
@@ -1203,6 +1254,19 @@ class ChatViewModel(
      */
     private fun adoptSnapshotPrompts(key: SessionKey, resumed: ResumedSession) {
         adoptSnapshotQueue(key, resumed)
+        // 快照是「后端此刻在等谁」的权威答案：本地有、快照里没有的，说明别处已经答掉了
+        // （系统通知 / TUI / 超时撤回）。留着它只会让人再点一次撞 `4001 stale_generation`
+        // —— 实测就是这样：通知里点掉的审批，对话里的卡片还在。
+        if (_state.value.key == key) {
+            val live = resumed.prompts.map { it.promptId }.toSet()
+            val stale = _state.value.pendingApprovals.map { it.requestId }
+                .filterNot { it in live } +
+                _state.value.pendingClarify.map { it.requestId }.filterNot { it in live }
+            stale.forEach { requestId ->
+                Log.info("pending prompt $requestId no longer in snapshot; dropped")
+                forgetPendingRequest(requestId)
+            }
+        }
         if (resumed.prompts.isEmpty()) return
         val added = resumed.prompts.sumOf { adoptOnePrompt(key, it, resumed.runtimeId) }
         if (added == 0) return
@@ -1405,15 +1469,8 @@ class ChatViewModel(
             val id = (payload?.get("id") as? JsonPrimitive)?.contentOrNull
             val method = (payload?.get("method") as? JsonPrimitive)?.contentOrNull
             if (id != null) {
-                _state.update { current ->
-                    current.copy(
-                        pendingApprovals = current.pendingApprovals.filterNot { it.requestId == id },
-                        pendingClarify = current.pendingClarify.filterNot { it.requestId == id },
-                    )
-                }
+                forgetPendingRequest(id)
                 approvalDecisions.remove(id)?.complete(CHOICE_DENY)
-                crossSessionApprovals.remove(id)
-                crossSessionClarify.remove(id)
                 Log.info("request.cancel method=$method id=$id")
             }
             return
@@ -1664,9 +1721,7 @@ class ChatViewModel(
         val promptId = pending.promptId ?: return
         val key = pending.sessionKey ?: _state.value.key ?: return
         val runtimeId = pending.runtimeSessionId ?: runtimeIds[key] ?: return
-        _state.update { current ->
-            current.copy(pendingClarify = current.pendingClarify.filterNot { it.requestId == requestId })
-        }
+        forgetPendingRequest(requestId)
         viewModelScope.launch {
             try {
                 repository.respondClarify(
@@ -1676,10 +1731,14 @@ class ChatViewModel(
                     answer = clarifyAnswer(answers),
                     executionGeneration = pending.executionGeneration ?: generations[key],
                 )
-                crossSessionClarify.remove(requestId)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
+                if (isAlreadySettled(throwable)) {
+                    Log.info("clarify.respond ignored: $requestId already settled (${throwable.message})")
+                    forgetPendingRequest(requestId)
+                    return@launch
+                }
                 Log.info("clarify.respond failed: ${throwable.message}")
                 _state.update {
                     it.copy(sendError = ErrorMapper.from(throwable, RpcMethods.CLARIFY_RESPOND))
