@@ -302,7 +302,7 @@ class ChatViewModel(
                 val runtimeId = ensureRuntime(key)
                 _state.update { state -> state.appendLocalUser(nextLocalId("user"), trimmed) }
                 _state.update { it.copy(streaming = StreamingState(startedAt = Clock.System.now())) }
-                val ack = repository.submitPrompt(runtimeId, trimmed)
+                val ack = repository.submitPrompt(key.profile, runtimeId, trimmed)
                 Log.info("prompt.submit ack status=${ack.status} userRowId=${ack.userRowId}")
                 // 后端在第一条 prompt 之后才给会话生成列表行 —— 这时刷新列表才看得到它。
                 onSessionPersisted?.invoke()
@@ -424,10 +424,11 @@ class ChatViewModel(
             ?: throw AppError.Protocol("只能从已落库的消息回退（当前 id=${draft.messageId}）")
         try {
             _state.update { it.copy(streaming = StreamingState(startedAt = Clock.System.now())) }
-            repository.rewindTo(runtimeId, rowId, revisions[key], generations[key])
+            repository.rewindTo(key.profile, runtimeId, rowId, revisions[key], generations[key])
             _state.update { state -> state.appendLocalUser(nextLocalId("user"), draft.text) }
             onSessionPersisted?.invoke()
             repository.submitPrompt(
+                profile = key.profile,
                 runtimeSessionId = runtimeId,
                 text = draft.text,
             )
@@ -437,8 +438,9 @@ class ChatViewModel(
             Log.info("rewind hit busy session; interrupting then retrying")
             repository.interrupt(key.profile, runtimeId, generations[key])
             waitUntilIdle()
-            repository.rewindTo(runtimeId, rowId, revisions[key], generations[key])
+            repository.rewindTo(key.profile, runtimeId, rowId, revisions[key], generations[key])
             repository.submitPrompt(
+                profile = key.profile,
                 runtimeSessionId = runtimeId,
                 text = draft.text,
             )
@@ -492,6 +494,7 @@ class ChatViewModel(
             try {
                 val runtimeId = ensureRuntime(key)
                 val result = repository.branch(
+                    profile = key.profile,
                     runtimeSessionId = runtimeId,
                     throughMessageId = draft.messageId.toLongOrNull(),
                     revision = revisions[key],
