@@ -33,6 +33,11 @@ actual object Logging {
         if (context != null) {
             val resource = javaClass.classLoader.getResource("logback.xml")
             if (resource != null) {
+                // 必须先 reset：logback 在第一次访问 LoggerFactory 时已按 classpath **自动配置过一次**
+                // （root 上已经挂了一个 DESKTOP appender）。不 reset 就再 doConfigure 一次，
+                // 等于给 root 挂上第二个同名 appender —— 每行日志被写两遍，
+                // 排查时会误以为"同一条事件处理了两次"。
+                context.reset()
                 val joran = ch.qos.logback.classic.joran.JoranConfigurator()
                 joran.context = context
                 runCatching { joran.doConfigure(resource) }
