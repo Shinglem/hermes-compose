@@ -1,5 +1,6 @@
 package dev.shinglem.hermes.feature.session
 
+import dev.shinglem.hermes.core.contract.ClientPrompt
 import dev.shinglem.hermes.core.contract.RpcMethods
 import dev.shinglem.hermes.core.contract.SessionCreateResultDto
 import dev.shinglem.hermes.core.contract.SessionListResultDto
@@ -74,16 +75,13 @@ class SessionRepository(
         model: String? = null,
         reasoningEffort: String? = null,
     ): String {
-        val params = buildJsonObject {
-            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-            title?.takeIf { it.isNotBlank() }?.let { put("title", it) }
-            put("source", SessionSurface.CLIENT)
-            // 草稿态在 composer 里选好的模型：`session.create` 的这三个参数是 per-session
-            // override，不写 config.yaml（见 tui_gateway/methods_session.py::_create_overrides）。
-            provider?.takeIf { it.isNotBlank() }?.let { put("provider", it) }
-            model?.takeIf { it.isNotBlank() }?.let { put("model", it) }
-            reasoningEffort?.takeIf { it.isNotBlank() }?.let { put("reasoning_effort", it) }
-        }
+        val params = createSessionParams(
+            profile = profile,
+            title = title,
+            provider = provider,
+            model = model,
+            reasoningEffort = reasoningEffort,
+        )
         val element = try {
             gateway.call(RpcMethods.SESSION_CREATE, params, Timeouts.WRITE_MS)
         } catch (throwable: Throwable) {
@@ -277,3 +275,35 @@ private fun SessionListRowDto.toSummary(): SessionSummary = SessionSummary(
     messageCount = messageCount,
     source = source,
 )
+
+/**
+ * `session.create` 的参数（纯函数，便于断言）。
+ *
+ * 两处「客户端往会话里塞东西」都集中在这里：
+ * - `source`：见 [SessionSurface]，决定工具集与系统提示；
+ * - `client_env`：见 [ClientPrompt]，把真实的渲染能力告诉 agent。
+ *
+ * `client_env` **只有 create 接受**（`CanonicalResumeParams` 没有这个字段），所以
+ * 「复制为新会话」（`session.branch_stored`，它的 params 也没有）拿不到这段提示词 ——
+ * 复制出来的会话会退回后端默认的 tui 描述，属已知限制。
+ */
+internal fun createSessionParams(
+    profile: String?,
+    title: String? = null,
+    provider: String? = null,
+    model: String? = null,
+    reasoningEffort: String? = null,
+): JsonObject = buildJsonObject {
+    profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
+    title?.takeIf { it.isNotBlank() }?.let { put("title", it) }
+    put("source", SessionSurface.CLIENT)
+    // 草稿态在 composer 里选好的模型：`session.create` 的这三个参数是 per-session
+    // override，不写 config.yaml（见 tui_gateway/methods_session.py::_create_overrides）。
+    provider?.takeIf { it.isNotBlank() }?.let { put("provider", it) }
+    model?.takeIf { it.isNotBlank() }?.let { put("model", it) }
+    reasoningEffort?.takeIf { it.isNotBlank() }?.let { put("reasoning_effort", it) }
+    put(
+        "client_env",
+        buildJsonObject { put(ClientPrompt.ENV_KEY, ClientPrompt.RENDERING) },
+    )
+}

@@ -49,3 +49,43 @@ package dev.shinglem.hermes.core.contract
 object SessionSurface {
     const val CLIENT: String = "tui"
 }
+
+/**
+ * 随 `session.create` 的 `client_env` 传给后端的会话级环境，**不写任何后端配置文件**。
+ *
+ * 后端契约（`tui_gateway/contracts/canonical_sessions.py::CanonicalCreateParams.client_env`）：
+ * "a shell-launched client's allowlisted environment … applied to this session only".
+ * 白名单在 `agent/session_client_env.py::BEHAVIOUR_ENV`，其中
+ * `HERMES_EPHEMERAL_SYSTEM_PROMPT` 就是给我们用的，语义是**追加在系统提示末尾**
+ * （`agent/chat_completion_helpers.py` / `turn_context.py` / `codex_runtime.py` 三处一致）。
+ *
+ * ## 为什么需要它
+ *
+ * `SessionSurface.CLIENT` 取 `tui` 是为了拿干净的工具集（`desktop` 会下发我们无法应答的
+ * `desktop_ui`），代价是后端给的 `PLATFORM_HINTS["tui"]` 只说「文件没有附件通道」，
+ * agent 于是把整个会话当成终端，回答会自我审查（真机里它说过「这是 TUI，没有附件通道」
+ * 「终端里公式不渲染」—— 对我们的客户端是错的）。这里把真实渲染能力补回去。
+ *
+ * ## 为什么用追加而不是替换
+ *
+ * 原 hint 里「`MEDIA:` 不会被拦截，别用」对我们**是准确的**（客户端确实不处理 `MEDIA:`），
+ * 必须保留；要纠正的只是「所以别用表格公式」这个推论。
+ */
+object ClientPrompt {
+    /** 注入用的环境变量名（后端白名单里的键，写错会被静默丢弃）。 */
+    const val ENV_KEY: String = "HERMES_EPHEMERAL_SYSTEM_PROMPT"
+
+    /** 追加在系统提示末尾的一段：如实描述本客户端的渲染能力。 */
+    val RENDERING: String = """
+        This session runs in the Hermes Compose desktop client, not a plain terminal. The client
+        renders: GitHub-flavored Markdown (headings, tables, task lists, callouts, footnotes with
+        clickable references and back-links, in-text anchors), syntax-highlighted code with line
+        numbers and line highlighting, LaTeX via ${'$'}...${'$'} inline and ${'$'}${'$'}...${'$'}${'$'} blocks, and images with
+        click-to-zoom. Prefer these over flat plain-text layouts — do not avoid tables, math or
+        code fences just because this is not a GUI chat surface.
+        MEDIA: tags and ::preview{} widgets are NOT intercepted: they would appear as literal
+        text. Never emit them. To hand a file over, state its absolute path — the tool card
+        shows an open button that launches the user's configured editor.
+    """.trimIndent()
+}
+
