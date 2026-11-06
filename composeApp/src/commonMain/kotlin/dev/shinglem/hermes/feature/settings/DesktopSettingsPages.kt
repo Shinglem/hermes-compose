@@ -170,6 +170,10 @@ fun BrowserPage(
                 append("\n\n")
                 append("浏览器用的是随包附带的 Chromium，不需要单独安装，也不会往用户目录写文件。")
                 append("空闲超过两分钟后浏览器仍会被自动回收。")
+                append("\n\n")
+                append("已知问题：以管理员运行本程序时，agent 启动 Chromium 可能失败")
+                append("（Chrome exited early (exit code: 0) without writing DevToolsActivePort），")
+                append("上游尚未修复，与上面的开关无关。")
             },
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
