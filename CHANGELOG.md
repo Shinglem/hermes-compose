@@ -11,8 +11,9 @@
 > payload 换到 hermes **0.23.0**（`Shinglem/hermes-bundle` 的 `v0.23.0`），
 > 工具链仍是 `toolchain-v1`（JDK 基线没变）。
 >
-> 首次构建的完整包存在「网关一直重连」与「会话列表空」两个缺陷，已在本版内修掉并**重新出包**；
-> 因此不再有 0.5.1 / 0.5.2 之类的 patch 版本，早期下载的 `v0.5.0-0.23.0` 应当作废重装。
+> 首次构建的完整包在 `gateway` 路线下**发不出消息**（会话列表、令牌、RPC 契约三处缺陷），
+> 已在本版内全部修掉并**重新出包**；因此不再有 0.5.1 / 0.5.2 之类的 patch 版本，
+> 早期下载的 `v0.5.0-0.23.0` 应当作废重装。
 >
 > **升级方式**：下载完整包解压即可；旧的 `hermes/` 目录请**整目录替换**成 0.23.0 的 payload
 > （`pm bundle` 产物不能增量覆盖）。`config/` 与 `data/` 可以保留 —— 但 0.23.0 会升级后端
@@ -67,8 +68,37 @@
   而上游该接口的校验是 `Query(le=100)` —— 每次请求都 `422 less_than_equal`，异常被吞成空列表。
   现在上限统一 clamp 到 100，`RestClient.listSessions` 内部兜底，调用方不再各自记这个数。
   同时补了可观测日志（`sessions refresh requested` / `sessions loaded: … count=` /
-  `sessions load failed …`）：空列表最容易误判成"数据丢了"，有了这三行就能立刻分清是
-  后端没给、解析丢了，还是请求根本没发。
+  `sessions load failed …`）。
+
+- **发消息一律 `4001 invalid_params`**：0.23.0 的 canonical gateway 对 `prompt.submit` 有两条硬要求
+  —— 必须带 `submission_id`（这次 admission 的幂等身份），且键集合是闭集、**不接受 `profile`**。
+  旧实现两条都不满足，所以每一次发送都被判成参数错误。
+
+- **「停止 / 纠偏 / 审批」`4001 invalid_params`**：`session.interrupt` / `session.steer` /
+  `approval.respond` 在 canonical 契约里都**必须**带 `execution_generation`，审批还要 `prompt_id`
+  而不是 `request_id`。现在 `session.resume` 会把 `execution_generation` 与 `revision` 一起带回来，
+  `ChatViewModel` 保存它们并在每次 mutate 后写回后端回执里的新鲜值。
+
+- **会话编辑（改名 / 归档 / 删除 / 分支）全部 `-32601 unknown method`**：0.23.0 的 gateway 路线删掉了
+  `session.title` / `session.archive` / `session.delete` / `session.branch*` / `session.cwd.set`
+  / `session.usage`。替代通道：
+
+  | 功能 | 现在走 |
+  |---|---|
+  | 改名 / 归档 / 置顶（已落库会话） | REST `PATCH /api/sessions/{id}` + `request_id` + `expected_revision` |
+  | 改名（刚新建、还没落库） | `session.mutate {operation:"rename"}` |
+  | 删除 | REST `DELETE /api/sessions/{id}`（同一套 fence） |
+  | 分支 / 复制为新会话 | `session.mutate {operation:"branch"}`（`through_message_id` 是物理行 id） |
+  | 回退重发 | `session.mutate {operation:"rewind"}` + 单独一次 `prompt.submit` |
+  | 上下文用量 | `session.context_breakdown`（`session.usage` 只剩事件） |
+  | 切模型 / 推理强度 | `session.mutate {operation:"model"\|"reasoning"}`（`config.set` 会回 `use_session_mutation_model`） |
+  | 图片附加 | `image.attach_bytes`（base64）；路径版与 `clipboard.paste` 只在 direct 后端有 |
+  | 拖放探测 | 客户端本地判扩展名（`input.detect_drop` 只在 direct 后端有） |
+
+  `session.mutate` 的参数集是**精确匹配**（`gateway/session_mutations.py::_FIELDS`）：
+  `session_id` + `request_id` + `expected_revision` + `operation` + `payload`（+ 可选
+  `expected_generation`），**多一个 `profile` 就 4001**；fence 过期时用拒绝里带回的
+  `data.revision` / `data.execution_generation` 重试一次。
 
 ### 已知行为变化
 
