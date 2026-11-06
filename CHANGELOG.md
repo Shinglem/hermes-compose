@@ -5,6 +5,58 @@
 
 ---
 
+## [0.5.0] · 2026-11-06（hermes 0.23.0）
+
+> **完整包版本（桌面版本升位）**：tag `v0.5.0-0.23.0`，由 `desktop-release` 走 CI 出完整包。
+> payload 换到 hermes **0.23.0**（`Shinglem/hermes-bundle` 的 `v0.23.0`），
+> 工具链仍是 `toolchain-v1`（JDK 基线没变）。
+>
+> **升级方式**：下载完整包解压即可；旧的 `hermes/` 目录请**整目录替换**成 0.23.0 的 payload
+> （`pm bundle` 产物不能增量覆盖）。`config/` 与 `data/` 可以保留 —— 但 0.23.0 会升级后端
+> 配置格式，首次启动会自行迁移。
+
+### 新增
+
+- **跟随官方 canonical 路线接入后端**：`local` 模式默认改成
+  `hermes gateway ensure --json` → attach 上游**机器级 gateway**，与官方 Desktop / TUI / webapp
+  走同一条路。收益是 owner 侧统一的队列、history、steer/rewind 语义，不再和机器上其他入口分叉。
+- **新增配置 `backend.local.engine`**：`gateway`（默认）/ `isolated`（回退到旧的自起
+  `dashboard --isolated` 路线）。设置页「连接 → 后端」里可直接切。
+- 新增 `GatewayAttachPlanner` / `GatewayEnsure` / `GatewayAttachBackendProvider`，
+  以及 `OneShotRunner`（跑完即退的一次性命令）。
+- **「启动官方桌面端」改成共用同一后端**：设置页「集成 → 官方桌面端」会显示当前要共用的地址
+  （`http://127.0.0.1:<port>`），后端未就绪时按钮禁用。启动前会先 `GET /api/status` 探活，
+  不可用就**拒绝启动**而不是静默省略 `HERMES_DESKTOP_REMOTE_URL/TOKEN` ——
+  后者会让官方桌面端另起一套后端，两边的会话直接分叉。
+- **设置页重新分组**：左栏从「选项（打包 5 组）+ 终端 + 提供方 + 配置档案 + 模型 + 安全 + 桌面 + 调试」
+  改为 8 个语义分组：连接 · 外观 · 智能体 · 提供方 · 安全 · 桌面 · 应用 · 集成。
+  `界面与网络` 拆成「界面」「网络」；`窗口` 与 `终端外观` 归入「外观」；`关于` 归入「应用」；
+  组标题加了间距、字号与分隔线，与页行的层级一眼可分。
+
+### 变更
+
+- **Web UI 入口整体移除**：状态栏不再有「服务 xxms」那一项（它原本表示 dashboard 的 SPA
+  能否打开），托盘菜单删除「打开 Web 界面」。客户端只对接官方 gateway，一个「网关」指标足够。
+  连带删除 `Ready.dashboardUrl` 字段、`probeWeb()`、`hasWebDist` 自检与相关提示。
+  payload 里的 `hermes_cli/web_dist` 仍由 bundle 提供，只是本客户端不再使用。
+
+- **依赖升级**：`ktor 3.6.0 → 3.6.1`、`logback 1.5.18 → 1.6.6`、`kotlin-logging 7.0.7 → 8.0.4`。
+  Kotlin 2.4.21 / Compose 1.12.2 已经是最新稳定，未动。
+- **`backend.local.host` / `port` / `extra_args` 在 `gateway` 路线下不生效**：端口由 daemon 决定，
+  通过 ensure 输出的 `endpoint.api_origin` 告知（每次重启都可能变）。要给隧道固定地址就切
+  `isolated`。
+- **`app.browser.headed` / `app.browser.args` / `backend.local.run_cron` 在 `gateway` 路线下改完要重启后端**
+  （它们是 daemon 的启动环境变量）；设置页的保存提示已经写明。
+
+### 已知行为变化
+
+- **客户端退出时显式停后端**：daemon 用 `CREATE_BREAKAWAY_FROM_JOB` 主动脱离了我们的 Job Object，
+  所以不再是「客户端死则后端死」。正常退出会执行 `hermes gateway stop -y`（作用域只到本 home）；
+  客户端被强杀时 daemon 会残留，下次启动由 `ensure` 直接复用 —— 这是上游的设计，不是 bug。
+- **`gateway stop` 绝不带 `--all`**：那会作用于 host gateway，可能停掉别的 profile（包括官方客户端）。
+
+---
+
 ## [0.4.2] · 2026-11-06（hermes 0.22.5）
 
 > **patch 版本**：相对 `v0.4.1` 只改客户端外壳（`bin/App.jar` + 2 个 `lib/*.jar` + `app/*.cfg`），

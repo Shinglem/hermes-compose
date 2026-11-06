@@ -113,7 +113,7 @@ GitHub 操作仍需要代理 `127.0.0.1:7890`（见 `AGENTS.md` §5 与技能 `g
 
 | 模式 | 后端从哪来 | 适用 |
 |---|---|---|
-| `local` | 随包携带的 payload，客户端拉起 `hermes dashboard --port 0`（RPC/REST/Web UI 同端口） | 开箱可用，不需要本机装 Hermes |
+| `local` | 随包携带的 payload，客户端通过 `hermes gateway ensure` 拉起机器级后端并 attach（RPC/REST 同端口） | 开箱可用，不需要本机装 Hermes |
 | `remote` | 连本机已有的 Hermes dashboard（默认 `127.0.0.1:9119`） | 已跑着官方客户端 / CLI 时共用一套后端 |
 
 本项目只读消费其契约；契约变更时靠生成器跟随。细节见
@@ -161,7 +161,7 @@ $env:HDC_HOME = (Resolve-Path release-test).Path
 | Release | 内容 | 谁产出 | tag |
 |---|---|---|---|
 | **工具链** | 启动器 + 裁剪运行时（同一版本一起出） | `toolchain-windows` | `toolchain-v<N>`（v1、v2 …手工递增） |
-| **桌面端** | **纯外壳**，不含 payload，默认 `local` 模式 | `desktop-release` | `v<桌面版本>-<hermes版本>`，例如 `v0.4.0-0.22.5` |
+| **桌面端** | **纯外壳**，不含 payload，默认 `local` 模式 | `desktop-release` | `v<桌面版本>-<hermes版本>`，例如 `v0.5.0-0.23.0` |
 
 payload 不在本仓库：`Shinglem/hermes-bundle` 的 `v<hermes版本>` Release（约 1.5 GB）。
 基线是**官方 Temurin 27**（启动器由它的 `jpackage` 生成，运行时由同一份 `jmods` 经 `jlink` 裁剪）。
@@ -174,7 +174,7 @@ payload 不在本仓库：`Shinglem/hermes-bundle` 的 `v<hermes版本>` Release
 默认就是 `local` 模式，按 Release 正文里的链接下一份对应版本的 payload 即可：
 
 1. 打开该版本对应的 payload Release，例如
-   <https://github.com/Shinglem/hermes-bundle/releases/tag/v0.22.5>
+   <https://github.com/Shinglem/hermes-bundle/releases/tag/v0.23.0>
 2. 下载**全部** `*.7z.001` 分卷（缺一卷解不开），用 7-Zip 解压
 3. 得到 `payload\` 目录 → **重命名为 `hermes`** → 放进客户端根目录，与
    `hermes-desktop-compose.exe` 同级

@@ -261,6 +261,7 @@ New-Item -ItemType SymbolicLink -Path .github\skills -Target '../.ai/skill'
 | 做某个功能域 | `.design/详细设计/功能/00-功能域总览.md` → 对应域篇 |
 | 管理员权限 / 开机自启 / UAC | `.design/详细设计/工程与代码/07-提权与自启动.md` |
 | 自启 / 单实例 / 提权「不工作」的排障 | 技能 [`dev-windows-integration-debug`](.ai/skill/dev-windows-integration-debug/SKILL.md)（先查系统真实状态） |
+| 后端走 `gateway`（ensure+attach）还是 `isolated` / attach 契约 | `.design/详细设计/工程与代码/06-本地后端与双模式.md` §3.3 |
 | 发版 / 本机升级 / patch 包上传 | 技能 [`global-release-patch`](.ai/skill/global-release-patch/SKILL.md) |
 | 单实例 / 启动时序 / 早期日志 | `.design/详细设计/工程与代码/08-单实例与启动时序.md` |
 | 内置 Hermes 后端 / payload / 运行时绿色化 | `.design/详细设计/工程与代码/06-本地后端与双模式.md`（payload 契约与双模式）· [`Shinglem/hermes-bundle`](https://github.com/Shinglem/hermes-bundle)（CI 构建流程与已知坑） |
