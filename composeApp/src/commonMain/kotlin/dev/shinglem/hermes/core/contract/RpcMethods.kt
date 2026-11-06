@@ -39,6 +39,9 @@ object RpcMethods {
      */
     const val SESSION_MUTATE = "session.mutate"
 
+    /** 断线重连后补事件（`last_sequence` / `replay_epoch` 对齐）。 */
+    const val SESSION_EVENTS_SINCE = "session.events.since"
+
     /** 停止当前轮；**必须**带 `execution_generation`（`CanonicalControlParams`）。 */
     const val SESSION_INTERRUPT = "session.interrupt"
 
@@ -46,8 +49,21 @@ object RpcMethods {
     const val SESSION_STEER = "session.steer"
 
     const val PROMPT_SUBMIT = "prompt.submit"
+
+    /** 撤销一条 admission（停止生成的正规路径；`session.interrupt` 是另一条）。 */
+    const val PROMPT_CANCEL = "prompt.cancel"
+
+    /** clarify 的作答（与 `approval.respond` 同一套 `execution_generation` + `prompt_id`）。 */
+    const val CLARIFY_RESPOND = "clarify.respond"
+
     const val PROFILES_LIST = "profiles.list"
     const val GATEWAY_PING = "gateway.ping"
+
+    /** `session.stats`：token 总量与上下文长度（`session.usage` 已被移除）。 */
+    const val SESSION_STATS = "session.stats"
+
+    /** `config.get` / `config.set`：非会话级配置读取与写入。 */
+    const val CONFIG_GET = "config.get"
 
     /**
      * 连接级能力声明（`contracts/liveness.py`）：必须在收到 `gateway.ready` 后、每一条连接各发一次，

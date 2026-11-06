@@ -15,7 +15,10 @@ import dev.shinglem.hermes.core.time.TimeFormat
 import dev.shinglem.hermes.core.transport.GatewayClient
 import dev.shinglem.hermes.core.transport.RestClient
 import dev.shinglem.hermes.core.transport.RpcJson
+import dev.shinglem.hermes.core.transport.SessionFence
 import dev.shinglem.hermes.core.transport.Timeouts
+import dev.shinglem.hermes.core.transport.mutateSession
+import dev.shinglem.hermes.core.transport.sessionControl
 import io.ktor.http.encodeURLParameter
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -173,19 +176,14 @@ class ChatRepository(
         text: String,
         executionGeneration: Int?,
     ): String? {
-        if (executionGeneration == null) throw AppError.Protocol("session.steer 需要 execution_generation")
-        val params = buildJsonObject {
-            put("session_id", runtimeSessionId)
-            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-            put("execution_generation", executionGeneration)
-            put("text", text)
-        }
-        val result = try {
-            gateway.call(RpcMethods.SESSION_STEER, params, Timeouts.DEFAULT_MS)
-        } catch (throwable: Throwable) {
-            throw ErrorMapper.from(throwable, RpcMethods.SESSION_STEER)
-        }
-        return (result as? JsonObject)?.stringOrNull("status")
+        val receipt = gateway.sessionControl(
+            method = RpcMethods.SESSION_STEER,
+            sessionId = runtimeSessionId,
+            profile = profile,
+            fence = SessionFence(generation = executionGeneration),
+            extra = buildJsonObject { put("text", text) },
+        )
+        return (receipt.result as? JsonObject)?.stringOrNull("status")
     }
 
     /**
@@ -200,23 +198,21 @@ class ChatRepository(
         runtimeSessionId: String,
         throughMessageId: Long?,
         name: String? = null,
-        revision: Int?,
-        executionGeneration: Int?,
+        fence: SessionFence,
     ): BranchFrom {
         val payload = buildJsonObject {
             name?.takeIf { it.isNotBlank() }?.let { put("title", it) }
             throughMessageId?.let { put("through_message_id", it) }
         }
-        val result = mutateSession(
+        val receipt = gateway.mutateSession(
             sessionId = runtimeSessionId,
+            profile = profile,
             operation = "branch",
             payload = payload,
-            revision = revision,
-            profile = profile,
-            executionGeneration = executionGeneration,
+            fence = fence,
             timeoutMs = Timeouts.PROMPT_SUBMIT_MS,
         )
-        return BranchFrom.ofMutation(result, "session.mutate/branch")
+        return BranchFrom.ofMutation(receipt.result, "session.mutate/branch")
     }
 
     /** 整段克隆（不带 `through_message_id` 就是整份克隆）。 */
@@ -224,19 +220,17 @@ class ChatRepository(
         profile: String?,
         runtimeSessionId: String,
         name: String? = null,
-        revision: Int?,
-        executionGeneration: Int?,
+        fence: SessionFence,
     ): BranchFrom {
-        val result = mutateSession(
+        val receipt = gateway.mutateSession(
             sessionId = runtimeSessionId,
+            profile = profile,
             operation = "branch",
             payload = buildJsonObject { name?.takeIf { it.isNotBlank() }?.let { put("title", it) } },
-            revision = revision,
-            profile = profile,
-            executionGeneration = executionGeneration,
+            fence = fence,
             timeoutMs = Timeouts.PROMPT_SUBMIT_MS,
         )
-        return BranchFrom.ofMutation(result, "session.mutate/branch")
+        return BranchFrom.ofMutation(receipt.result, "session.mutate/branch")
     }
 
     /**
@@ -250,19 +244,18 @@ class ChatRepository(
         profile: String?,
         runtimeSessionId: String,
         targetMessageRowId: Long,
-        revision: Int?,
-        executionGeneration: Int?,
-    ) {
-        mutateSession(
+        fence: SessionFence,
+    ): SessionFence {
+        val receipt = gateway.mutateSession(
             sessionId = runtimeSessionId,
+            profile = profile,
             operation = "rewind",
             payload = buildJsonObject { put("target_message_id", targetMessageRowId) },
-            revision = revision,
-            profile = profile,
-            executionGeneration = executionGeneration,
+            fence = fence,
             requiresGeneration = true,
             timeoutMs = Timeouts.PROMPT_SUBMIT_MS,
         )
+        return receipt.fence
     }
 
     /**
@@ -287,75 +280,12 @@ class ChatRepository(
 
     /** 停止当前生成；真正的收尾以 `message.complete(status=interrupted)` 事件为准。 */
     suspend fun interrupt(profile: String?, runtimeSessionId: String, executionGeneration: Int?) {
-        if (executionGeneration == null) throw AppError.Protocol("session.interrupt 需要 execution_generation")
-        val params = buildJsonObject {
-            put("session_id", runtimeSessionId)
-            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-            put("execution_generation", executionGeneration)
-        }
-        try {
-            gateway.call(RpcMethods.SESSION_INTERRUPT, params, Timeouts.DEFAULT_MS)
-        } catch (throwable: Throwable) {
-            throw ErrorMapper.from(throwable, RpcMethods.SESSION_INTERRUPT)
-        }
-    }
-
-    /**
-     * `session.mutate`：canonical gateway 上所有"改会话"的统一入口
-     * （rename / archive / delete / branch / rewind / workspace / reasoning / model）。
-     *
-     * 参数集在 handler 层是**精确匹配**（`gateway/session_mutations.py::_FIELDS`）：
-     * `session_id` + `request_id` + `expected_revision` + `operation` + `payload`
-     * （+ 可选 `expected_generation`）。`profile` 由 dispatch 层先用于**跨 profile 路由**、
-     * 再在 `_PROFILE_IMPLICIT` 里剥离，所以必须在 params 里带上（否则兄弟 profile 的会话
-     * 会命中错误的 authority → `permission_denied`）。
-     *
-     * `revision_conflict` / `stale_generation` 的拒绝里带着后端当前的新鲜 fence
-     * （`data.revision` / `data.execution_generation`），所以这里用**同一个 request_id**
-     * 再试一次 —— 幂等，且不会把上一个 mutation 做成两次。
-     */
-    suspend fun mutateSession(
-        sessionId: String,
-        operation: String,
-        payload: JsonObject,
-        revision: Int?,
-        profile: String? = null,
-        executionGeneration: Int? = null,
-        requiresGeneration: Boolean = false,
-        timeoutMs: Long = Timeouts.WRITE_MS,
-    ): JsonElement {
-        if (revision == null) throw AppError.Protocol("session.mutate 需要 expected_revision")
-        if (requiresGeneration && executionGeneration == null) {
-            throw AppError.Protocol("session.mutate/$operation 需要 expected_generation")
-        }
-        val requestId = newRequestId()
-        var fenceRevision = revision
-        var fenceGeneration = executionGeneration
-        var attempt = 0
-        while (true) {
-            val params = buildJsonObject {
-                put("session_id", sessionId)
-                profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-                put("request_id", requestId)
-                put("expected_revision", fenceRevision)
-                fenceGeneration?.let { put("expected_generation", it) }
-                put("operation", operation)
-                put("payload", payload)
-            }
-            try {
-                return gateway.call(RpcMethods.SESSION_MUTATE, params, timeoutMs)
-            } catch (conflict: AppError.Server) {
-                val data = conflict.data as? JsonObject
-                val freshRevision = (data?.get("revision") as? JsonPrimitive)?.intOrNull
-                if (attempt++ >= 1 || freshRevision == null) {
-                    throw ErrorMapper.from(conflict, RpcMethods.SESSION_MUTATE)
-                }
-                fenceRevision = freshRevision
-                (data?.get("execution_generation") as? JsonPrimitive)?.intOrNull?.let { fenceGeneration = it }
-            } catch (throwable: Throwable) {
-                throw ErrorMapper.from(throwable, RpcMethods.SESSION_MUTATE)
-            }
-        }
+        gateway.sessionControl(
+            method = RpcMethods.SESSION_INTERRUPT,
+            sessionId = runtimeSessionId,
+            profile = profile,
+            fence = SessionFence(generation = executionGeneration),
+        )
     }
 
     // ── 审批 ────────────────────────────────────────────────────────────
@@ -433,20 +363,17 @@ class ChatRepository(
         choice: String,
         executionGeneration: Int?,
     ): Int {
-        if (executionGeneration == null) throw AppError.Protocol("approval.respond 需要 execution_generation")
-        val params = buildJsonObject {
-            put("session_id", runtimeSessionId)
-            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-            put("execution_generation", executionGeneration)
-            promptId?.takeIf { it.isNotBlank() }?.let { put("prompt_id", it) }
-            put("choice", choice)
-        }
-        val result = try {
-            gateway.call(RpcMethods.APPROVAL_RESPOND, params, Timeouts.DEFAULT_MS)
-        } catch (throwable: Throwable) {
-            throw ErrorMapper.from(throwable, RpcMethods.APPROVAL_RESPOND)
-        }
-        return (result as? JsonObject)
+        val receipt = gateway.sessionControl(
+            method = RpcMethods.APPROVAL_RESPOND,
+            sessionId = runtimeSessionId,
+            profile = profile,
+            fence = SessionFence(generation = executionGeneration),
+            extra = buildJsonObject {
+                promptId?.takeIf { it.isNotBlank() }?.let { put("prompt_id", it) }
+                put("choice", choice)
+            },
+        )
+        return (receipt.result as? JsonObject)
             ?.get("resolved")
             ?.let { (it as? JsonPrimitive)?.intOrNull }
             ?: 0

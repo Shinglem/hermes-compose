@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 
 /** JSON-RPC 2.0 帧编解码。契约细节见 `.design/草案/08-data-contract.md` §2.1。 */
@@ -110,6 +111,7 @@ object JsonRpc {
             sessionId = (obj["session_id"] as? JsonPrimitive)?.contentOrNull,
             seq = (obj["seq"] as? JsonPrimitive)?.longOrNull,
             payload = obj["payload"],
+            executionGeneration = (obj["execution_generation"] as? JsonPrimitive)?.intOrNull,
         )
     }
 }

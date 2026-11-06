@@ -10,6 +10,14 @@ data class GatewayEvent(
     val sessionId: String? = null,
     val seq: Long? = null,
     val payload: JsonElement? = null,
+    /**
+     * 事件帧顶层的 `execution_generation`（不是 payload 里的那个）。
+     *
+     * `session.interrupt` / `session.steer` / `approval.respond` 都要求它**等于当前执行代**，
+     * 而每一轮都会推进它；只靠 `session.resume` 的快照必然过期（`4001 stale_generation`），
+     * 所以事件推进时要跟着更新。
+     */
+    val executionGeneration: Int? = null,
 )
 
 /** 本期真正会用到的事件名。完整清单见后端 `contracts/events.py`。 */

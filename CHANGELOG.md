@@ -97,8 +97,23 @@
 
   `session.mutate` 的参数集是**精确匹配**（`gateway/session_mutations.py::_FIELDS`）：
   `session_id` + `request_id` + `expected_revision` + `operation` + `payload`（+ 可选
-  `expected_generation`），**多一个 `profile` 就 4001**；fence 过期时用拒绝里带回的
-  `data.revision` / `data.execution_generation` 重试一次。
+  `expected_generation`）；`profile` 由 dispatch 层先用于跨 profile 路由、再被
+  `_PROFILE_IMPLICIT` 剥离。fence 过期时用拒绝里带回的 `data.revision` /
+  `data.execution_generation` 重试一次。
+
+### 变更
+
+- **RPC 调用层按契约重建**（0.23.0 的 canonical 契约是闭集，散在各处的参数靠试错维护不住）：
+  - `RpcContracts`：从 payload 的 pydantic 模型导出的**方法契约表**（允许键 + 必填键），
+    `GatewayClient.call` 发送前自检 —— 多传/漏传在本地就报出来，不用等后端 4001。
+  - `SessionMutator`：`session.mutate` 与控制类调用（`interrupt` / `steer` / `approval.respond` /
+    `clarify.respond`）的**唯一实现**，fence（`expected_revision` / `expected_generation`）
+    自动携带、被拒时用回执里的新鲜值重试一次。以前这段逻辑在两个 Repository 各写一份。
+  - fence 单一来源：`session.resume` 回执 + 每个事件帧顶层的 `execution_generation` +
+    写入/拒绝回执。
+  - `profile` 规则明确：**会话级调用统一带**，因为它要么在契约里，要么在
+    `_PROFILE_IMPLICIT` 里被后端剥离；不带的话兄弟 profile 的会话会命中错误的 authority
+    （`permission_denied`）。
 
 ### 已知行为变化
 

@@ -16,6 +16,8 @@ import dev.shinglem.hermes.core.transport.GatewayClient
 import dev.shinglem.hermes.core.transport.RestClient
 import dev.shinglem.hermes.core.transport.RestMethod
 import dev.shinglem.hermes.core.transport.RpcJson
+import dev.shinglem.hermes.core.transport.SessionFence
+import dev.shinglem.hermes.core.transport.mutateSession
 import dev.shinglem.hermes.core.transport.Timeouts
 import dev.shinglem.hermes.core.transport.withProfileQuery
 import io.ktor.http.encodeURLParameter
@@ -107,33 +109,6 @@ class SessionRepository(
     suspend fun renameSession(profile: String?, sessionId: String, title: String) =
         mutateSidebar(profile, sessionId, buildJsonObject { put("title", title) })
 
-    /** `session.mutate` 的会话级写入（带 profile 以便跨 profile 路由，见 `_PROFILE_IMPLICIT`）。 */
-    private suspend fun mutateSession(
-        sessionId: String,
-        operation: String,
-        payload: JsonObject,
-        revision: Int?,
-        profile: String?,
-        executionGeneration: Int? = null,
-        timeoutMs: Long = Timeouts.WRITE_MS,
-    ): JsonElement {
-        if (revision == null) throw AppError.Protocol("session.mutate 需要 expected_revision")
-        val params = buildJsonObject {
-            put("session_id", sessionId)
-            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-            put("request_id", newRequestId())
-            put("expected_revision", revision)
-            executionGeneration?.let { put("expected_generation", it) }
-            put("operation", operation)
-            put("payload", payload)
-        }
-        return try {
-            gateway.call(RpcMethods.SESSION_MUTATE, params, timeoutMs)
-        } catch (throwable: Throwable) {
-            throw ErrorMapper.from(throwable, RpcMethods.SESSION_MUTATE)
-        }
-    }
-
     /**
      * 给**还没落库**的会话改标题（刚 `session.create` 出来的那条）。
      *
@@ -142,26 +117,13 @@ class SessionRepository(
      * 拒绝里带回新鲜的 `data.revision` —— 用它重试一次（同一个 `request_id`，幂等）。
      */
     suspend fun renameLiveSession(sessionId: String, title: String) {
-        var revision = 0
-        var attempt = 0
-        while (true) {
-            try {
-                mutateSession(
-                    sessionId = sessionId,
-                    operation = "rename",
-                    payload = buildJsonObject { put("title", title) },
-                    revision = revision,
-                    profile = null,
-                )
-                return
-            } catch (conflict: AppError.Server) {
-                val fresh = ((conflict.data as? JsonObject)?.get("revision") as? JsonPrimitive)?.intOrNull
-                if (attempt++ >= 1 || fresh == null) {
-                    throw ErrorMapper.from(conflict, RpcMethods.SESSION_MUTATE)
-                }
-                revision = fresh
-            }
-        }
+        gateway.mutateSession(
+            sessionId = sessionId,
+            profile = null,
+            operation = "rename",
+            payload = buildJsonObject { put("title", title) },
+            fence = SessionFence(revision = 0),
+        )
     }
 
     /**
@@ -218,16 +180,15 @@ class SessionRepository(
     suspend fun duplicateSession(profile: String?, sessionId: String): String {
         val snapshot = mutationSnapshot(profile, sessionId)
             ?: throw AppError.Server(409, "读不到会话的 mutation-snapshot")
-        val result = mutateSession(
+        val receipt = gateway.mutateSession(
             sessionId = sessionId,
+            profile = profile,
             operation = "branch",
             payload = JsonObject(emptyMap()),
-            revision = snapshot.revision,
-            profile = profile,
-            executionGeneration = snapshot.generation,
-            timeoutMs = Timeouts.WRITE_MS,
+            fence = SessionFence(snapshot.revision, snapshot.generation),
         )
-        val obj = result as? JsonObject ?: throw AppError.Protocol("session.mutate returned no object")
+        val obj = receipt.result as? JsonObject
+            ?: throw AppError.Protocol("session.mutate returned no object")
         return obj["branched_session_id"]?.jsonPrimitive?.contentOrNull
             ?.takeIf { it.isNotBlank() }
             ?: obj["stored_session_id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }

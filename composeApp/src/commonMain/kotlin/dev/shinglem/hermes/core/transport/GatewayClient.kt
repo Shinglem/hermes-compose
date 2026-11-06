@@ -1,5 +1,6 @@
 package dev.shinglem.hermes.core.transport
 
+import dev.shinglem.hermes.core.contract.RpcContracts
 import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.error.ErrorMapper
 import dev.shinglem.hermes.core.error.technicalSummary
@@ -135,6 +136,12 @@ class GatewayClient(
         params: JsonObject = JsonObject(emptyMap()),
         timeoutMs: Long = Timeouts.DEFAULT_MS,
     ): JsonElement {
+        // 发送前按 canonical 契约自检：多一个键后端就是 4001，与其等一个来回，
+        // 不如在本地直接指出是哪个键（backend 的 `data.fields` 是同一语义）。
+        RpcContracts.problems(method, params.keys)?.let { problem ->
+            logger.log(LogLevel.WARN, "rpc contract violation: $problem")
+            throw AppError.Protocol(problem)
+        }
         val id = nextId.updateAndGet { it + 1 }
         val deferred = CompletableDeferred<JsonElement>()
         pending.update { it + (id to deferred) }

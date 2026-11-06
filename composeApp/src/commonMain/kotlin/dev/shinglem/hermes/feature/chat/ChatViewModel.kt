@@ -3,6 +3,7 @@ package dev.shinglem.hermes.feature.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.shinglem.hermes.core.contract.RpcMethods
+import dev.shinglem.hermes.core.transport.SessionFence
 import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.error.ErrorMapper
 import dev.shinglem.hermes.core.log.Log
@@ -424,7 +425,8 @@ class ChatViewModel(
             ?: throw AppError.Protocol("只能从已落库的消息回退（当前 id=${draft.messageId}）")
         try {
             _state.update { it.copy(streaming = StreamingState(startedAt = Clock.System.now())) }
-            repository.rewindTo(key.profile, runtimeId, rowId, revisions[key], generations[key])
+            val rewound = repository.rewindTo(key.profile, runtimeId, rowId, fence(key))
+            adoptFence(key, rewound.revision, rewound.generation)
             _state.update { state -> state.appendLocalUser(nextLocalId("user"), draft.text) }
             onSessionPersisted?.invoke()
             repository.submitPrompt(
@@ -438,7 +440,8 @@ class ChatViewModel(
             Log.info("rewind hit busy session; interrupting then retrying")
             repository.interrupt(key.profile, runtimeId, generations[key])
             waitUntilIdle()
-            repository.rewindTo(key.profile, runtimeId, rowId, revisions[key], generations[key])
+            val rewound = repository.rewindTo(key.profile, runtimeId, rowId, fence(key))
+            adoptFence(key, rewound.revision, rewound.generation)
             repository.submitPrompt(
                 profile = key.profile,
                 runtimeSessionId = runtimeId,
@@ -497,8 +500,7 @@ class ChatViewModel(
                     profile = key.profile,
                     runtimeSessionId = runtimeId,
                     throughMessageId = draft.messageId.toLongOrNull(),
-                    revision = revisions[key],
-                    executionGeneration = generations[key],
+                    fence = fence(key),
                 )
                 onBranched?.invoke(result)
             } catch (cancelled: CancellationException) {
@@ -1035,6 +1037,10 @@ class ChatViewModel(
         generation?.let { generations[key] = it }
     }
 
+    /** 当前会话的 fence 快照（`session.mutate` / 控制类调用统一从这里取）。 */
+    private fun fence(key: SessionKey): SessionFence =
+        SessionFence(revision = revisions[key], generation = generations[key])
+
     override val storedSessionId: String? get() = _state.value.key?.sessionId
 
     override fun runtimeInfo(): RuntimeHandle? {
@@ -1057,6 +1063,13 @@ class ChatViewModel(
     }
 
     private suspend fun handleGatewayEvent(event: GatewayEvent) {
+        // 每一帧都带着当前执行代：先跟上它，再决定这帧要不要渲染。
+        // 不更新的话，"停止 / 纠偏 / 审批"会拿着上一代的凭据去撞 `4001 stale_generation`。
+        event.executionGeneration?.let { gen ->
+            event.sessionId
+                ?.let { sid -> runtimeIds.entries.firstOrNull { it.value == sid }?.key }
+                ?.let { owner -> generations[owner] = gen }
+        }
         val key = _state.value.key ?: return
         // 别的会话 / 别的 profile：只标记"有新内容"，切回时补拉；绝不写当前 UI。
         val otherKey = event.sessionId
