@@ -3,6 +3,8 @@ package dev.shinglem.hermes.feature.session
 import dev.shinglem.hermes.core.contract.RpcMethods
 import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.error.ErrorMapper
+import dev.shinglem.hermes.core.error.technicalSummary
+import dev.shinglem.hermes.core.log.Log
 import dev.shinglem.hermes.core.prefs.AppPreferences
 import dev.shinglem.hermes.core.result.Loadable
 import dev.shinglem.hermes.core.result.valueOrNull
@@ -219,6 +221,7 @@ class SessionListViewModel(
     /** 切 profile 时取消上一轮请求，避免旧 profile 的结果覆盖新列表。 */
     fun refresh(profile: String?) {
         refreshJob?.cancel()
+        Log.info("sessions refresh requested (profile=${profile ?: "default"})")
         val profileChanged = _state.value.profile != profile
         // 直接从 refresh 进来（未经 onProfileChanged）时也要保证选择与 profile 一致。
         _state.update { it.switchedTo(profile) }
@@ -239,6 +242,9 @@ class SessionListViewModel(
                 throw cancelled
             } catch (throwable: Throwable) {
                 val error = ErrorMapper.from(throwable, "session.list")
+                // 失败时列表会退回上一次的快照（或空），界面上看不出是「没数据」还是「请求失败」，
+                // 所以这里必须留痕。
+                Log.warn("sessions load failed (profile=${profile ?: "default"}): ${error.technicalSummary()}")
                 _state.update { current ->
                     current.copy(load = Loadable.Failed(error, current.load.valueOrNull))
                 }

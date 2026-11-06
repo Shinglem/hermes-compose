@@ -4,6 +4,7 @@ import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.error.ErrorMapper
 import dev.shinglem.hermes.core.log.AppLogger
 import dev.shinglem.hermes.core.log.LogLevel
+import dev.shinglem.hermes.feature.session.SessionSummary
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.request.get
@@ -16,15 +17,21 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.time.Clock
+import kotlin.time.Instant
 
 /**
  * REST 通道（`/api/...`）：技能、工具集、cron、配置、模型、profiles、消息平台。
@@ -108,6 +115,50 @@ class RestClient(
     }
 
     /** `/api/status` 是唯一免鉴权端点，用来做健康探测与后端信息展示。 */
+    /**
+     * 会话列表：**走 REST `/api/sessions`**，不是 RPC `session.list`。
+     *
+     * 0.23.0 的 `session.list` 多了 `scope: Literal['live','stored'] = 'live'` ——
+     * 默认只返回**运行中**的会话，历史会话要显式 `scope=stored`。官方 Desktop 的做法是
+     * 直接读 REST（`apps/desktop/src/api/sessions.ts::listSessions`），这里跟随它：
+     * REST 还顺带给了分页、归档过滤与排序，语义更完整。
+     */
+    suspend fun listSessions(
+        profile: String?,
+        limit: Int = 40,
+        offset: Int = 0,
+        archived: String = "exclude",
+        order: String = "recent",
+        timeoutMs: Long = Timeouts.DEFAULT_MS,
+    ): List<SessionSummary> {
+        val query = buildString {
+            // `/api/sessions` 的 `limit` 上限是 100（超过直接 422 `less_than_equal`），
+            // 而上下文/置顶的取样会想要更多 —— 这里统一 clamp，调用方不必各自记得。
+            append("/api/sessions?limit=").append(limit.coerceIn(1, MAX_LIMIT))
+            append("&offset=").append(offset.coerceAtLeast(0))
+            append("&min_messages=0")
+            append("&archived=").append(archived)
+            append("&order=").append(order)
+            profile?.takeIf { it.isNotBlank() }?.let { append("&profile=").append(it.encodeURLParameter()) }
+        }
+        val element = get(query, timeoutMs)
+        val rows = (element as? JsonObject)?.get("sessions") as? JsonArray ?: JsonArray(emptyList())
+        return rows.mapNotNull { (it as? JsonObject)?.toSessionSummary() }
+    }
+
+    private fun JsonObject.toSessionSummary(): SessionSummary? {
+        val id = (this["id"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() } ?: return null
+        val startedAt = (this["started_at"] as? JsonPrimitive)?.doubleOrNull ?: 0.0
+        return SessionSummary(
+            id = id,
+            title = (this["title"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
+            preview = (this["preview"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
+            startedAt = Instant.fromEpochSeconds(startedAt.toLong()),
+            messageCount = (this["message_count"] as? JsonPrimitive)?.intOrNull ?: 0,
+            source = (this["source"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
+        )
+    }
+
     suspend fun health(): BackendHealth {
         val element = get("/api/status", Timeouts.HEALTH_MS)
         val obj = element as? JsonObject ?: throw AppError.Protocol("/api/status is not an object")
@@ -152,6 +203,9 @@ class RestClient(
 
     private companion object {
         const val SESSION_HEADER_NAME = "X-Hermes-Session-Token"
+
+        /** `/api/sessions` 的 `limit` 硬上限（上游 `Query(le=100)`），超过即 422。 */
+        const val MAX_LIMIT = 100
     }
 }
 

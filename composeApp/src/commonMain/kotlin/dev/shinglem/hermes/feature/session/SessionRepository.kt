@@ -10,6 +10,7 @@ import dev.shinglem.hermes.core.contract.SessionSearchResultDto
 import dev.shinglem.hermes.core.contract.SessionSurface
 import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.error.ErrorMapper
+import dev.shinglem.hermes.core.log.Log
 import dev.shinglem.hermes.core.time.TimeFormat
 import dev.shinglem.hermes.core.transport.GatewayClient
 import dev.shinglem.hermes.core.transport.RestClient
@@ -48,17 +49,17 @@ class SessionRepository(
     private val rest: RestClient,
 ) {
     suspend fun listSessions(profile: String?, limit: Int = DEFAULT_LIMIT): List<SessionSummary> {
-        val params = buildJsonObject {
-            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-            put("limit", limit)
-        }
-        val element = try {
-            gateway.call(RpcMethods.SESSION_LIST, params, Timeouts.DEFAULT_MS)
-        } catch (throwable: Throwable) {
-            throw ErrorMapper.from(throwable, RpcMethods.SESSION_LIST)
-        }
-        val dto = RpcJson.json.decodeFromJsonElement(SessionListResultDto.serializer(), element)
-        return dto.sessions.map(SessionListRowDto::toSummary)
+        // 走 REST 而不是 RPC `session.list`：0.23.0 的 RPC 默认 `scope=live`（只给运行中的会话），
+        // 历史会话要 `scope=stored`；官方 Desktop 也是直接读 `/api/sessions`（见 RestClient 注释）。
+        //
+        // `profile` 必须**显式**给：不带它时后端只返回很少的几行（实测 default 下 6 vs 77），
+        // 而 UI 的 `null` 语义就是默认 profile。
+        val resolved = profile?.takeIf { it.isNotBlank() } ?: DEFAULT_PROFILE
+        val sessions = rest.listSessions(profile = resolved, limit = limit)
+        // 留一条痕迹：会话列表为空是最容易误判成「数据丢了」的现象，
+        // 有这行就能立刻分清「后端没给」还是「解析丢了」。
+        Log.info("sessions loaded: profile=$resolved count=${sessions.size} limit=$limit")
+        return sessions
     }
 
     /**
@@ -260,10 +261,14 @@ class SessionRepository(
         "hdc-${Clock.System.now().toEpochMilliseconds()}-${Random.nextInt(100_000, 999_999)}"
 
     private companion object {
-        const val DEFAULT_LIMIT = 200
+        /** `GET /api/sessions` 的 `limit` 上限就是 100（超过即 422），不要写更大。 */
+        const val DEFAULT_LIMIT = 100
+
+        /** `profile = null` 在 UI 里就是「默认档案」；REST 必须显式给这个名字。 */
+        const val DEFAULT_PROFILE = "default"
 
         /** 置顶集合的取样上限：与 `GET /api/sessions` 的 `limit` 上限一致。 */
-        const val PIN_LIMIT = 200
+        const val PIN_LIMIT = 100
     }
 }
 
