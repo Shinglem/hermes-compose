@@ -1,6 +1,7 @@
 package dev.shinglem.hermes.feature.model
 
 import dev.shinglem.hermes.core.contract.RpcMethods
+import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.error.ErrorMapper
 import dev.shinglem.hermes.core.transport.GatewayClient
 import dev.shinglem.hermes.core.transport.RestClient
@@ -15,6 +16,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 
 /**
@@ -29,6 +31,9 @@ data class ModelSwitchOutcome(
     val confirmRequired: Boolean,
     val confirmMessage: String?,
     val deferred: Boolean,
+    /** `session.mutate` 回执里的新鲜 fence，调用方要写回自己的 revision/generation。 */
+    val revision: Int? = null,
+    val executionGeneration: Int? = null,
 )
 
 /** `/api/model/info` 的相关字段。 */
@@ -87,50 +92,87 @@ class ModelRepository(
     /**
      * 切当前会话的模型。
      *
-     * `value` 的格式照官方桌面端：`"<model> --provider <provider>"`。
-     * **不加 `--session`** —— 后端 `model.persist_switch_by_default` 默认 false，
-     * 普通选择本来就只影响当前会话；加 `--session` 反而会覆盖用户显式打开的"记住选择"配置。
+     * 0.23.0 的 canonical gateway 对 `config.set` 直接回 `4001 use_session_mutation_model`，
+     * 明确要求改走 `session.mutate {operation:"model", payload:{model, provider}}` ——
+     * 那条路要 `expected_revision` + `expected_generation`（`model` 属于 `_POLICY` 操作）。
      */
     suspend fun setModel(
         profile: String?,
         runtimeSessionId: String,
         provider: String,
         model: String,
+        revision: Int?,
+        executionGeneration: Int?,
         confirmExpensive: Boolean = false,
     ): ModelSwitchOutcome {
-        val value = buildString {
-            append(model)
-            if (provider.isNotBlank()) append(" --provider ").append(provider)
+        val payload = buildJsonObject {
+            put("model", model)
+            if (provider.isNotBlank()) put("provider", provider)
         }
-        val result = configSet(
-            profile = profile,
-            sessionId = runtimeSessionId,
-            key = KEY_MODEL,
-            value = value,
-            extra = if (confirmExpensive) mapOf("confirm_expensive_model" to JsonPrimitive(true)) else emptyMap(),
-        )
+        val result = mutate(profile, runtimeSessionId, "model", payload, revision, executionGeneration)
         return ModelSwitchOutcome(
-            value = result.stringOrNull("value"),
+            value = result.stringOrNull("model") ?: result.stringOrNull("value"),
             warning = result.stringOrNull("warning")?.takeIf { it.isNotBlank() },
             confirmRequired = (result["confirm_required"] as? JsonPrimitive)?.booleanOrNull == true,
             confirmMessage = result.stringOrNull("confirm_message")?.takeIf { it.isNotBlank() },
             deferred = (result["deferred"] as? JsonPrimitive)?.booleanOrNull == true,
+            revision = (result["revision"] as? JsonPrimitive)?.intOrNull,
+            executionGeneration = (result["execution_generation"] as? JsonPrimitive)?.intOrNull,
         )
     }
 
     /**
      * 切当前会话的推理强度。
      *
-     * `scope="session"` 与官方一致：菜单选择不得改写全局 `agent.reasoning_effort`。
+     * 与模型一样走 `session.mutate {operation:"reasoning", payload:{effort}}`：
+     * `reasoning` 也是 `_POLICY` 操作，要带 `expected_generation`。
      */
-    suspend fun setReasoning(profile: String?, runtimeSessionId: String, effort: String) {
-        configSet(
-            profile = profile,
-            sessionId = runtimeSessionId,
-            key = KEY_REASONING,
-            value = effort,
-            extra = mapOf("scope" to JsonPrimitive("session")),
+    suspend fun setReasoning(
+        profile: String?,
+        runtimeSessionId: String,
+        effort: String,
+        revision: Int?,
+        executionGeneration: Int?,
+    ): ModelSwitchOutcome {
+        val result = mutate(
+            profile, runtimeSessionId, "reasoning",
+            buildJsonObject { put("effort", effort) }, revision, executionGeneration,
         )
+        return ModelSwitchOutcome(
+            value = result.stringOrNull("effort") ?: effort,
+            warning = result.stringOrNull("warning")?.takeIf { it.isNotBlank() },
+            confirmRequired = false,
+            confirmMessage = null,
+            deferred = (result["deferred"] as? JsonPrimitive)?.booleanOrNull == true,
+            revision = (result["revision"] as? JsonPrimitive)?.intOrNull,
+            executionGeneration = (result["execution_generation"] as? JsonPrimitive)?.intOrNull,
+        )
+    }
+
+    /** `session.mutate` 的会话级写入（fence 校验失败时的重试在 `ChatRepository`，这里不重复）。 */
+    private suspend fun mutate(
+        profile: String?,
+        sessionId: String,
+        operation: String,
+        payload: JsonObject,
+        revision: Int?,
+        executionGeneration: Int?,
+    ): JsonObject {
+        if (revision == null) throw AppError.Protocol("session.mutate 需要 expected_revision")
+        val params = buildJsonObject {
+            put("session_id", sessionId)
+            put("request_id", "hdc-m-${kotlin.time.Clock.System.now().toEpochMilliseconds()}-$operation")
+            put("expected_revision", revision)
+            executionGeneration?.let { put("expected_generation", it) }
+            put("operation", operation)
+            put("payload", payload)
+        }
+        val element = try {
+            gateway.call(RpcMethods.SESSION_MUTATE, params, Timeouts.WRITE_MS)
+        } catch (throwable: Throwable) {
+            throw ErrorMapper.from(throwable, RpcMethods.SESSION_MUTATE)
+        }
+        return element as? JsonObject ?: JsonObject(emptyMap())
     }
 
     private suspend fun configSet(

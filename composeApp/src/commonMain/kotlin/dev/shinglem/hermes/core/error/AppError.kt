@@ -1,5 +1,7 @@
 package dev.shinglem.hermes.core.error
 
+import kotlinx.serialization.json.JsonElement
+
 /**
  * 领域错误。传输层异常一律在 [ErrorMapper] 里收敛成它，UI 层再映射成文案。
  *
@@ -21,8 +23,9 @@ sealed class AppError(message: String) : Exception(message) {
     /** 收到无法解析的帧、或协议层字段缺失。 */
     data class Protocol(val detail: String) : AppError("protocol: $detail")
 
-    /** 服务端 JSON-RPC 错误对象。 */
-    data class Server(val code: Int, val reason: String) : AppError("server $code: $reason")
+    /** 服务端 JSON-RPC 错误对象。`data` 是后端的结构化补充（fence 新鲜值、非法字段名等）。 */
+    data class Server(val code: Int, val reason: String, val data: JsonElement? = null) :
+        AppError("server $code: $reason")
 
     data class Unknown(val summary: String) : AppError("unknown: $summary")
 }

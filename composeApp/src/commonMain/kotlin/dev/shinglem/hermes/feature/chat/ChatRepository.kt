@@ -28,7 +28,9 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import kotlin.time.Clock
 import kotlin.time.Instant
+import kotlin.random.Random
 
 /** 会话历史读取（REST 分页，只读）+ 发送侧（WebSocket RPC）。 */
 class ChatRepository(
@@ -116,28 +118,27 @@ class ChatRepository(
             model = info?.stringOrNull("model"),
             provider = info?.stringOrNull("provider"),
             reasoningEffort = info?.stringOrNull("reasoning_effort"),
+            executionGeneration = (obj["execution_generation"] as? JsonPrimitive)?.intOrNull,
+            revision = (obj["revision"] as? JsonPrimitive)?.intOrNull,
         )
     }
 
-    /** 发送一条用户消息；ack 只代表"已被接受"，正文靠事件推进。 */
+    /**
+     * 发送一条用户消息；ack 只代表"已被接受"，正文靠事件推进。
+     *
+     * canonical 契约（`gateway/session_controls.py::submission`）有两条硬要求：
+     * 1. **必须**带 `submission_id`（或 `input_id`）—— 它是这次 admission 的幂等身份，
+     *    缺了后端直接 `4001 invalid_params`（这就是"一发消息就报 4001"的原因）；
+     * 2. 键集合是闭集，**不能带 `profile`** —— 会话已经由 live runtime id 定位。
+     */
     suspend fun submitPrompt(
-        profile: String?,
         runtimeSessionId: String,
         text: String,
-        /** 回退/重发：截断到这条消息之前（后端要求显式 `confirm_truncate`）。 */
-        truncateBeforeMessageId: String? = null,
-        /** 截断后历史为空时后端还要这一个确认。 */
-        confirmEmptyTruncate: Boolean = false,
     ): PromptAck {
         val params = buildJsonObject {
             put("session_id", runtimeSessionId)
-            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
             put("text", text)
-            if (truncateBeforeMessageId != null) {
-                put("truncate_before_message_id", truncateBeforeMessageId)
-                put("confirm_truncate", true)
-                if (confirmEmptyTruncate) put("confirm_empty_truncate", true)
-            }
+            put("submission_id", newRequestId())
         }
         val result = try {
             // 硬约束 3：ack 超时按 1800s，不能退化成 30s。
@@ -157,11 +158,21 @@ class ChatRepository(
      *
      * 后端返回 `status=queued` 表示已接受。agent 不支持 steer 时会报错，
      * 调用方据此退回"排队等这一轮结束"。
+     *
+     * `executionGeneration` 在 canonical 契约里是**必填**（`CanonicalCorrectionParams`），
+     * 拿不到就只能报错 —— 让调用方先 resume 一次，而不是发一个注定 4001 的请求。
      */
-    suspend fun steer(profile: String?, runtimeSessionId: String, text: String): String? {
+    suspend fun steer(
+        profile: String?,
+        runtimeSessionId: String,
+        text: String,
+        executionGeneration: Int?,
+    ): String? {
+        if (executionGeneration == null) throw AppError.Protocol("session.steer 需要 execution_generation")
         val params = buildJsonObject {
             put("session_id", runtimeSessionId)
             profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
+            put("execution_generation", executionGeneration)
             put("text", text)
         }
         val result = try {
@@ -173,55 +184,83 @@ class ChatRepository(
     }
 
     /**
-     * 从**某条消息**分支（截到它之前，要求会话活跃）。
+     * 从**某条消息**分支（保留到它为止）。
      *
-     * `count` 是"保留前 N 条"；调用方按消息在整段历史里的序号换算。
+     * canonical gateway 没有 `session.branch`（-32601），统一走
+     * `session.mutate {operation:"branch", payload:{through_message_id|title}}`。
+     * `throughMessageId` 是**物理行 id**（`history_row_id`），不是"前 N 条"。
      */
-    suspend fun branch(profile: String?, runtimeSessionId: String, count: Int, name: String? = null): BranchFrom {
-        val params = buildJsonObject {
-            put("session_id", runtimeSessionId)
-            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-            put("count", count)
-            name?.takeIf { it.isNotBlank() }?.let { put("name", it) }
+    suspend fun branch(
+        runtimeSessionId: String,
+        throughMessageId: Long?,
+        name: String? = null,
+        revision: Int?,
+        executionGeneration: Int?,
+    ): BranchFrom {
+        val payload = buildJsonObject {
+            name?.takeIf { it.isNotBlank() }?.let { put("title", it) }
+            throughMessageId?.let { put("through_message_id", it) }
         }
-        val result = try {
-            gateway.call(RpcMethods.SESSION_BRANCH, params, Timeouts.PROMPT_SUBMIT_MS)
-        } catch (throwable: Throwable) {
-            throw ErrorMapper.from(throwable, RpcMethods.SESSION_BRANCH)
-        }
-        return BranchFrom.of(result, "session.branch")
+        val result = mutateSession(
+            sessionId = runtimeSessionId,
+            operation = "branch",
+            payload = payload,
+            revision = revision,
+            executionGeneration = executionGeneration,
+            timeoutMs = Timeouts.PROMPT_SUBMIT_MS,
+        )
+        return BranchFrom.ofMutation(result, "session.mutate/branch")
     }
 
-    /** 整段克隆（不回传 transcript，省一次大 payload）。 */
-    suspend fun branchWhole(profile: String?, runtimeSessionId: String, name: String? = null): BranchFrom {
-        val params = buildJsonObject {
-            put("session_id", runtimeSessionId)
-            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-            name?.takeIf { it.isNotBlank() }?.let { put("name", it) }
-        }
-        val result = try {
-            gateway.call(RpcMethods.SESSION_BRANCH_WHOLE, params, Timeouts.PROMPT_SUBMIT_MS)
-        } catch (throwable: Throwable) {
-            throw ErrorMapper.from(throwable, RpcMethods.SESSION_BRANCH_WHOLE)
-        }
-        return BranchFrom.of(result, "session.branch_whole")
+    /** 整段克隆（不带 `through_message_id` 就是整份克隆）。 */
+    suspend fun branchWhole(
+        runtimeSessionId: String,
+        name: String? = null,
+        revision: Int?,
+        executionGeneration: Int?,
+    ): BranchFrom {
+        val result = mutateSession(
+            sessionId = runtimeSessionId,
+            operation = "branch",
+            payload = buildJsonObject { name?.takeIf { it.isNotBlank() }?.let { put("title", it) } },
+            revision = revision,
+            executionGeneration = executionGeneration,
+            timeoutMs = Timeouts.PROMPT_SUBMIT_MS,
+        )
+        return BranchFrom.ofMutation(result, "session.mutate/branch")
     }
 
-    /** 上下文 / token 用量（`session.usage`）。 */
-    suspend fun loadUsage(profile: String?, runtimeSessionId: String): UsageDto {
-        val params = buildJsonObject {
-            put("session_id", runtimeSessionId)
-            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-        }
-        val result = try {
-            gateway.call(RpcMethods.SESSION_USAGE, params, Timeouts.DEFAULT_MS)
-        } catch (throwable: Throwable) {
-            throw ErrorMapper.from(throwable, RpcMethods.SESSION_USAGE)
-        }
-        return RpcJson.json.decodeFromJsonElement(UsageDto.serializer(), result)
+    /**
+     * 回退到某条消息之前（`session.mutate {operation:"rewind"}`）。
+     *
+     * canonical 契约里 `prompt.submit` **不接受** `truncate_before_message_id` /
+     * `confirm_truncate`（那是旧 `METHODS` 契约的键，闭集校验直接 4001），
+     * 回退必须先 mutate rewind，再单独 submit 一条新消息。
+     */
+    suspend fun rewindTo(
+        runtimeSessionId: String,
+        targetMessageRowId: Long,
+        revision: Int?,
+        executionGeneration: Int?,
+    ) {
+        mutateSession(
+            sessionId = runtimeSessionId,
+            operation = "rewind",
+            payload = buildJsonObject { put("target_message_id", targetMessageRowId) },
+            revision = revision,
+            executionGeneration = executionGeneration,
+            requiresGeneration = true,
+            timeoutMs = Timeouts.PROMPT_SUBMIT_MS,
+        )
     }
 
-    /** 上下文占用明细（只在用户点开用量条时才拉）。 */
+    /**
+     * 上下文占用明细 —— 也是**用量条唯一的数据源**。
+     *
+     * 0.23.0 的 canonical gateway 不再提供 `session.usage` 这个查询方法（官方 Desktop 那边
+     * usage 改成按 `session.usage` **事件**推送 + `session.context_breakdown` 查询），
+     * 所以这里同一份数据既喂顶栏的用量条，也喂点开后的明细。
+     */
     suspend fun loadContextBreakdown(profile: String?, runtimeSessionId: String): ContextBreakdownDto {
         val params = buildJsonObject {
             put("session_id", runtimeSessionId)
@@ -236,15 +275,72 @@ class ChatRepository(
     }
 
     /** 停止当前生成；真正的收尾以 `message.complete(status=interrupted)` 事件为准。 */
-    suspend fun interrupt(profile: String?, runtimeSessionId: String) {
+    suspend fun interrupt(profile: String?, runtimeSessionId: String, executionGeneration: Int?) {
+        if (executionGeneration == null) throw AppError.Protocol("session.interrupt 需要 execution_generation")
         val params = buildJsonObject {
             put("session_id", runtimeSessionId)
             profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
+            put("execution_generation", executionGeneration)
         }
         try {
             gateway.call(RpcMethods.SESSION_INTERRUPT, params, Timeouts.DEFAULT_MS)
         } catch (throwable: Throwable) {
             throw ErrorMapper.from(throwable, RpcMethods.SESSION_INTERRUPT)
+        }
+    }
+
+    /**
+     * `session.mutate`：canonical gateway 上所有"改会话"的统一入口
+     * （rename / archive / delete / branch / rewind / workspace / reasoning / model）。
+     *
+     * ⚠️ 参数集是**精确匹配**（`gateway/session_mutations.py::_FIELDS`）：
+     * 只能是 `session_id` + `request_id` + `expected_revision` + `operation` + `payload`
+     * （外加可选的 `expected_generation`）。**多传一个 `profile` 就 4001** ——
+     * it 不在 canonical 的 profile 隐式剥离名单里，会直接破坏精确匹配。
+     *
+     * `revision_conflict` / `stale_generation` 的拒绝里带着后端当前的新鲜 fence
+     * （`data.revision` / `data.execution_generation`），所以这里用**同一个 request_id**
+     * 再试一次 —— 幂等，且不会把上一个 mutation 做成两次。
+     */
+    suspend fun mutateSession(
+        sessionId: String,
+        operation: String,
+        payload: JsonObject,
+        revision: Int?,
+        executionGeneration: Int? = null,
+        requiresGeneration: Boolean = false,
+        timeoutMs: Long = Timeouts.WRITE_MS,
+    ): JsonElement {
+        if (revision == null) throw AppError.Protocol("session.mutate 需要 expected_revision")
+        if (requiresGeneration && executionGeneration == null) {
+            throw AppError.Protocol("session.mutate/$operation 需要 expected_generation")
+        }
+        val requestId = newRequestId()
+        var fenceRevision = revision
+        var fenceGeneration = executionGeneration
+        var attempt = 0
+        while (true) {
+            val params = buildJsonObject {
+                put("session_id", sessionId)
+                put("request_id", requestId)
+                put("expected_revision", fenceRevision)
+                fenceGeneration?.let { put("expected_generation", it) }
+                put("operation", operation)
+                put("payload", payload)
+            }
+            try {
+                return gateway.call(RpcMethods.SESSION_MUTATE, params, timeoutMs)
+            } catch (conflict: AppError.Server) {
+                val data = conflict.data as? JsonObject
+                val freshRevision = (data?.get("revision") as? JsonPrimitive)?.intOrNull
+                if (attempt++ >= 1 || freshRevision == null) {
+                    throw ErrorMapper.from(conflict, RpcMethods.SESSION_MUTATE)
+                }
+                fenceRevision = freshRevision
+                (data?.get("execution_generation") as? JsonPrimitive)?.intOrNull?.let { fenceGeneration = it }
+            } catch (throwable: Throwable) {
+                throw ErrorMapper.from(throwable, RpcMethods.SESSION_MUTATE)
+            }
         }
     }
 
@@ -310,17 +406,25 @@ class ChatRepository(
             ?: false
     }
 
-    /** 交付决策（补拉回来的卡片只能走这条路）；返回本次决策解开了几条等待。 */
+    /**
+     * 交付决策（补拉回来的卡片只能走这条路）；返回本次决策解开了几条等待。
+     *
+     * canonical 契约（`CanonicalApprovalParams`）要的是 `prompt_id` + `choice` +
+     * **`execution_generation`**；旧写法传 `request_id` 会被闭集校验判 `4001 invalid_params`。
+     */
     suspend fun respondApproval(
         profile: String?,
         runtimeSessionId: String,
-        requestId: String?,
+        promptId: String?,
         choice: String,
+        executionGeneration: Int?,
     ): Int {
+        if (executionGeneration == null) throw AppError.Protocol("approval.respond 需要 execution_generation")
         val params = buildJsonObject {
             put("session_id", runtimeSessionId)
             profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-            requestId?.takeIf { it.isNotBlank() }?.let { put("request_id", it) }
+            put("execution_generation", executionGeneration)
+            promptId?.takeIf { it.isNotBlank() }?.let { put("prompt_id", it) }
             put("choice", choice)
         }
         val result = try {
@@ -399,6 +503,10 @@ class ChatRepository(
         const val MAX_ALL_MESSAGES = 20_000
 
         private const val LIMIT = MAX_LIMIT
+
+        /** `session.mutate` 的幂等 id（后端按它去重 receipt）；本地唯一即可。 */
+        private fun newRequestId(): String =
+            "hdc-m-${Clock.System.now().toEpochMilliseconds()}-${Random.nextInt(100_000, 999_999)}"
     }
 }
 
@@ -408,6 +516,14 @@ data class ResumedSession(
     val model: String? = null,
     val provider: String? = null,
     val reasoningEffort: String? = null,
+    /**
+     * `execution_generation`：0.23.0 的 canonical gateway 要求 `session.interrupt` /
+     * `session.steer` / `approval.respond` **必须**带上它（缺了就是 `4001 invalid_params`），
+     * 每次 `prompt.submit` 之后这个数会变，所以它只作为"当前这一代的凭据"快照。
+     */
+    val executionGeneration: Int? = null,
+    /** 会话的 mutation revision，做 rename / archive 等编辑时的 fence。 */
+    val revision: Int? = null,
 )
 
 data class PromptAck(val status: String?, val userRowId: Long?)
@@ -441,6 +557,24 @@ data class BranchFrom(val storedSessionId: String, val title: String, val messag
             val stored = dto.storedSessionId?.takeIf { it.isNotBlank() } ?: dto.sessionId
             if (stored.isBlank()) throw AppError.Protocol("$operation returned no session id")
             return BranchFrom(stored, dto.title, dto.messageCount)
+        }
+
+        /**
+         * `session.mutate {operation:"branch"}` 的返回：
+         * `{session_id, revision, execution_generation, operation, branched_session_id, title?}`。
+         * 新会话 id 在 `branched_session_id` 上，不会同时给 `stored_session_id`。
+         */
+        internal fun ofMutation(element: JsonElement, operation: String): BranchFrom {
+            val obj = element as? JsonObject ?: throw AppError.Protocol("$operation is not an object")
+            val stored = obj.stringOrNull("branched_session_id")
+                ?: obj.stringOrNull("stored_session_id")
+                ?: obj.stringOrNull("session_id")
+                ?: throw AppError.Protocol("$operation returned no session id")
+            return BranchFrom(
+                storedSessionId = stored,
+                title = obj.stringOrNull("title").orEmpty(),
+                messageCount = (obj["message_count"] as? JsonPrimitive)?.intOrNull ?: 0,
+            )
         }
     }
 }

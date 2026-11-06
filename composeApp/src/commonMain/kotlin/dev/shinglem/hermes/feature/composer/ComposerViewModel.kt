@@ -208,8 +208,7 @@ class ComposerViewModel(
         val trimmed = text.trim()
         if (trimmed.isEmpty() || trimmed.contains('\n')) return false
         val runtime = sessions.ensureRuntime() ?: return false
-        val drop = repository.detectDrop(sessions.profile, runtime.runtimeId, trimmed) ?: return false
-        if (!drop.matched) return false
+        val drop = repository.detectDrop(trimmed) ?: return false
         val path = drop.path ?: return false
         return if (drop.isImage == true) {
             attachImagePath(runtime, path)

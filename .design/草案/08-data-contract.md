@@ -51,13 +51,48 @@
 
 ### 2.2 方法清单（由 `RpcMethods` 导出）
 
-按本期需要的域分组：
+> ⚠️ **0.23.0 起只列 canonical gateway 真的提供的方法。**
+> `hermes gateway ensure` 起的 daemon 只服务 `gateway/session_controls.py::handlers` 里的动词，
+> 参数还是**闭集**（`tui_gateway/contracts/canonical_*.py`）：多一个键 `4001 invalid_params`，
+> 少一个必填键（`submission_id` / `execution_generation`）同样 4001。
+> 旧 `METHODS` 契约上才有的方法在 `gateway` 路线下一律 `-32601`，下表已剔除。
 
 **会话**
-`session.list` · `session.history` · `session.events.since` · `session.create` · `session.resume` ·
-`session.activate` · `session.close` · `session.delete` · `session.archive` · `session.title` ·
-`session.interrupt`（停止生成）· `session.usage` · `session.status` · `session.most_recent` ·
-`session.active_list` · `session.context_breakdown` · `session.cwd.set`
+`session.create` · `session.resume` · `session.info` · `session.list`（只给 `scope=live`，
+列表走 REST）· `session.active_list` · `session.context_breakdown` ·
+`session.interrupt`（**必须** `execution_generation`）· `session.steer`（同）·
+`session.events.since`
+
+**会话编辑：`session.mutate`（0.23.0 的唯一入口）**
+
+参数集**精确匹配**（`gateway/session_mutations.py::_FIELDS`）：
+`session_id` + `request_id` + `expected_revision` + `operation` + `payload`
+（+ 可选 `expected_generation`）。**不能带 `profile`**。fence 过期时拒绝里带 `data.revision` /
+`data.execution_generation`，用同一个 `request_id` 重试一次即可（官方 Desktop 也这么做）。
+
+| `operation` | `payload` | 备注 |
+|---|---|---|
+| `rename` | `{title}` | |
+| `archive` | `{archived}` | 已落库会话也可走 REST `PATCH /api/sessions/{id}` |
+| `sidebar` | `title`/`archived`/`hidden`/`pinned`/`unread` 的子集 | 一次改多个元数据 |
+| `delete` | `{}` | 也可走 REST `DELETE /api/sessions/{id}` |
+| `branch` | `{title?, through_message_id?}` | `through_message_id` 是**物理行 id**（整数）；缺席=整份克隆 |
+| `rewind` | `{target_message_id}` | 要 `expected_generation`；回退后需再单独 `prompt.submit` |
+| `workspace` | `{cwd}` | 替代 `session.cwd.set` |
+| `model` | `{model, provider?, confirm?, reasoning?}` | 替代 `config.set key=model`（后者回 `use_session_mutation_model`） |
+| `reasoning` | `{effort}` 或 `{effort: null}` | 替代 `config.set key=reasoning` |
+| `compress` / `reset` / `import` | 见 `validate_action` | |
+
+**已废弃的旧方法 → 替代通道**
+
+| 旧方法 | 现在走 |
+|---|---|
+| `session.title` / `session.archive` / `session.delete` | REST `PATCH` · `DELETE /api/sessions/{id}`（要 `request_id` + `expected_revision`） |
+| `session.branch` / `branch_whole` / `branch_stored` | `session.mutate {operation:"branch"}` |
+| `session.usage` | `session.context_breakdown`（`session.usage` 只剩**事件**） |
+| `session.cwd.set` | `session.mutate {operation:"workspace"}` |
+| `session.history` | REST `GET /api/sessions/{id}/messages` |
+| `image.attach`（路径）/ `clipboard.paste` / `input.detect_drop` | `image.attach_bytes`（base64）；剪贴板与拖放由客户端自己做 |
 
 **分支 / 复制 / 纠偏 / 会话控制**（v0.3.0 起用）
 

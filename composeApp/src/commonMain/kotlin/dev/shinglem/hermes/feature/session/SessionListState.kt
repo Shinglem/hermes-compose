@@ -383,7 +383,7 @@ class SessionListViewModel(
         viewModelScope.launch {
             try {
                 if (live) {
-                    repository.renameLiveSession(profile, draft.sessionId, title)
+                    repository.renameLiveSession(draft.sessionId, title)
                 } else {
                     repository.renameSession(profile, draft.sessionId, title)
                 }
@@ -493,7 +493,7 @@ class SessionListViewModel(
                     it.copy(
                         confirmArchiveId = null,
                         rowBusyId = null,
-                        rowError = ErrorMapper.from(throwable, RpcMethods.SESSION_ARCHIVE),
+                        rowError = ErrorMapper.from(throwable, RpcMethods.SESSION_MUTATE),
                     )
                 }
             }
@@ -570,7 +570,7 @@ class SessionListViewModel(
                 _state.update {
                     it.copy(
                         duplicatingId = null,
-                        rowError = ErrorMapper.from(throwable, RpcMethods.SESSION_BRANCH_STORED),
+                        rowError = ErrorMapper.from(throwable, RpcMethods.SESSION_MUTATE),
                     )
                 }
             }

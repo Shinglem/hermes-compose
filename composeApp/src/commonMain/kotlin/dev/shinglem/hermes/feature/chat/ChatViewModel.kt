@@ -79,6 +79,17 @@ class ChatViewModel(
     /** (profile, storedId) → runtime id（`session.resume` 的返回值）。 */
     private val runtimeIds = mutableMapOf<SessionKey, String>()
 
+    /**
+     * (profile, storedId) → `execution_generation`。
+     *
+     * canonical gateway 把它当"这一轮的执行身份"：`session.interrupt` / `session.steer` /
+     * `approval.respond` 都是**必填**（缺了就是 `4001 invalid_params`）。每次 resume 刷新。
+     */
+    private val generations = mutableMapOf<SessionKey, Int?>()
+
+    /** (profile, storedId) → `revision`：`session.mutate` 的 `expected_revision`。 */
+    private val revisions = mutableMapOf<SessionKey, Int?>()
+
     /** (profile, storedId) → 会话工作目录，供 composer 的 `@` 补全使用。 */
     private val cwds = mutableMapOf<SessionKey, String?>()
 
@@ -291,7 +302,7 @@ class ChatViewModel(
                 val runtimeId = ensureRuntime(key)
                 _state.update { state -> state.appendLocalUser(nextLocalId("user"), trimmed) }
                 _state.update { it.copy(streaming = StreamingState(startedAt = Clock.System.now())) }
-                val ack = repository.submitPrompt(key.profile, runtimeId, trimmed)
+                val ack = repository.submitPrompt(runtimeId, trimmed)
                 Log.info("prompt.submit ack status=${ack.status} userRowId=${ack.userRowId}")
                 // 后端在第一条 prompt 之后才给会话生成列表行 —— 这时刷新列表才看得到它。
                 onSessionPersisted?.invoke()
@@ -324,7 +335,7 @@ class ChatViewModel(
             _state.update { it.copy(steering = true, sendError = null) }
             try {
                 val runtimeId = ensureRuntime(key)
-                val status = repository.steer(key.profile, runtimeId, text)
+                val status = repository.steer(key.profile, runtimeId, text, generations[key])
                 Log.info("session.steer accepted status=$status")
                 _state.update { state -> state.appendLocalUser(nextLocalId("user"), text) }
                 onSessionPersisted?.invoke()
@@ -407,29 +418,29 @@ class ChatViewModel(
     }
 
     private suspend fun submitWithRewind(key: SessionKey, runtimeId: String, draft: RewindDraft) {
+        // canonical gateway 的 `prompt.submit` 不接受截断参数，回退是**两次**调用：
+        // 先 `session.mutate {operation:"rewind", payload:{target_message_id}}`，再提交新消息。
+        val rowId = draft.messageId.toLongOrNull()
+            ?: throw AppError.Protocol("只能从已落库的消息回退（当前 id=${draft.messageId}）")
         try {
             _state.update { it.copy(streaming = StreamingState(startedAt = Clock.System.now())) }
-            repository.submitPrompt(
-                profile = key.profile,
-                runtimeSessionId = runtimeId,
-                text = draft.text,
-                truncateBeforeMessageId = draft.messageId,
-                confirmEmptyTruncate = draft.emptyAfterTruncate,
-            )
+            repository.rewindTo(runtimeId, rowId, revisions[key], generations[key])
             _state.update { state -> state.appendLocalUser(nextLocalId("user"), draft.text) }
             onSessionPersisted?.invoke()
+            repository.submitPrompt(
+                runtimeSessionId = runtimeId,
+                text = draft.text,
+            )
         } catch (throwable: Throwable) {
             val busy = (throwable as? AppError.Server)?.code == BUSY_CODE
             if (!busy) throw throwable
             Log.info("rewind hit busy session; interrupting then retrying")
-            repository.interrupt(key.profile, runtimeId)
+            repository.interrupt(key.profile, runtimeId, generations[key])
             waitUntilIdle()
+            repository.rewindTo(runtimeId, rowId, revisions[key], generations[key])
             repository.submitPrompt(
-                profile = key.profile,
                 runtimeSessionId = runtimeId,
                 text = draft.text,
-                truncateBeforeMessageId = draft.messageId,
-                confirmEmptyTruncate = draft.emptyAfterTruncate,
             )
             _state.update { state -> state.appendLocalUser(nextLocalId("user"), draft.text) }
             onSessionPersisted?.invoke()
@@ -480,13 +491,18 @@ class ChatViewModel(
         viewModelScope.launch {
             try {
                 val runtimeId = ensureRuntime(key)
-                val result = repository.branch(key.profile, runtimeId, draft.count)
+                val result = repository.branch(
+                    runtimeSessionId = runtimeId,
+                    throughMessageId = draft.messageId.toLongOrNull(),
+                    revision = revisions[key],
+                    executionGeneration = generations[key],
+                )
                 onBranched?.invoke(result)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
                 _state.update {
-                    it.copy(sendError = ErrorMapper.from(throwable, RpcMethods.SESSION_BRANCH))
+                    it.copy(sendError = ErrorMapper.from(throwable, RpcMethods.SESSION_MUTATE))
                 }
             } finally {
                 _state.update { it.copy(branching = false) }
@@ -512,17 +528,19 @@ class ChatViewModel(
     private fun refreshUsage(key: SessionKey, runtimeId: String) {
         viewModelScope.launch {
             try {
-                val usage = repository.loadUsage(key.profile, runtimeId)
+                val detail = repository.loadContextBreakdown(key.profile, runtimeId)
                 if (_state.value.key != key) return@launch
                 _state.update {
                     it.copy(
                         usage = SessionUsage(
-                            contextUsed = usage.contextUsed,
-                            contextMax = usage.contextMax,
-                            contextPercent = usage.contextPercent,
-                            totalTokens = usage.total,
-                            calls = usage.calls,
-                            estimated = usage.contextEstimated,
+                            contextUsed = detail.contextUsed,
+                            contextMax = detail.contextMax,
+                            contextPercent = detail.contextPercent,
+                            totalTokens = detail.estimatedTotal,
+                            // `session.context_breakdown` 不给调用次数；0 表示"未知"，
+                            // 用量条那边就不会拼「· N 次」。
+                            calls = 0,
+                            estimated = detail.contextEstimated,
                         ),
                         usageError = null,
                     )
@@ -530,9 +548,11 @@ class ChatViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                Log.debug("session.usage failed: ${throwable.message}")
+                Log.debug("session.context_breakdown failed: ${throwable.message}")
                 if (_state.value.key != key) return@launch
-                _state.update { it.copy(usageError = ErrorMapper.from(throwable, RpcMethods.SESSION_USAGE)) }
+                _state.update {
+                    it.copy(usageError = ErrorMapper.from(throwable, RpcMethods.SESSION_CONTEXT_BREAKDOWN))
+                }
             }
         }
     }
@@ -578,7 +598,7 @@ class ChatViewModel(
         viewModelScope.launch {
             _state.update { it.copy(stopping = true) }
             try {
-                repository.interrupt(key.profile, runtimeId)
+                repository.interrupt(key.profile, runtimeId, generations[key])
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
@@ -605,7 +625,7 @@ class ChatViewModel(
         }
         viewModelScope.launch {
             try {
-                repository.respondApproval(key.profile, runtimeId, requestId, choice)
+                repository.respondApproval(key.profile, runtimeId, requestId, choice, generations[key])
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
@@ -770,6 +790,8 @@ class ChatViewModel(
                     runtimeSessionId = runtimeId,
                     provider = provider,
                     model = model,
+                    revision = revisions[key],
+                    executionGeneration = generations[key],
                     confirmExpensive = confirmExpensive,
                 )
                 if (outcome.confirmRequired) {
@@ -786,7 +808,8 @@ class ChatViewModel(
                     return@launch
                 }
                 // 不在这里回读模型：切换成功后后端会推 `session.info`（deferred 时也可能延后），
-                // 那才是显示的唯一真相源。
+                // 那才是显示的唯一真相源。mutate 回执带着新鲜 fence，写回去让下一次编辑不用试错。
+                adoptFence(key, outcome.revision, outcome.executionGeneration)
                 _state.update { it.copy(modelSwitching = false, model = model, provider = provider) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -831,7 +854,14 @@ class ChatViewModel(
         viewModelScope.launch {
             try {
                 val runtimeId = ensureRuntime(key)
-                models.setReasoning(key.profile, runtimeId, effort)
+                val outcome = models.setReasoning(
+                    key.profile,
+                    runtimeId,
+                    effort,
+                    revisions[key],
+                    generations[key],
+                )
+                adoptFence(key, outcome.revision, outcome.executionGeneration)
                 _state.update { it.copy(modelSwitching = false) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -964,6 +994,11 @@ class ChatViewModel(
         val resumed = repository.resumeSession(key.profile, key.sessionId)
         runtimeIds[key] = resumed.runtimeId
         cwds[key] = resumed.cwd
+        // canonical gateway 的「执行代」与 mutation revision：interrupt / steer / approval.respond
+        // 都要求带 `execution_generation`，session.mutate 要求 `expected_revision`。
+        // 两者都随每一轮推进，所以每次 resume 都刷新一遍。
+        generations[key] = resumed.executionGeneration
+        revisions[key] = resumed.revision
         // resume 的 info 就带着当前模型/推理强度：拿到就写进 UI，不用等下一次 session.info。
         // 期间切走了就别写 —— 那是另一个会话的 pill。
         _state.update { current ->
@@ -985,6 +1020,17 @@ class ChatViewModel(
     }
 
     override val profile: String? get() = _state.value.key?.profile
+
+    /**
+     * 写回后端回执里的新鲜 fence。
+     *
+     * `session.mutate` 每成功一次，`revision`（以及 model/reasoning 这类 `_POLICY` 操作的
+     * `execution_generation`）都会变；不写回就等于下一次编辑带着过期的 fence 去撞 4001。
+     */
+    private fun adoptFence(key: SessionKey, revision: Int?, generation: Int?) {
+        revision?.let { revisions[key] = it }
+        generation?.let { generations[key] = it }
+    }
 
     override val storedSessionId: String? get() = _state.value.key?.sessionId
 

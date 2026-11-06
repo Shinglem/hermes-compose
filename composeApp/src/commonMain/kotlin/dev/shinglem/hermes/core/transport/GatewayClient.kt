@@ -143,6 +143,11 @@ class GatewayClient(
             return withTimeout(timeoutMs) { deferred.await() }
         } catch (timeout: TimeoutCancellationException) {
             throw AppError.Timeout(method)
+        } catch (server: AppError.Server) {
+            // 后端报错时把**方法名**也写进日志：否则界面上只剩一句 "4001 invalid_params"，
+            // 完全不知道是哪个调用挂了（0.23.0 的 canonical 契约是闭集，多一个键就 4001）。
+            logger.log(LogLevel.WARN, "rpc failed: method=$method code=${server.code} ${server.message}")
+            throw server
         } finally {
             pending.update { it - id }
         }
@@ -230,7 +235,7 @@ class GatewayClient(
         pending.update { it - id }
         val error = frame.error
         if (error != null) {
-            deferred.completeExceptionally(AppError.Server(error.code, error.message))
+            deferred.completeExceptionally(AppError.Server(error.code, error.message, error.data))
         } else {
             deferred.complete(frame.result ?: JsonNull)
         }

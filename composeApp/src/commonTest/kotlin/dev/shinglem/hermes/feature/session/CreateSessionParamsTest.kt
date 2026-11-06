@@ -57,7 +57,8 @@ class CreateSessionParamsTest {
         assertEquals("标题", params["title"]?.jsonPrimitive?.content)
         assertEquals("volcengine", params["provider"]?.jsonPrimitive?.content)
         assertEquals("m1", params["model"]?.jsonPrimitive?.content)
-        assertEquals("high", params["reasoning_effort"]?.jsonPrimitive?.content)
+        // canonical 契约（CanonicalCreateParams）里的键是 `reasoning`，不是 `reasoning_effort`。
+        assertEquals("high", params["reasoning"]?.jsonPrimitive?.content)
     }
 
     @Test

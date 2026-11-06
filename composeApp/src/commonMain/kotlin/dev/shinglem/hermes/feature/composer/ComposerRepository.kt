@@ -8,10 +8,15 @@ import dev.shinglem.hermes.core.contract.DetectDropDto
 import dev.shinglem.hermes.core.contract.FileAttachDto
 import dev.shinglem.hermes.core.contract.PasteCollapseDto
 import dev.shinglem.hermes.core.contract.RpcMethods
+import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.error.ErrorMapper
 import dev.shinglem.hermes.core.transport.GatewayClient
 import dev.shinglem.hermes.core.transport.RpcJson
 import dev.shinglem.hermes.core.transport.Timeouts
+import dev.shinglem.hermes.platform.Clipboard
+import dev.shinglem.hermes.platform.readFileBytes
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -84,47 +89,60 @@ class ComposerRepository(private val gateway: GatewayClient) {
         )
     }
 
-    /** 图片按路径附加（拖入的图片文件）。 */
+    /** 图片按路径附加：canonical gateway 只认 base64（`image.attach_bytes`），不接受路径。 */
     suspend fun attachImage(profile: String?, runtimeSessionId: String, path: String): AttachedImageDto {
+        val bytes = readFileBytes(path) ?: throw AppError.Protocol("读不到图片文件：$path")
+        return attachImageBytes(profile, runtimeSessionId, bytes, path.substringAfterLast('\\').substringAfterLast('/'))
+    }
+
+    /**
+     * 把宿主剪贴板里的图片存进会话。
+     *
+     * 0.23.0 的 canonical gateway 没有 `clipboard.paste`（-32601），而且 gateway 可能跑在
+     * Session 0（独立剪贴板，永远读不到用户复制的内容），所以**由前端读剪贴板**、
+     * 落成临时 PNG 再走 `image.attach_bytes`。
+     */
+    suspend fun pasteClipboardImage(profile: String?, runtimeSessionId: String): AttachedImageDto? {
+        if (!Clipboard.hasImage()) return null
+        val path = Clipboard.saveImageToTemp() ?: return null
+        return attachImage(profile, runtimeSessionId, path)
+    }
+
+    /** `image.attach_bytes`：内容走 base64，`filename` / `ext` 只用来提示扩展名。 */
+    @OptIn(ExperimentalEncodingApi::class)
+    private suspend fun attachImageBytes(
+        profile: String?,
+        runtimeSessionId: String,
+        bytes: ByteArray,
+        filename: String,
+    ): AttachedImageDto {
         val params = buildJsonObject {
             put("session_id", runtimeSessionId)
-            put("path", path)
             profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
+            put("content_base64", Base64.Default.encode(bytes))
+            put("filename", filename)
         }
         return RpcJson.json.decodeFromJsonElement(
             AttachedImageDto.serializer(),
-            call(RpcMethods.IMAGE_ATTACH, params),
+            call(RpcMethods.IMAGE_ATTACH_BYTES, params),
         )
     }
 
     /**
-     * 把宿主剪贴板里的图片存进会话。**只有在客户端确认剪贴板有图时才能调**：
-     * 后端无图时也可能直接断开连接（实测过一次 WS aborted）。
+     * 粘贴进来的路径文本是不是文件/图片拖放。
+     *
+     * canonical gateway 没有 `input.detect_drop`（-32601），这件事本来也不需要后端：
+     * 判"多行文本里单独一行是图片/文件扩展名"就够，真正的附加由 [attachImage] / [attachFile] 做。
      */
-    suspend fun pasteClipboardImage(profile: String?, runtimeSessionId: String): AttachedImageDto {
-        val params = buildJsonObject {
-            put("session_id", runtimeSessionId)
-            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-        }
-        return RpcJson.json.decodeFromJsonElement(
-            AttachedImageDto.serializer(),
-            call(RpcMethods.CLIPBOARD_PASTE, params),
-        )
+    fun detectDrop(text: String): DetectDropDto? {
+        val candidate = text.trim().trim('"', '\'')
+        if (candidate.isEmpty() || candidate.contains('\n')) return null
+        val lower = candidate.lowercase()
+        val isImage = IMAGE_EXTENSIONS.any { lower.endsWith(it) }
+        val isFile = isImage || FILE_EXTENSIONS.any { lower.endsWith(it) }
+        if (!isFile) return null
+        return DetectDropDto(isImage = isImage, path = candidate, count = 1)
     }
-
-    /** 粘贴进来的路径文本是不是文件/图片拖放。 */
-    suspend fun detectDrop(profile: String?, runtimeSessionId: String, text: String): DetectDropDto? =
-        runCatching {
-            val params = buildJsonObject {
-                put("session_id", runtimeSessionId)
-                put("text", text)
-                profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-            }
-            RpcJson.json.decodeFromJsonElement(
-                DetectDropDto.serializer(),
-                call(RpcMethods.INPUT_DETECT_DROP, params),
-            )
-        }.getOrNull()
 
     private suspend fun call(method: String, params: JsonObject): JsonElement = try {
         gateway.call(method, params, Timeouts.DEFAULT_MS)
@@ -136,6 +154,12 @@ class ComposerRepository(private val gateway: GatewayClient) {
         /** 后端把粘贴折叠的触发阈值放在自己那边，这里只做"是否值得问"的粗判。 */
         const val PASTE_COLLAPSE_MIN_CHARS = 2_000
         const val PASTE_COLLAPSE_MIN_LINES = 30
+
+        private val IMAGE_EXTENSIONS = listOf(".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+        private val FILE_EXTENSIONS = listOf(
+            ".txt", ".md", ".json", ".yaml", ".yml", ".toml", ".csv", ".log", ".pdf",
+            ".kt", ".py", ".ts", ".js", ".java", ".go", ".rs", ".c", ".h", ".cpp", ".sh", ".ps1",
+        )
     }
 }
 

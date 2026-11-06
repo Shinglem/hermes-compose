@@ -23,6 +23,7 @@ import kotlin.random.Random
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -108,77 +109,103 @@ class SessionRepository(
     /**
      * 给**还没落库**的会话改标题（刚 `session.create` 出来的那条）。
      *
-     * 它在后端内存里是 live 的，所以 RPC `session.title` 可用，标题会排队到首轮生效；
-     * REST `PATCH` 此时会 404（库里还没有这一行）。
+     * 它在后端内存里是 live 的，REST `PATCH` 会 404（库里还没有这一行），所以走
+     * `session.mutate {operation:"rename"}`。新会话的 revision 从 0 起，冲突时后端会在
+     * 拒绝里带回新鲜的 `data.revision` —— 用它重试一次（同一个 `request_id`，幂等）。
      */
-    suspend fun renameLiveSession(profile: String?, sessionId: String, title: String) {
-        val params = buildJsonObject {
-            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-            put("session_id", sessionId)
-            put("title", title)
-        }
-        try {
-            gateway.call(RpcMethods.SESSION_TITLE, params, Timeouts.WRITE_MS)
-        } catch (throwable: Throwable) {
-            throw ErrorMapper.from(throwable, RpcMethods.SESSION_TITLE)
+    suspend fun renameLiveSession(sessionId: String, title: String) {
+        val requestId = newRequestId()
+        var revision = 0
+        var attempt = 0
+        while (true) {
+            val params = buildJsonObject {
+                put("session_id", sessionId)
+                put("request_id", requestId)
+                put("expected_revision", revision)
+                put("operation", "rename")
+                put("payload", buildJsonObject { put("title", title) })
+            }
+            try {
+                gateway.call(RpcMethods.SESSION_MUTATE, params, Timeouts.WRITE_MS)
+                return
+            } catch (conflict: AppError.Server) {
+                val fresh = ((conflict.data as? JsonObject)?.get("revision") as? JsonPrimitive)?.intOrNull
+                if (attempt++ >= 1 || fresh == null) {
+                    throw ErrorMapper.from(conflict, RpcMethods.SESSION_MUTATE)
+                }
+                revision = fresh
+            } catch (throwable: Throwable) {
+                throw ErrorMapper.from(throwable, RpcMethods.SESSION_MUTATE)
+            }
         }
     }
 
     /**
      * 归档 / 取消归档。
      *
-     * 与 `session.title` / `session.delete` 不同，`session.archive` 不是 session-scoped
-     * （后端注释：live runtime id 优先，其次 stored id / key），冷会话也能直接归档，不需要先点开。
-     * 归档是**软隐藏**：会话行不再出现在 `session.list` 里，消息仍在。
+     * 0.23.0 的 canonical gateway **没有** `session.archive`（-32601），所以统一走
+     * REST `PATCH /api/sessions/{id}`（官方 Desktop 的 sidebar 通道，同一条 fence 规则）。
+     * 归档是**软隐藏**：会话行不再出现在列表里，消息仍在。
      */
-    suspend fun setArchived(profile: String?, sessionId: String, archived: Boolean) {
-        val params = buildJsonObject {
-            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-            put("session_id", sessionId)
-            put("archived", archived)
-        }
-        try {
-            gateway.call(RpcMethods.SESSION_ARCHIVE, params, Timeouts.WRITE_MS)
-        } catch (throwable: Throwable) {
-            throw ErrorMapper.from(throwable, RpcMethods.SESSION_ARCHIVE)
-        }
-    }
+    suspend fun setArchived(profile: String?, sessionId: String, archived: Boolean) =
+        mutateSidebar(profile, sessionId, buildJsonObject { put("archived", archived) })
 
-    /** 删除会话（含 transcript），走 RPC：由客户端会话作用域处理，需该会话在内存里（先点开）。 */
+    /**
+     * 删除会话（含 transcript）。
+     *
+     * 同样走 REST：`DELETE /api/sessions/{id}`，并带上 `request_id` + `expected_revision`
+     * （缺这两个后端会判 `409 client_upgrade_required`）。
+     */
     suspend fun deleteSession(profile: String?, sessionId: String) {
-        val params = buildJsonObject {
-            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-            put("session_id", sessionId)
-        }
-        try {
-            gateway.call(RpcMethods.SESSION_DELETE, params, Timeouts.WRITE_MS)
-        } catch (throwable: Throwable) {
-            throw ErrorMapper.from(throwable, RpcMethods.SESSION_DELETE)
+        val path = withProfileQuery("/api/sessions/$sessionId", profile)
+        var attempt = 0
+        while (true) {
+            val snapshot = mutationSnapshot(profile, sessionId)
+                ?: throw AppError.Server(409, "读不到会话的 mutation-snapshot")
+            val body = buildJsonObject {
+                put("request_id", newRequestId())
+                put("expected_revision", snapshot.revision)
+                snapshot.generation?.let { put("expected_generation", it) }
+            }
+            try {
+                rest.send(RestMethod.DELETE, path, body)
+                return
+            } catch (conflict: AppError.Server) {
+                if (attempt++ >= 1) throw ErrorMapper.from(conflict, "sessions.delete")
+            } catch (throwable: Throwable) {
+                throw ErrorMapper.from(throwable, "sessions.delete")
+            }
         }
     }
 
     /**
      * 复制为新会话（整份历史克隆，原会话不动）。
      *
-     * 走 `session.branch_stored`：它内部就是 `session.create + copy_parent_history`，
-     * **父会话不必是活跃会话** —— 这是会话行菜单能直接用的前提。
-     *
-     * ⚠️ 父会话 id 的字段名是 `parent_session_id`（不是 `session_id`）：
-     * 后端缺这个字段会直接 `4008 parent_session_id is required when copying parent history`。
+     * canonical gateway 没有 `session.branch_stored`（-32601），改走
+     * `session.mutate {operation:"branch", payload:{}}` —— 不带 `through_message_id`
+     * 就是整份克隆，且**父会话不必是活跃会话**（这是会话行菜单能直接用的前提）。
      */
     suspend fun duplicateSession(profile: String?, sessionId: String): String {
+        val snapshot = mutationSnapshot(profile, sessionId)
+            ?: throw AppError.Server(409, "读不到会话的 mutation-snapshot")
         val params = buildJsonObject {
-            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-            put("parent_session_id", sessionId)
-            put("source", SessionSurface.CLIENT)
+            put("session_id", sessionId)
+            put("request_id", newRequestId())
+            put("expected_revision", snapshot.revision)
+            snapshot.generation?.let { put("expected_generation", it) }
+            put("operation", "branch")
+            put("payload", JsonObject(emptyMap()))
         }
         val element = try {
-            gateway.call(RpcMethods.SESSION_BRANCH_STORED, params, Timeouts.WRITE_MS)
+            gateway.call(RpcMethods.SESSION_MUTATE, params, Timeouts.WRITE_MS)
         } catch (throwable: Throwable) {
-            throw ErrorMapper.from(throwable, RpcMethods.SESSION_BRANCH_STORED)
+            throw ErrorMapper.from(throwable, RpcMethods.SESSION_MUTATE)
         }
-        val dto = RpcJson.json.decodeFromJsonElement(SessionCreateResultDto.serializer(), element)
-        return dto.storedSessionId?.takeIf { it.isNotBlank() } ?: dto.sessionId
+        val obj = element as? JsonObject ?: throw AppError.Protocol("session.mutate returned no object")
+        return obj["branched_session_id"]?.jsonPrimitive?.contentOrNull
+            ?.takeIf { it.isNotBlank() }
+            ?: obj["stored_session_id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            ?: throw AppError.Protocol("session.mutate/branch returned no session id")
     }
 
     /** 后端 `/api/sessions/search` 的原始结果（内容检索，命中带 snippet）。 */
@@ -289,8 +316,8 @@ private fun SessionListRowDto.toSummary(): SessionSummary = SessionSummary(
  * - `client_env`：见 [ClientPrompt]，把真实的渲染能力告诉 agent。
  *
  * `client_env` **只有 create 接受**（`CanonicalResumeParams` 没有这个字段），所以
- * 「复制为新会话」（`session.branch_stored`，它的 params 也没有）拿不到这段提示词 ——
- * 复制出来的会话会退回后端默认的 tui 描述，属已知限制。
+ * 「复制为新会话」（`session.mutate {operation:"branch"}`，它的 payload 也没有）拿不到
+ * 这段提示词 —— 复制出来的会话会退回后端默认的 tui 描述，属已知限制。
  */
 internal fun createSessionParams(
     profile: String?,
@@ -302,11 +329,12 @@ internal fun createSessionParams(
     profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
     title?.takeIf { it.isNotBlank() }?.let { put("title", it) }
     put("source", SessionSurface.CLIENT)
-    // 草稿态在 composer 里选好的模型：`session.create` 的这三个参数是 per-session
-    // override，不写 config.yaml（见 tui_gateway/methods_session.py::_create_overrides）。
+    // 草稿态在 composer 里选好的模型：`session.create` 的这几个参数是 per-session override，
+    // 不写 config.yaml。注意 canonical 契约（`CanonicalCreateParams`）里推理强度的键是
+    // **`reasoning`** —— 写 `reasoning_effort` 会被闭集校验判 `4001 invalid_params`。
     provider?.takeIf { it.isNotBlank() }?.let { put("provider", it) }
     model?.takeIf { it.isNotBlank() }?.let { put("model", it) }
-    reasoningEffort?.takeIf { it.isNotBlank() }?.let { put("reasoning_effort", it) }
+    reasoningEffort?.takeIf { it.isNotBlank() }?.let { put("reasoning", it) }
     put(
         "client_env",
         buildJsonObject { put(ClientPrompt.ENV_KEY, ClientPrompt.RENDERING) },

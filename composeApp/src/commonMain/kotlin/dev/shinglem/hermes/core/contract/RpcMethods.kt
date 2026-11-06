@@ -1,20 +1,50 @@
 package dev.shinglem.hermes.core.contract
 
 /**
- * 本期用到的 RPC 方法名。完整清单（约 120 个）由后端 `contracts/registry.py` 生成；
- * 生成器落地前先维护这个最小集（见 `.design/草案/07-decisions.md` ADR-010）。
+ * 本期用到的 RPC 方法名。
+ *
+ * **只列 0.23.0 canonical gateway（`gateway ensure` 起的 daemon）真的提供的方法**。
+ * 那条路线只服务 `gateway/session_controls.py::handlers` 里的动词，参数还是**闭集**
+ * （`tui_gateway/contracts/canonical_*.py`）—— 多一个键就是 `4001 invalid_params`，
+ * 少一个必填键（如 `execution_generation`）也是。
+ *
+ * 已从这张表删掉的旧方法（调用会 `-32601`，改走别的通道）：
+ *
+ * | 旧方法 | 0.23.0 的替代 |
+ * |---|---|
+ * | `session.title` / `session.archive` / `session.delete` | REST `PATCH`/`DELETE /api/sessions/{id}` |
+ * | `session.branch` / `session.branch_whole` / `session.branch_stored` | `session.mutate {operation:"branch"}` |
+ * | `session.usage` | `session.context_breakdown`（+ `session.usage` **事件**） |
+ * | `session.cwd.set` | `session.mutate {operation:"workspace"}` |
+ * | `session.list` | REST `GET /api/sessions`（RPC 只给 `scope=live`） |
+ * | `session.history` | REST `GET /api/sessions/{id}/messages` |
+ *
+ * 完整清单见后端 `contracts/registry.py`（ADR-010 的生成器落地前先手工维护这个最小集）。
  */
 object RpcMethods {
+    /** 只返回 live 会话（默认 `scope=live`）；会话列表走 REST，不要用这个。 */
     const val SESSION_LIST = "session.list"
-    const val SESSION_HISTORY = "session.history"
     const val SESSION_RESUME = "session.resume"
     const val SESSION_CREATE = "session.create"
-    const val SESSION_DELETE = "session.delete"
-    const val SESSION_ARCHIVE = "session.archive"
-    const val SESSION_TITLE = "session.title"
-    const val SESSION_STATUS = "session.status"
-    const val SESSION_EVENTS_SINCE = "session.events.since"
+
+    /** `session.info`：live 会话的 `revision` / `execution_generation` 来源。 */
+    const val SESSION_INFO = "session.info"
+
+    /**
+     * 0.23.0 canonical gateway 上**所有"改会话"操作的唯一入口**：
+     * rename / archive / delete / branch / rewind / workspace / reasoning / model / compress。
+     *
+     * 参数集是精确匹配：`session_id` + `request_id` + `expected_revision` + `operation` +
+     * `payload`（+ 可选 `expected_generation`），**不能带 `profile`**。
+     */
+    const val SESSION_MUTATE = "session.mutate"
+
+    /** 停止当前轮；**必须**带 `execution_generation`（`CanonicalControlParams`）。 */
     const val SESSION_INTERRUPT = "session.interrupt"
+
+    /** 生成中纠偏；**必须**带 `execution_generation`（`CanonicalCorrectionParams`）。 */
+    const val SESSION_STEER = "session.steer"
+
     const val PROMPT_SUBMIT = "prompt.submit"
     const val PROFILES_LIST = "profiles.list"
     const val GATEWAY_PING = "gateway.ping"
@@ -27,7 +57,7 @@ object RpcMethods {
      */
     const val CLIENT_CAPABILITIES = "client.capabilities"
 
-    // ── 审批（`tui_gateway/methods_prompt.py`）────────────────────────────
+    // ── 审批 ─────────────────────────────────────────────────────────────
 
     /** 补拉本会话还没解决的审批（重连 / 请求发出时本端不在）。 */
     const val APPROVAL_PENDING = "approval.pending"
@@ -35,48 +65,44 @@ object RpcMethods {
     /** 告知后端卡片已上屏，它的超时时钟从这里开始算。 */
     const val APPROVAL_RECEIVED = "approval.received"
 
-    /** 交付决策：`choice` + `request_id`。响应帧路径失效时（重连补拉）走它。 */
+    /** 交付决策：canonical 契约要 `prompt_id` + `choice` + `execution_generation`。 */
     const val APPROVAL_RESPOND = "approval.respond"
 
-    /** composer 侧：`@` / `/` 补全与附件（`contracts/profiles_vault_complete_foreign_subagents.py`
-     *  与 `contracts/prompt_voice.py`）。 */
+    // ── composer：`@` / `/` 补全与附件 ─────────────────────────────────────
+
     const val COMPLETE_PATH = "complete.path"
     const val COMPLETE_SLASH = "complete.slash"
     const val PASTE_COLLAPSE = "paste.collapse"
     const val FILE_ATTACH = "file.attach"
-    const val IMAGE_ATTACH = "image.attach"
-    const val CLIPBOARD_PASTE = "clipboard.paste"
-    const val INPUT_DETECT_DROP = "input.detect_drop"
-    const val SESSION_CWD_SET = "session.cwd.set"
+
+    /**
+     * 图片附加：canonical gateway **只有** `image.attach_bytes`（内容走 base64）。
+     * 路径版的 `image.attach`、后端读剪贴板的 `clipboard.paste`、拖放检测
+     * `input.detect_drop` 都只在 direct 后端上有，gateway 路线会 `-32601` ——
+     * 那三件事改由客户端自己做（读文件 / 读剪贴板 / 判扩展名）。
+     */
+    const val IMAGE_ATTACH_BYTES = "image.attach_bytes"
 
     /**
      * 模型选择（`tui_gateway/methods_complete.py` 与 `methods_config_set.py`）。
      *
      * - `model.options`：provider + 模型目录（与 REST `/api/model/options` 同一 payload）
-     * - `config.set`：`key="model"` 切当前会话模型（value 形如 `"<model> --provider <slug>"`），
-     *   `key="reasoning"` 切推理强度（`scope="session"`）
+     * - `config.set`：`key="model"` 切当前会话模型；`key="reasoning"` 切推理强度。
+     *   canonical gateway 对会话级切换走 `session.mutate`（operation `model` / `reasoning`），
+     *   `config.set` 只在 direct 后端上保证可用。
      */
     const val MODEL_OPTIONS = "model.options"
     const val CONFIG_SET = "config.set"
 
-    // ── v0.3.0：会话控制 / 分支 / 子代理 ─────────────────────────────────────
+    // ── 运行态 / 用量 ─────────────────────────────────────────────────────
 
     /** 当前活跃会话 id（会话列表的运行态点）。 */
     const val SESSION_ACTIVE_LIST = "session.active_list"
 
-    /** 上下文 / token 用量；明细（分类）走 `session.context_breakdown`。 */
-    const val SESSION_USAGE = "session.usage"
+    /** 上下文占用（用量条与明细的唯一数据源）。 */
     const val SESSION_CONTEXT_BREAKDOWN = "session.context_breakdown"
 
-    /** 生成中纠偏：重定向当前轮而不打断它。 */
-    const val SESSION_STEER = "session.steer"
-
-    /** 截至某条消息的分支（要求会话活跃）；`branch_whole` 整段克隆且不回传 transcript。 */
-    const val SESSION_BRANCH = "session.branch"
-    const val SESSION_BRANCH_WHOLE = "session.branch_whole"
-
-    /** 存储态整份克隆（父会话不必活跃）——「复制为新会话」用它。 */
-    const val SESSION_BRANCH_STORED = "session.branch_stored"
+    // ── 子代理 ───────────────────────────────────────────────────────────
 
     const val SUBAGENT_LIST = "subagent.list"
     const val SUBAGENT_TAIL = "subagent.tail"

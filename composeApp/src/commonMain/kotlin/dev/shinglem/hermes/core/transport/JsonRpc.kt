@@ -22,7 +22,7 @@ object RpcJson {
     }
 }
 
-data class RpcErrorDetail(val code: Int, val message: String)
+data class RpcErrorDetail(val code: Int, val message: String, val data: JsonElement? = null)
 
 sealed interface IncomingFrame {
     data class Response(
@@ -98,7 +98,9 @@ object JsonRpc {
         val obj = element as? JsonObject ?: return null
         val code = (obj["code"] as? JsonPrimitive)?.longOrNull?.toInt() ?: 0
         val message = (obj["message"] as? JsonPrimitive)?.contentOrNull.orEmpty()
-        return RpcErrorDetail(code, message)
+        // `data` 里带着 fence 的新鲜值（`revision` / `execution_generation`）与
+        // `fields`（闭集契约拒绝时指出哪个键不合法），丢了就只能盲试。
+        return RpcErrorDetail(code, message, obj["data"]?.takeUnless { it is JsonNull })
     }
 
     private fun parseEvent(params: JsonElement?): GatewayEvent {
