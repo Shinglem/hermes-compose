@@ -240,7 +240,7 @@ val appMainClass = "dev.shinglem.hermes.MainKt"
  * 启动器 cfg，以及**发布资产名**（`hermes-desktop-compose-<appVersion>-win32-x64-*.7z.001`）。
  * 与 Release tag（`v<桌面版本>-<hermes版本>`）是两套数字，互不推导，见 `CHANGELOG.md`。
  */
-val appVersion = "0.5.2"
+val appVersion = "0.5.0"
 
 /**
  * 产物名：jpackage 的 `--name` / `packageName`，决定

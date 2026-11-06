@@ -5,52 +5,14 @@
 
 ---
 
-## [0.5.2] · 2026-11-06（hermes 0.23.0）
-
-> **patch 版本**：只改客户端外壳（`bin/App.jar`），覆盖式升级。修的是 0.5.1 引入的回归 ——
-> 会话列表整片空。
-
-### 修复
-
-- **会话列表一条都不显示**：0.5.1 把列表读取从 RPC `session.list` 改成 REST `GET /api/sessions`
-  （0.23.0 的 RPC 默认只返回运行中的会话），但 `limit` 沿用了旧 RPC 时代的 **200**，
-  而上游该接口的校验是 `Query(le=100)` —— 每次请求都 `422 less_than_equal`，异常被吞成空列表。
-  现在上限统一 clamp 到 100，`RestClient.listSessions` 内部兜底，调用方不再各自记这个数。
-
-### 变更
-
-- 会话加载加了可观测日志（`sessions refresh requested` / `sessions loaded: … count=` /
-  `sessions load failed …`）：空列表最容易误判成"数据丢了"，有了这三行就能立刻分清是
-  后端没给、解析丢了，还是请求根本没发。
-
----
-
-## [0.5.1] · 2026-11-06（hermes 0.23.0）
-
-> **patch 版本**：只改客户端外壳（`bin/App.jar`），覆盖式升级，`config/`、`data/` 与 payload 都不动。
-> 相对 `v0.5.0-0.23.0` 只修了一个会把用户挡在门外的 bug。
-
-### 修复
-
-- **老 home 升级后「网关 xxms 但一直重连中」**：`gateway` 路线下，daemon 启动时走上游
-  `served_profile_child_env(inherit_credentials=True)`，它会用 `HERMES_HOME/.env` 里的
-  `HERMES_DASHBOARD_SESSION_TOKEN` **覆盖**客户端注入的值。于是客户端拿着自己随机生成的令牌去连
-  daemon，WebSocket 握手 403、无限重连（HTTP `/api/status` 却是 200，所以状态栏显示延迟正常）。
-  只在 `.env` 里已有该键的老 home 上复现；全新的空 home 不会。
-
-### 变更
-
-- 会话令牌改为**四段优先级**：`home/.env` 的 `HERMES_DASHBOARD_SESSION_TOKEN` → 配置里的
-  `backend.local.token` → 上次持久化的 `<data>/gateway-token` → 新生成并落盘。
-  daemon 是常驻进程，重启客户端时令牌必须不变。
-
----
-
 ## [0.5.0] · 2026-11-06（hermes 0.23.0）
 
 > **完整包版本（桌面版本升位）**：tag `v0.5.0-0.23.0`，由 `desktop-release` 走 CI 出完整包。
 > payload 换到 hermes **0.23.0**（`Shinglem/hermes-bundle` 的 `v0.23.0`），
 > 工具链仍是 `toolchain-v1`（JDK 基线没变）。
+>
+> 首次构建的完整包存在「网关一直重连」与「会话列表空」两个缺陷，已在本版内修掉并**重新出包**；
+> 因此不再有 0.5.1 / 0.5.2 之类的 patch 版本，早期下载的 `v0.5.0-0.23.0` 应当作废重装。
 >
 > **升级方式**：下载完整包解压即可；旧的 `hermes/` 目录请**整目录替换**成 0.23.0 的 payload
 > （`pm bundle` 产物不能增量覆盖）。`config/` 与 `data/` 可以保留 —— 但 0.23.0 会升级后端
@@ -88,6 +50,25 @@
   `isolated`。
 - **`app.browser.headed` / `app.browser.args` / `backend.local.run_cron` 在 `gateway` 路线下改完要重启后端**
   （它们是 daemon 的启动环境变量）；设置页的保存提示已经写明。
+
+### 修复
+
+- **老 home 升级后「网关 xxms 但一直重连中」**：`gateway` 路线下，daemon 启动时走上游
+  `served_profile_child_env(inherit_credentials=True)`，它会用 `HERMES_HOME/.env` 里的
+  `HERMES_DASHBOARD_SESSION_TOKEN` **覆盖**客户端注入的值。于是客户端拿着自己随机生成的令牌去连
+  daemon，WebSocket 握手 403、无限重连（HTTP `/api/status` 却是 200，所以状态栏显示延迟正常）。
+  只在 `.env` 里已有该键的老 home 上复现；全新的空 home 不会。
+  现在会话令牌按**四段优先级**取值：`home/.env` 的 `HERMES_DASHBOARD_SESSION_TOKEN` → 配置里的
+  `backend.local.token` → 上次持久化的 `<data>/gateway-token` → 新生成并落盘。
+  daemon 是常驻进程，重启客户端时令牌必须不变。
+
+- **会话列表一条都不显示**：列表读取从 RPC `session.list` 改为 REST `GET /api/sessions`
+  （0.23.0 的 RPC 默认 `scope=live`，只返回运行中的会话），但 `limit` 沿用了旧 RPC 时代的 **200**，
+  而上游该接口的校验是 `Query(le=100)` —— 每次请求都 `422 less_than_equal`，异常被吞成空列表。
+  现在上限统一 clamp 到 100，`RestClient.listSessions` 内部兜底，调用方不再各自记这个数。
+  同时补了可观测日志（`sessions refresh requested` / `sessions loaded: … count=` /
+  `sessions load failed …`）：空列表最容易误判成"数据丢了"，有了这三行就能立刻分清是
+  后端没给、解析丢了，还是请求根本没发。
 
 ### 已知行为变化
 
@@ -562,11 +543,9 @@ jlink 裁剪运行时、原生启动器打包、单实例与自启任务清理�
 | Release | tag 形式 | 资产 |
 |---|---|---|
 | 桌面端 | `v0.5.0-0.23.0` | `hermes-desktop-compose-0.5.0-0.23.0-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
-| 桌面端 patch | `v0.5.2` | `hermes-desktop-compose-0.5.2-patch.zip` + `SHA256SUMS.txt`（覆盖式升级，无完整包） |
-| 桌面端 patch | `v0.5.1` | `hermes-desktop-compose-0.5.1-patch.zip` + `SHA256SUMS.txt`（覆盖式升级，无完整包） |
 | 桌面端 patch | `v0.4.2` | `hermes-desktop-compose-0.4.2-patch.zip` + `SHA256SUMS.txt`（同上） |
 | 工具链 | `toolchain-v1` | `launcher-windows-x64.zip` / `runtime-windows-x64.zip` / `SHA256SUMS.txt` |
-| payload | 另一个仓库 `Shinglem/hermes-bundle` 的 `v0.22.5` | payload 压缩分卷 |
+| payload | 另一个仓库 `Shinglem/hermes-bundle` 的 `v0.23.0` | payload 压缩分卷 |
 
 **patch 发布约定**：完整包只在桌面版本升位时由 CI 构建；同一位数内的小修只上传**替换用文件**
 （`hermes-desktop-compose-<版本>-patch.zip`），下载后覆盖既有安装目录里的同名文件即可升级，
