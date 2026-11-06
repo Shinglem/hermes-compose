@@ -1377,7 +1377,15 @@ class ChatViewModel(
         val runtimeId = runtimeIds[key] ?: return
         // 认不出归属的事件（sessionId 为空，或不是本端已知的 runtime）按原规则过滤。
         if (event.sessionId != null && event.sessionId != runtimeId) {
-            Log.debug("chat event ignored ${event.type} sid=${event.sessionId} (current=$runtimeId)")
+            // 重连时会清空 runtimeIds，别的会话的 runtime 映射随之丢失 —— 这时它的审批事件
+            // 会落到这里被丢掉。审批 / 提问是"有人在等"，漏掉就是静默卡死，至少留下可查的记录。
+            if (event.type == GatewayEventTypes.APPROVAL_REQUEST ||
+                event.type == GatewayEventTypes.CLARIFY_REQUEST
+            ) {
+                Log.warn("pending ${event.type} dropped: unknown runtime ${event.sessionId} (current=$runtimeId)")
+            } else {
+                Log.debug("chat event ignored ${event.type} sid=${event.sessionId} (current=$runtimeId)")
+            }
             return
         }
         // 后端在等人：gateway 路线**只发事件**，不发 server→client 请求帧。
