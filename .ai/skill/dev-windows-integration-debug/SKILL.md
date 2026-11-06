@@ -114,6 +114,8 @@ schtasks /Query /XML
 | 删除任务报 `Access is denied` | 非管理员 | 提权执行（`Start-Process -Verb RunAs`），或让客户端在已提权时自清理 |
 | 自启任务存在、参数也对，但登录后没起来 | `LogonType=S4U` / `/RU SYSTEM` 会落到无 UI 会话 | 必须是 `InteractiveToken` + 当前用户 |
 | 托盘图标"没出现" | Windows 11 默认把新图标折叠进 `^` | 点开 `^` 确认，不要据此改代码 |
+| 用户说"通知漏了 / 只收到 1 条" | **横幅**和**通知中心**是两件事：同时到达的 N 条 toast，Windows 只弹 1 条横幅，其余静默进通知中心 | 先用 `WindowsNotificationCenter.getHistory { list, err -> }` 数**通知中心里实际有几条**（列 `tag`/`group`）—— 那里齐就说明客户端发了、系统没丢，问题在"横幅只有 1 条"，改成错峰发送。别先怀疑 `tag`/`group`（实测同 group **不**折叠） |
+| 日志里每条都出现两次 | logback 被配置了两次（`doConfigure` 前没 `reset`，而首次 `LoggerFactory` 访问已自动配置过） | 排查前先确认日志没被双写，否则会把"同一条日志"误判成"同一事件处理两次" |
 | 用 `-c safe.directory` 才能跑 git | 仓库盘符属主与当前用户不同 | 见 [`global-git-ops`](../global-git-ops/SKILL.md) |
 
 ## §7 相关
