@@ -119,6 +119,15 @@
   作答走 `approval.respond` / `clarify.respond`（要 `prompt_id` + `execution_generation`）。
 - **提交后长期静默**：加了看门狗（90s 无该会话任何事件就对账一次），
   `running=false` 才收尾并提示，`running=true` 继续等（长工具调用不该被打断）。
+- **系统通知「3 个审批只收到 1 个」**：Windows 对同一时刻到达的多条 toast **只弹一条横幅**，
+  其余静默进通知中心（`getHistory()` 里查得到，用户看不见）。`NativeNotifications.show`
+  改成按 1.5s 间隔**逐条**发送，让每条都有自己的横幅。
+  （顺带排除并记录了另一个假设：同 `group` **不会**折叠 —— `nucleus 2.5.18` 实测连发
+  3 条带按钮的 toast，通知中心里 3 条都在。）
+- **`data/logs/desktop.log` 每行写两遍**：`Logging.init` 里在 `doConfigure` 之前没 `reset`，
+  而 logback 在第一次访问 `LoggerFactory` 时已按 classpath 自动配置过一次 ——
+  等于给 root 挂了两个同名 appender。副作用不只是体积：排查时会把「同一事件出现两次」
+  误判成事件被重复分发。
 
 ### 变更
 
