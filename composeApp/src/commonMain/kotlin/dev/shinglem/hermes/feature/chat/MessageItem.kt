@@ -185,16 +185,16 @@ private fun NoticeRow(item: ChatItem.Notice) {
 }
 
 /**
- * 思考过程块：默认折叠，点标题展开。
+ * 思考过程块：默认**展开**（用户要能直接看到在想什么），点标题折叠。
  *
  * [markdown] 只在**已经写完**的思考段上开（`ChatItem.Reasoning`）：
  * 流式期间是逐 token 的增量，每来一个字就重解析一遍会把 CPU 峰值翻倍，
- * 未闭合的代码栅栏 / 表格还会反复重排 —— 而折叠态本来也看不见正文。
+ * 未闭合的代码栅栏 / 表格还会反复重排。
  * 展开态限高并内部滚动，长思考不会把整轮对话挤出视口。
  */
 @Composable
 internal fun ReasoningBlock(text: String, markdown: Boolean = false) {
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(true) }
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = RoundedCornerShape(8.dp),

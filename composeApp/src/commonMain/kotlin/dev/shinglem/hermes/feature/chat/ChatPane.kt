@@ -185,24 +185,27 @@ fun ChatPane(
     // 结构变化（切会话 / 新消息 / 新工具卡片）时定位到末尾一项。
     // 注意：**不要**把流式内容本身放进 key —— 那会让每个 token 都重置一次滚动位置，
     // 表现为"长回答时画面不停上下跳"。
+    // offset 用 Int.MAX_VALUE：让**最后一项的底部**贴视口底边。默认 offset=0 会把这一项
+    // 的顶部对齐视口顶部 —— 长回答时表现为「一直停在回答开头、看不到最新输出」。
     LaunchedEffect(state.key, totalItems) {
-        if (followTail && totalItems > 0) listState.scrollToItem(totalItems - 1)
+        if (followTail && totalItems > 0) listState.scrollToItem(totalItems - 1, Int.MAX_VALUE)
     }
 
-    // 内容变高时只补滚"超出视口的量"，绝不重置位置。
-    // snapshotFlow 监听的是**布局结果**，滚完 overflow 就归零，不会自激。
-    LaunchedEffect(state.key, followTail) {
-        if (!followTail) return@LaunchedEffect
-        snapshotFlow {
-            val info = listState.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull()
-            if (last == null) {
-                0
-            } else {
-                (last.offset + last.size) - (info.viewportEndOffset - info.afterContentPadding)
+    // 跟随底部：只在「有流式输出」时把新增内容滚进视口；同时负责「用户滚回底部就恢复跟随」。
+    // snapshotFlow 监听的是**布局结果**（距底距离），滚完 distance 归零，不会自激。
+    // 非流式时不动 —— 否则用户展开一个历史思考块也会把画面顶到底部（那是抢滚动）。
+    LaunchedEffect(state.key) {
+        snapshotFlow { listState.distanceFromBottomPx() }.collect { distance ->
+            if (state.streaming != null) {
+                if (followTail && distance > 0) {
+                    listState.scrollBy(distance.toFloat())
+                } else if (!followTail && shouldResumeFollow(distance)) {
+                    // 用户自己滚回底部：说明他想继续看新输出。
+                    followTail = true
+                }
+            } else if (!followTail && shouldResumeFollow(distance)) {
+                followTail = true
             }
-        }.collect { overflow ->
-            if (overflow > 0) listState.scrollBy(overflow.toFloat())
         }
     }
 
@@ -231,8 +234,11 @@ fun ChatPane(
                     // 的 delta 全在 x 上、y 为 0；按 `y >= 0` 判定会被当成「向下滚」，
                     // 于是整篇文档跳到最底部 —— 真机反馈的就是这个。
                     if (abs(delta.x) >= abs(delta.y) || delta.y == 0f) return@onPointerEvent
-                    // 向上滚 = 看历史，暂停跟随；向下滚 = 恢复跟随。
-                    followTail = delta.y > 0f
+                    // 向上翻且确实离开了底部才暂停跟随。轻微惯性 / 一格滚轮不算 ——
+                    // 否则流式输出会在用户完全没察觉的情况下停止跟随。
+                    if (shouldPauseFollow(delta.y, listState.distanceFromBottomPx())) {
+                        followTail = false
+                    }
                 },
         ) {
             // 两侧留白随窗宽变化：触屏上手指落在文字里会被 SelectionContainer 接走变成**选中**
@@ -322,7 +328,7 @@ fun ChatPane(
                 derivedStateOf { !listState.canScrollForward }
             }
             JumpToLatestButton(
-                visible = state.sending && !atBottom,
+                visible = !atBottom && (state.streaming != null || state.sending),
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 24.dp, bottom = 16.dp),

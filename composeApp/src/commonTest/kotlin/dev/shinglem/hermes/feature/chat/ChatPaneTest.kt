@@ -1,12 +1,14 @@
 package dev.shinglem.hermes.feature.chat
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.v2.runComposeUiTest
 import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.result.Loadable
@@ -159,9 +161,12 @@ class ChatPaneTest {
         )
         setContent(pane(ChatState(load = Loadable.Ready(items))))
         onNodeWithText("Running command · cat big.log").performClick()
-        onNodeWithText("结果过长，仅显示前 20000 个字符").assertIsDisplayed()
-        onNodeWithText("显示全部（25000 字符）").performClick()
-        onNodeWithText("收起").assertIsDisplayed()
+        // 列表现在让**最后一项的底部**贴视口底边（长回答要能看到最新内容），
+        // 所以展开后的长结果顶部可能在视口外。这里直接触发语义动作，
+        // 不依赖节点当前是否落在视口里。
+        onNodeWithText("结果过长，仅显示前 20000 个字符").assertExists()
+        onNodeWithText("显示全部（25000 字符）").performSemanticsAction(SemanticsActions.OnClick)
+        onNodeWithText("收起").assertExists()
     }
 
     @Test
@@ -277,20 +282,20 @@ class ChatPaneTest {
     }
 
     @Test
-    fun `已完成思考段展开后按 Markdown 渲染`() = runComposeUiTest {
+    fun `思考段默认展开并按 Markdown 渲染`() = runComposeUiTest {
         val items = listOf(
             ChatItem.Reasoning("r1", null, "先看这段：\n\n```kotlin\nval answer = 42\n```\n"),
         )
         setContent(pane(ChatState(load = Loadable.Ready(items))))
-        onNodeWithText("思考过程").performClick()
+        // 默认展开：不再需要点标题。
         waitUntil(timeoutMillis = 5_000) {
             onAllNodesWithText("KOTLIN").fetchSemanticsNodes().isNotEmpty()
         }
-        onNodeWithText("KOTLIN").assertIsDisplayed()
+        onNodeWithText("KOTLIN").assertExists()
     }
 
     @Test
-    fun `流式思考段保持纯文本`() = runComposeUiTest {
+    fun `流式思考段默认展开且保持纯文本`() = runComposeUiTest {
         setContent(
             pane(
                 ChatState(
@@ -301,8 +306,8 @@ class ChatPaneTest {
                 ),
             ),
         )
-        onNodeWithText("思考过程").performClick()
-        onNodeWithText("还**没**写完的草稿", substring = true).assertIsDisplayed()
+        // 流式期间不做 Markdown 解析：原文（含 **）应原样可见。
+        onNodeWithText("还**没**写完的草稿", substring = true).assertExists()
     }
 
     @Test

@@ -5,6 +5,36 @@
 
 ---
 
+## [0.5.2] · 2026-11-07（hermes 0.23.0）
+
+> **完整包版本（小版本，按新约定也发全量）**：tag `v0.5.2-0.23.0`，由 CI `desktop-release` 构建。
+> 纯桌面外壳（不含 payload）；payload 与工具链不变：hermes 0.23.0 / `toolchain-v1`。
+
+### 修复
+
+- **流式回答不自动跟到底**：列表定位末尾一项时用了默认 `offset=0`，把**这一项的顶部**对齐视口
+  顶部 —— 长回答时表现为「一直停在回答开头、看不到最新输出」。现在让最后一项的**底部**贴视口底边。
+- **跟随状态被轻微滚动永久关掉**：旧实现按滚动方向判定，任何负 delta（触摸板惯性、滚轮余量）
+  都会把 `followTail` 置 false 且只有「向下滚」才恢复。现在：
+  - 上翻离开底部超过 24px 才暂停；
+  - 滚回底部 8px 内自动恢复跟随；
+  - 向下滚不再直接恢复（离底部远时方向向下 ≠ 想追最新）。
+- **吸底按钮在流式中后段消失**：条件从 `sending` 改为 `streaming != null || sending`。
+
+### 变更
+
+- **思考过程默认展开**（点标题折叠）；流式期间仍是纯文本，一轮结束后按 Markdown 渲染，
+  展开态限高 320dp 内部滚动。
+- **补滚只在有流式输出时做**：展开/折叠历史卡片不会再被自动滚到底部（不抢滚动）。
+
+### 升级
+
+1. 下载 `hermes-desktop-compose-0.5.2-0.23.0-windows-x64.7z.001`（+ 后续卷）与 `SHA256SUMS.txt`，核对 SHA-256；
+2. 解压覆盖安装目录；`config/`、`data/`、`hermes/`、`rt/` 不动；
+3. 重启客户端。只换 `bin/App.jar` 也等价（`lib/` 未变）。
+
+---
+
 ## [0.5.1] · 2026-11-07（hermes 0.23.0）
 
 > **完整包版本（小版本，但按新约定也发全量）**：tag `v0.5.1-0.23.0`，由 CI `desktop-release` 构建。
@@ -693,7 +723,7 @@ jlink 裁剪运行时、原生启动器打包、单实例与自启任务清理�
 
 | Release | tag 形式 | 资产 |
 |---|---|---|
-| 桌面端 | `v0.5.1-0.23.0` | `hermes-desktop-compose-0.5.1-0.23.0-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
+| 桌面端 | `v0.5.2-0.23.0` | `hermes-desktop-compose-0.5.2-0.23.0-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
 | 工具链 | `toolchain-v1` | `launcher-windows-x64.zip` / `runtime-windows-x64.zip` / `SHA256SUMS.txt` |
 | payload | 另一个仓库 `Shinglem/hermes-bundle` 的 `v0.23.0` | payload 压缩分卷 |
 
