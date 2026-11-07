@@ -22,3 +22,15 @@ actual suspend fun pickExecutableFile(): String? = withContext(Dispatchers.IO) {
         "$directory$file"
     }.getOrNull()
 }
+
+actual suspend fun pickJsonFile(): String? = withContext(Dispatchers.IO) {
+    runCatching {
+        val dialog = FileDialog(null as Frame?, "选择会话 JSON 文件", FileDialog.LOAD).apply {
+            file = "*.json"
+            isVisible = true
+        }
+        val directory = dialog.directory ?: return@runCatching null
+        val file = dialog.file ?: return@runCatching null
+        "$directory$file"
+    }.getOrNull()
+}

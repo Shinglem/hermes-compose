@@ -1,19 +1,20 @@
 ---
 name: global-release-patch
-description: "发版或本机升级桌面端时使用：判断该发完整包还是 patch、只打包与主版本的差异文件、手工上传 GitHub Release（无 gh CLI）、覆盖式部署并用 startup.log 验证。"
+description: "发版（含小版本的全量 CI release）或本机升级桌面端时使用：改版本号与 CHANGELOG、触发 desktop-release、核验资产、覆盖式部署并用 startup.log 验证。"
 ---
 
-# 桌面端发版：patch 包与覆盖式部署
+# 桌面端发版：全量 CI release 与覆盖式部署
 
-> **中文名**：桌面端发版与覆盖部署 ｜ 目录与 `name`：`global-release-patch`
+> **中文名**：桌面端发版与覆盖部署 ｜ 目录与 `name`：`global-release-patch`（名字沿用旧称，内容已改）
 
-**适用**：要给客户端发一个新版本、要在本机把某个版本"装上"、或需要判断"这次该发完整包还是 patch"。
-**不适用**：完整包（`x.y.0` 里程碑）的 CI 构建 —— 那条路走 `.github/workflows/desktop-release.yml`，
-见 [`README.md`](../../../README.md) 的「发行产物」。
+**适用**：要给客户端发一个新版本、要在本机把某个版本"装上"、或需要确认"这版该走哪条发版路径"。
+**不适用**：本机临时验证（那只需 `syncReleaseTest` + 覆盖 `bin/App.jar`，见 §5）。
 
 ⚠️ **第一步永远是读 [`CHANGELOG.md`](../../../CHANGELOG.md) 文末的「版本号说明」**。
-那里写着当前采用的发布策略（v0.3.1 起：**小版本只发差异文件、手工上传、覆盖式更新、不走 CI**）。
-**不要凭"发版 = 打 tag + 传 7z"的惯性动手** —— 本项目已经为此返工过一次。
+当前策略（**2026-11-07 起**）：**所有版本，包括 0.x.y 小版本，都发全量包**，由 CI
+`desktop-release` 构建；产物是**纯外壳、不含 payload**，所以体量与耗时都很小。
+**不再发「只含替换文件」的 patch zip**（历史 Release 保留，不再新发）。
+**不要凭"小版本 = 手工传几个 jar"的旧惯性动手** —— 本项目为此改过一次约定。
 
 ## §1 三套版本号，别混用
 
@@ -25,44 +26,52 @@ description: "发版或本机升级桌面端时使用：判断该发完整包还
 **两者互不推导**：tag 不回写 `appVersion`，`appVersion` 不参与 tag 生成。
 工具链（启动器 + 裁剪运行时）走自己的 `toolchain-v<N>`，**只增不改**。
 
-## §2 该发哪种包
+## §2 走哪条路
 
-| 情况 | 发什么 | 入口 |
+| 情况 | 做什么 | 入口 |
 |---|---|---|
-| 桌面版本升位（换 payload、改启动器 / `rt/`、依赖大版本） | 完整包 `…-windows-x64.7z.001`（**纯外壳**，payload 由用户自备） | CI `desktop-release` |
-| 只改了客户端壳的类与资源（`bin/App.jar`） | **patch zip（只含替换用文件）** | 本技能 §3，手工上传 |
-| 只改了 `lib/` 里某几个依赖 jar | patch zip（把这些 jar 按相对路径放进去） | 同上 |
+| 任何要发出去的版本（功能 / 修复 / 小版本） | 全量包 `…-windows-x64.7z.001`（**纯外壳**，payload 由用户自备） | CI `desktop-release`（§3） |
 | 换了 JDK / 改了 `runtimeModules` / 换了启动器 | 先跑 `toolchain-windows`（`version` +1），再发桌面包 | CI |
+| 只想在本机验证新代码 | 不进 Release，直接 `syncReleaseTest` + 覆盖 `bin/App.jar` | §5 |
 
-判断依据是**差异文件的物理位置**，不是"改了几行"：`syncReleaseTest` 后拿 `release-test`
-与既有安装目录逐个比对 `lib/`（名字 + 大小 + hash）与 `bin/App.jar`。
+判断依据是**要不要给别人**，不是"改了几行"。全量包不含 payload，所以"多打一个包"成本很低 ——
+这就是取消 patch 的原因。
 
-## §3 patch 发布步骤
+## §3 全量发版步骤
 
-1. **改版本号**：`composeApp/build.gradle.kts` 的 `appVersion = "x.y.z"`（KDoc 里的 tag 示例一起改）。
-2. **写 CHANGELOG**：新增 `## [x.y.z] · <日期>` 段，含「修复 / 新增」与**「升级」**（用户怎么装）；
-   文末「历史对照」表加一行。
+1. **改版本号**：`composeApp/build.gradle.kts` 的 `appVersion = "x.y.z"`（KDoc 里的说明一起看）。
+2. **写 CHANGELOG**：新增 `## [x.y.z] · <日期>（hermes <payload版本>）` 段，含「新增 / 修复」与
+   **「升级」**（用户怎么装、哪些目录不要动）；文末「版本号说明」的资产表加一行。
 3. **提交**：`chore: 发布 vX.Y.Z`（与代码变更分开提交）。
-4. **产出**：`./gradlew :composeApp:syncReleaseTest` → 得到 `release-test/bin/App.jar`。
-5. **算差异**（关键一步，别省）：
+4. **本地先编一遍**：`./gradlew :composeApp:compileKotlinDesktop :composeApp:desktopTest`
+   —— CI 失败一轮的代价远大于这 1 分钟。
+5. **同步并推送**：`git -c http.proxy=… pull --rebase origin main` → `push --dry-run` 验权限 → `push origin main`
+   （代理与凭据纪律见技能 [`global-git-ops`](../global-git-ops/SKILL.md)）。
+6. **触发 CI**：`desktop-release` 是 `workflow_dispatch`，**tag 由 CI 生成**
+   （`v<desktop>-<hermes>`），不要自己先打 tag。本机没有 `gh` CLI，走 REST：
 
    ```powershell
-   $src = Get-ChildItem release-test\lib -File | ForEach-Object { "$($_.Name)|$($_.Length)" }
-   $dst = Get-ChildItem <既有安装>\lib -File | ForEach-Object { "$($_.Name)|$($_.Length)" }
-   Compare-Object $src $dst
+   $raw   = Get-Content (Join-Path $env:USERPROFILE '.git-credentials') -Raw
+   $token = ([regex]::Match($raw, 'https://[^:]+:(?<t>[^@\r\n]+)@github\.com')).Groups['t'].Value.Trim()
+   $h = @{ Authorization = "token $token"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'hermes-release' }
+
+   $body = @{ ref = 'main'; inputs = @{ desktop_version = '0.5.1'; hermes_version = '0.23.0'; toolchain_version = '1' } } |
+           ConvertTo-Json
+   Invoke-RestMethod -Uri "https://api.github.com/repos/Shinglem/hermes-compose/actions/workflows/desktop-release.yml/dispatches" `
+     -Headers $h -Method Post -Body ([Text.Encoding]::UTF8.GetBytes($body)) -ContentType 'application/json'
    ```
 
-   大小相同但 hash 不同时再比 `Get-FileHash` —— **SNAPSHOT 依赖（如 `compose-ui-desktop-*-SNAPSHOT.jar`）
-   重新构建后字节会变、内容等价**，这类文件不必进 patch，否则等于又发了一遍全量。
+   `hermes_version` 留空会取 payload 仓库 latest —— **要显式写**，否则以后 bundle 一升级，
+   旧客户端版本号会被安上新的 payload 后缀。
+7. **等 CI 并通过 REST 核验**：`GET /repos/.../actions/runs?per_page=1` 看 conclusion；
+   完成后查 `GET /repos/.../releases/tags/v<desktop>-<hermes>`，确认资产齐全
+   （`…7z.001`（+卷）与 `SHA256SUMS.txt`），并把 `SHA256SUMS.txt` 与本地算的 hash 对一遍。
+8. **失败处理**：CI 红了先看日志（构建脚本在 workflow 里，`syncReleaseTest` 之后会断言
+   `release-test\hermes` 不存在 —— 存在说明 payload 混进了外壳）。不要重复触发刷 run。
 
-6. **打包**：保持安装目录的相对结构（`bin/App.jar`、必要时 `lib/xxx.jar`），
-   用 `Compress-Archive` 打成 `hermes-desktop-compose-<版本>-patch.zip`。
-7. **校验和**：`SHA256SUMS.txt` = `<sha256 小写>  <文件名>`（两个空格），与 zip 实算一致才继续。
-8. **打 tag**：annotated，说明写"相对上一个完整包的变更"（可直接用 CHANGELOG 段）。
-9. **推**：`git -c http.proxy=… push --dry-run origin main` 先验权限，再 `push origin main vX.Y.Z`
-   （代理与凭据纪律见技能 [`global-git-ops`](../global-git-ops/SKILL.md)）。
-10. **建 Release 并上传资产**：本机没有 `gh` CLI，走 REST API（§4）。
-11. **回下载校验**：把资产重新拉下来算 sha256，与 `SHA256SUMS.txt` 对上才算发完（§4）。
+> 历史（已废止）：0.3.1 ~ 0.5.0 期间小版本走「只上传替换文件」的 patch zip
+> （`hermes-desktop-compose-<版本>-patch.zip`，手工 `Compress-Archive` + `SHA256SUMS.txt`）。
+> 如果确实需要给某人一个临时补丁，仍然可以按老办法手工打包，但**不要**为它建 Release。
 
 ## §4 用 REST 上传 / 校验（无 `gh` CLI）
 
@@ -112,11 +121,11 @@ Get-Content <home>\logs\startup.log -Tail 6
 
 | 现象 | 多半是 | 处理 |
 |---|---|---|
-| 按"完整包 + 7z"发了 patch 版本 | 没读 CHANGELOG 的发布约定 | 撤 Release，按 §3 重来；**先读约定再动手** |
-| patch 里塞进了上百个 jar | 把"重新构建了"当"内容变了" | 按 §3 第 5 步比 名字+大小+hash；SNAPSHOT 的字节漂移不算变化 |
+| 只发了个 patch zip，用户装完版本号没变 | 又按旧的 patch 约定发了 | 撤掉 Release，按 §3 走全量 CI |
+| CI 报 `release-test\hermes 存在` | payload 被复制进外壳 | `syncReleaseTest` 不该带 payload；用 `syncReleasePayload` 时才出完整 payload 树 |
 | `Copy-Item` 报占用 / 装完还是旧行为 | 客户端还在跑 | 先停进程，再覆盖 |
-| 上传 404 / 403 | tag 未推 / 未带 token / 仓库私有 | 先推 tag；token 走凭据副本；`--dry-run` 先验 push 权限 |
-| `SHA256SUMS.txt` 校验不过 | 先写 SUM 后重打 zip，或换行被改写 | 先定 zip 再算 hash；文件按 ASCII + LF 写 |
+| 上传 404 / 403 | 未带 token / 仓库私有 / run 未完成 | token 走凭据副本；先确认 run conclusion |
+| `SHA256SUMS.txt` 校验不过 | 资产被重传过 | 以 Release 上的 `SHA256SUMS.txt` 为准重新下载核对 |
 | 装完看到的还是旧界面 | 只更新了 `release-test`，没拷进 `<home>` | 部署是两步：出产物 → 覆盖安装目录 |
 | 忘记改 `appVersion` | 只在 CHANGELOG 改了版本 | 版本源头是 `build.gradle.kts`，CHANGELOG 只是描述 |
 

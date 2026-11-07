@@ -237,8 +237,10 @@ val appMainClass = "dev.shinglem.hermes.MainKt"
 
 /**
  * 客户端版本：同时决定 jpackage 的 `packageVersion` / `-Djpackage.app-version`、
- * 启动器 cfg，以及**发布资产名**（`hermes-desktop-compose-<appVersion>-win32-x64-*.7z.001`）。
+ * 启动器 cfg，以及**发布资产名**（`hermes-desktop-compose-<appVersion>-<hermesVersion>-windows-x64.7z.001`）。
  * 与 Release tag（`v<桌面版本>-<hermes版本>`）是两套数字，互不推导，见 `CHANGELOG.md`。
+ *
+ * 从 0.5.1 起**小版本也发全量包**（CI `desktop-release`，产物是纯外壳、不含 payload）。
  */
 val appVersion = "0.5.0"
 

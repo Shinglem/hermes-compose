@@ -63,6 +63,13 @@ import dev.shinglem.hermes.feature.settings.EndpointPageCallbacks
 import dev.shinglem.hermes.feature.settings.ModelPageCallbacks
 import dev.shinglem.hermes.feature.settings.MoaPageCallbacks
 import dev.shinglem.hermes.feature.settings.MoaViewModel
+import dev.shinglem.hermes.feature.settings.MaintenanceViewModel
+import dev.shinglem.hermes.feature.settings.DEFAULT_PROFILE_KEY
+import dev.shinglem.hermes.feature.settings.ProfileChoice
+import dev.shinglem.hermes.feature.settings.ProfileScope
+import dev.shinglem.hermes.feature.settings.ProfileScopeChips
+import dev.shinglem.hermes.feature.settings.hasOwnProfileScope
+import dev.shinglem.hermes.feature.settings.isProfileScoped
 import dev.shinglem.hermes.feature.settings.ModelSettingsViewModel
 import dev.shinglem.hermes.feature.settings.ProfilesViewModel
 import dev.shinglem.hermes.feature.settings.SecurityViewModel
@@ -180,6 +187,13 @@ fun AppShell(
     val updaterViewModel: UpdaterViewModel = viewModel {
         UpdaterViewModel(container.restClient)
     }
+    val maintenanceViewModel: MaintenanceViewModel = viewModel {
+        MaintenanceViewModel(
+            container.maintenanceRepository,
+            container.configRepository,
+            container.hermesHome,
+        )
+    }
 
     val shellState by shellViewModel.state.collectAsStateWithLifecycle()
     var showBackendDetail by remember { mutableStateOf(false) }
@@ -199,6 +213,21 @@ fun AppShell(
     val updateState by updaterViewModel.state.collectAsStateWithLifecycle()
     val terminalState by container.terminalViewModel.state.collectAsStateWithLifecycle()
     val terminalSettings by container.terminalViewModel.settings.collectAsStateWithLifecycle()
+    val maintenanceScopeKey by maintenanceViewModel.profileKey.collectAsStateWithLifecycle()
+
+    val maintenanceProfileChoices = remember(shellState.profilesOrEmpty) {
+        val defaultKey = ShellViewModel.DEFAULT_PROFILE
+        val defaultLabel = shellState.profilesOrEmpty
+            .firstOrNull { it.isDefault || it.name == defaultKey }
+            ?.label
+            ?: defaultKey
+        buildList {
+            add(ProfileChoice(defaultKey, defaultLabel))
+            shellState.profilesOrEmpty
+                .filterNot { it.isDefault || it.name == defaultKey }
+                .forEach { add(ProfileChoice(it.name, it.label)) }
+        }
+    }
     val autostartInfo by container.autostart.collectAsStateWithLifecycle()
     val orphanTasks by container.orphanTasks.collectAsStateWithLifecycle()
     val composerScope = rememberCoroutineScope()
@@ -260,6 +289,7 @@ fun AppShell(
             customEndpointViewModel.onVisible()
             moaViewModel.setProfile(shellState.activeProfile)
             moaViewModel.onVisible()
+            maintenanceViewModel.setProfile(shellState.activeProfile)
         }
     }
 
@@ -624,8 +654,20 @@ fun AppShell(
                                     onBack = onBack,
                                 )
                             }
-                            SettingsDetailPane(
-                                state = settingsState,
+                            val showScopeBar = settingsState.selected.isProfileScoped() &&
+                                !settingsState.selected.hasOwnProfileScope()
+                            if (showScopeBar) {
+                                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+                                    ProfileScopeChips(
+                                        ProfileScope(
+                                            choices = maintenanceProfileChoices,
+                                            activeKey = maintenanceScopeKey ?: DEFAULT_PROFILE_KEY,
+                                            onSelect = maintenanceViewModel::setScopeProfile,
+                                        ),
+                                    )
+                                }
+                            }
+                            SettingsDetailPane(                                state = settingsState,
                                 onEdit = settingsViewModel::edit,
                                 onSave = settingsViewModel::save,
                                 onRestart = settingsViewModel::restart,
@@ -722,6 +764,9 @@ fun AppShell(
                                 backendVersion = shellState.health?.version.orEmpty(),
                                 dataDir = appDataDir,
                                 logDir = container.config.app.log.dir,
+                                maintenance = maintenanceViewModel,
+                                profileChoices = maintenanceProfileChoices,
+                                onSelectScopeProfile = maintenanceViewModel::setScopeProfile,
                                 onDeleteOrphanTask = { name ->
                                     composerScope.launch(Dispatchers.IO) {
                                         if (container.deleteOrphanTask(name)) {

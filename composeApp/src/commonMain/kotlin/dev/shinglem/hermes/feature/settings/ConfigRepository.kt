@@ -135,6 +135,39 @@ val CHECKPOINT_FIELDS = listOf(
     ),
 )
 
+/**
+ * 智能体 · 记忆页的「内置层」配置（`config.memory`）。
+ *
+ * 这四项只影响内置的 `MEMORY.md` / `USER.md`，与外部 provider 无关；
+ * 后端字段名见 `/api/config` 的 `memory` 段（默认 2200 / 1375）。
+ */
+val MEMORY_FIELDS = listOf(
+    ConfigFieldSpec(
+        path = "memory.memory_enabled",
+        label = "持久记忆",
+        kind = ConfigFieldKind.BOOLEAN,
+        hint = "保存有助于未来会话的持久记忆",
+    ),
+    ConfigFieldSpec(
+        path = "memory.user_profile_enabled",
+        label = "用户画像",
+        kind = ConfigFieldKind.BOOLEAN,
+        hint = "维护一份精简的用户偏好画像",
+    ),
+    ConfigFieldSpec(
+        path = "memory.memory_char_limit",
+        label = "记忆预算",
+        kind = ConfigFieldKind.NUMBER,
+        hint = "注入 MEMORY.md 的字符上限（官方默认 2200）",
+    ),
+    ConfigFieldSpec(
+        path = "memory.user_char_limit",
+        label = "画像预算",
+        kind = ConfigFieldKind.NUMBER,
+        hint = "注入 USER.md 的字符上限（官方默认 1375）",
+    ),
+)
+
 /** 定位某个安全页的字段清单。 */
 fun securityFieldsOf(tab: SecurityTab): List<ConfigFieldSpec> = when (tab) {
     SecurityTab.APPROVALS -> APPROVAL_FIELDS

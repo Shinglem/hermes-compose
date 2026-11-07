@@ -7,3 +7,6 @@ package dev.shinglem.hermes.feature.editors
  * （desktop 实现里已经用 `withContext(Dispatchers.IO)` 包住）。
  */
 expect suspend fun pickExecutableFile(): String?
+
+/** 弹系统文件选择框选一个 JSON（会话导入用）；取消返回 null。 */
+expect suspend fun pickJsonFile(): String?

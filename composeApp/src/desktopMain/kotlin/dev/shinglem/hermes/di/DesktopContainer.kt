@@ -40,6 +40,7 @@ import dev.shinglem.hermes.feature.model.ModelRepository
 import dev.shinglem.hermes.feature.session.SessionRepository
 import dev.shinglem.hermes.feature.settings.ConfigRepository
 import dev.shinglem.hermes.feature.settings.CustomEndpointRepository
+import dev.shinglem.hermes.feature.settings.MaintenanceRepository
 import dev.shinglem.hermes.feature.settings.ModelAdminRepository
 import dev.shinglem.hermes.feature.settings.ProfilesAdminRepository
 import dev.shinglem.hermes.feature.settings.ProviderRepository
@@ -143,6 +144,7 @@ object DesktopContainer {
             profilesAdminRepository = ProfilesAdminRepository(restClient),
             modelAdminRepository = ModelAdminRepository(restClient),
             configRepository = ConfigRepository(restClient),
+            maintenanceRepository = MaintenanceRepository(restClient),
             officialDesktop = OfficialDesktopLauncherImpl.detect(
                 config = config,
                 paths = paths,
@@ -156,6 +158,7 @@ object DesktopContainer {
             logger = logger,
             scope = scope,
             config = config,
+            hermesHome = paths.hermesHomeDir(config).absolutePath,
             backend = backend,
             settingsStore = FileSettingsStore(paths) { message -> Log.warn(message) },
             restarter = DesktopAppRestarter(

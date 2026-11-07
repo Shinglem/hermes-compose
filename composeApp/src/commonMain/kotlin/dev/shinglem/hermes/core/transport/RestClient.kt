@@ -11,6 +11,7 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.request
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsBytes
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -103,8 +104,40 @@ class RestClient(
         }
     }
 
-    private fun parse(status: HttpStatusCode, body: String, path: String): JsonElement = when {
-        status == HttpStatusCode.Unauthorized ||
+    /**
+     * 二进制下载（备份 zip 等）：不走 JSON 解析。
+     *
+     * 错误映射与 [parse] 一致（401/403 → [AppError.Unauthorized]，4xx/5xx → [AppError.Server]）。
+     */
+    suspend fun download(path: String, timeoutMs: Long = Timeouts.CATALOG_MS): ByteArray {
+        val target = targetProvider()
+        val url = target.baseUrl.trim().trimEnd('/') + path
+        try {
+            return withTimeout(timeoutMs) {
+                val response = http.get(url) {
+                    target.token?.takeIf { it.isNotBlank() }?.let { header(SESSION_HEADER_NAME, it) }
+                }
+                when {
+                    response.status == HttpStatusCode.Unauthorized ||
+                        response.status == HttpStatusCode.Forbidden -> throw AppError.Unauthorized
+                    response.status.value >= 400 -> throw AppError.Server(
+                        response.status.value,
+                        extractErrorMessage(response.bodyAsText()),
+                    )
+                    else -> response.bodyAsBytes()
+                }
+            }
+        } catch (timeout: TimeoutCancellationException) {
+            throw AppError.Timeout(path)
+        } catch (error: AppError) {
+            throw error
+        } catch (throwable: Throwable) {
+            logger.log(LogLevel.WARN, "REST download $path failed: ${throwable.message}", throwable)
+            throw ErrorMapper.from(throwable, path)
+        }
+    }
+
+    private fun parse(status: HttpStatusCode, body: String, path: String): JsonElement = when {        status == HttpStatusCode.Unauthorized ||
             status == HttpStatusCode.Forbidden -> throw AppError.Unauthorized
 
         status.value >= 400 -> throw AppError.Server(status.value, extractErrorMessage(body))

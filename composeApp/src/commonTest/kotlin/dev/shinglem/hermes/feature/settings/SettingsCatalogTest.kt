@@ -105,12 +105,15 @@ class SettingsCatalogTest {
     }
 
     @Test
-    fun `integration section only appears when the official desktop is available`() {
-        val without = SettingsCatalog.sections(debugAvailable = false).map { it.key }
-        val with = SettingsCatalog.sections(debugAvailable = true).map { it.key }
-        assertTrue("integration" !in without)
-        assertTrue("integration" in with)
-        assertEquals(with.size, without.size + 1)
+    fun `integration section is always present and the desktop entry depends on availability`() {
+        val without = SettingsCatalog.sections(debugAvailable = false).first { it.key == "integration" }
+        val with = SettingsCatalog.sections(debugAvailable = true).first { it.key == "integration" }
+        // 外部集成（钩子 / 配对）常驻；官方桌面端对照入口只在 payload 带它时出现。
+        assertTrue(without.pages.any { it.second == SettingsPage.Integrations })
+        assertTrue(with.pages.any { it.second == SettingsPage.Integrations })
+        assertTrue(without.pages.none { it.second == SettingsPage.Debug })
+        assertTrue(with.pages.any { it.second == SettingsPage.Debug })
+        assertTrue(with.pages.size == without.pages.size + 1)
     }
 
     @Test

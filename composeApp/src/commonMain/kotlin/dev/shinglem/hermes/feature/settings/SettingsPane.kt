@@ -25,6 +25,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -151,9 +153,146 @@ fun SettingsDetailPane(
     backendVersion: String = "",
     dataDir: String = "",
     logDir: String = "",
+    maintenance: MaintenanceViewModel,
+    /**
+     * 维护类页面顶部的「应用到」档案清单（纯数据，来自 shell 的档案列表）。
+     *
+     * 切换只改本组页面的配置目标，**不**动会话页当前使用的档案。
+     */
+    profileChoices: List<ProfileChoice> = emptyList(),
+    onSelectScopeProfile: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val maintenanceMemory by maintenance.memory.collectAsState()
+    val maintenanceOps by maintenance.ops.collectAsState()
+    val maintenanceCredentials by maintenance.credentials.collectAsState()
+    val maintenanceUsage by maintenance.usage.collectAsState()
+    val maintenanceSessions by maintenance.sessions.collectAsState()
+    val maintenanceProfile by maintenance.profileKey.collectAsState()
+    val maintenanceIntegrations by maintenance.integrations.collectAsState()
+
+    val scopeProfile = if (profileChoices.isEmpty()) {
+        null
+    } else {
+        ProfileScope(
+            choices = profileChoices,
+            activeKey = maintenanceProfile ?: DEFAULT_PROFILE_KEY,
+            onSelect = onSelectScopeProfile,
+        )
+    }
+
     when (state.selected) {
+        SettingsPage.Memory -> {
+            MemoryPage(
+                state = maintenanceMemory,
+                profileKey = maintenanceProfile,
+                profileScope = scopeProfile,
+                onRefresh = maintenance::refreshMemory,
+                onAskReset = maintenance::askResetMemory,
+                onConfirmReset = maintenance::confirmResetMemory,
+                onDismissReset = maintenance::dismissResetMemory,
+                onConfigEdit = maintenance::editMemoryConfig,
+                onConfigSave = maintenance::saveMemoryConfig,
+                onConfigDiscard = maintenance::discardMemoryConfig,
+                onOpenFile = maintenance::openMemoryFile,
+                onFileEdit = maintenance::editMemoryFileText,
+                onFileSave = maintenance::saveMemoryFile,
+                onFileClose = maintenance::closeMemoryFile,
+                onDismissStatus = maintenance::dismissMemoryNotice,
+                modifier = modifier,
+            )
+            return
+        }
+
+        SettingsPage.Maintenance -> {
+            MaintenancePage(
+                state = maintenanceOps,
+                profileKey = maintenanceProfile,
+                profileScope = scopeProfile,
+                onRefresh = maintenance::refreshOps,
+                onRun = maintenance::runAction,
+                onAskPrune = maintenance::askPruneCheckpoints,
+                onConfirmPrune = maintenance::confirmPruneCheckpoints,
+                onDismissPrune = maintenance::dismissPruneCheckpoints,
+                onToggleCuratorPaused = maintenance::toggleCuratorPaused,
+                onDownloadBackup = maintenance::downloadBackup,
+                onImportArchiveChange = maintenance::editImportArchive,
+                onImportBackup = maintenance::importBackup,
+                onDebugShare = maintenance::runDebugShare,
+                onDismissDebugUrls = maintenance::dismissDebugUrls,
+                onDismissStatus = maintenance::dismissOpsNotice,
+                modifier = modifier,
+            )
+            return
+        }
+
+        SettingsPage.Usage -> {
+            UsagePage(
+                state = maintenanceUsage,
+                profileKey = maintenanceProfile,
+                profileScope = scopeProfile,
+                onRefresh = maintenance::refreshUsage,
+                modifier = modifier,
+            )
+            return
+        }
+
+        SettingsPage.SessionMaintenance -> {
+            SessionMaintenancePage(
+                state = maintenanceSessions,
+                profileKey = maintenanceProfile,
+                profileScope = scopeProfile,
+                onRefresh = maintenance::refreshSessionMaintenance,
+                onAskDeleteEmpty = maintenance::askDeleteEmptySessions,
+                onConfirmDeleteEmpty = maintenance::confirmDeleteEmptySessions,
+                onDismissDeleteEmpty = maintenance::dismissDeleteEmptySessions,
+                onPruneDaysChange = maintenance::editPruneDays,
+                onPreviewPrune = maintenance::previewPrune,
+                onConfirmPrune = maintenance::confirmPrune,
+                onDismissPruneReport = maintenance::dismissPruneReport,
+                onImportFile = maintenance::importSessionsFromFile,
+                onDismissStatus = maintenance::dismissSessionNotice,
+                modifier = modifier,
+            )
+            return
+        }
+
+        SettingsPage.CredentialPool -> {            CredentialPoolPage(
+                state = maintenanceCredentials,
+                profileKey = maintenanceProfile,
+                profileScope = scopeProfile,
+                onRefresh = maintenance::refreshCredentials,
+                onProviderChange = maintenance::editCredentialProvider,
+                onKeyChange = maintenance::editCredentialKey,
+                onLabelChange = maintenance::editCredentialLabel,
+                onAdd = maintenance::addCredential,
+                onAskDelete = maintenance::askDeleteCredential,
+                onConfirmDelete = maintenance::confirmDeleteCredential,
+                onDismissDelete = maintenance::dismissDeleteCredential,
+                onDismissStatus = maintenance::dismissCredentialNotice,
+                modifier = modifier,
+            )
+            return
+        }
+
+        SettingsPage.Integrations -> {
+            IntegrationsPage(
+                state = maintenanceIntegrations,
+                profileScope = scopeProfile,
+                onRefresh = maintenance::refreshIntegrations,
+                onEventChange = maintenance::editHookEvent,
+                onCommandChange = maintenance::editHookCommand,
+                onMatcherChange = maintenance::editHookMatcher,
+                onAddHook = maintenance::addHook,
+                onDeleteHook = maintenance::deleteHook,
+                onApprove = maintenance::approvePairing,
+                onRevoke = maintenance::revokePairing,
+                onDismissStatus = maintenance::dismissIntegrationNotice,
+                modifier = modifier,
+            )
+            return
+        }
+
         SettingsPage.Notifications -> {
             NotificationsPage(
                 enabled = notificationsEnabled,

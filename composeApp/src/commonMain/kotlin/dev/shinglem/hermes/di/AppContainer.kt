@@ -16,6 +16,7 @@ import dev.shinglem.hermes.feature.chat.ChatRepository
 import dev.shinglem.hermes.feature.composer.ComposerRepository
 import dev.shinglem.hermes.feature.model.ModelRepository
 import dev.shinglem.hermes.feature.settings.ConfigRepository
+import dev.shinglem.hermes.feature.settings.MaintenanceRepository
 import dev.shinglem.hermes.feature.settings.CustomEndpointRepository
 import dev.shinglem.hermes.feature.settings.ModelAdminRepository
 import dev.shinglem.hermes.feature.settings.ProfilesAdminRepository
@@ -54,6 +55,8 @@ class AppContainer(
     val modelAdminRepository: ModelAdminRepository,
     /** 后端 config.yaml 的读改（`/api/config`）：模型上下文覆盖与「安全」三页共用。 */
     val configRepository: ConfigRepository,
+    /** 设置中心「维护」页组：记忆、后台动作、凭据池、用量、会话统计（`/api/{memory,ops,analytics,sessions}`）。 */
+    val maintenanceRepository: MaintenanceRepository,
     /** 官方桌面端（debug-only，v1.0.0 移除）：检测到才让设置页出现「调试」入口。 */
     val officialDesktop: OfficialDesktopLauncher? = null,
     /** 终端面板状态（全局，不属于会话；见 ADR-041）。 */
@@ -64,6 +67,8 @@ class AppContainer(
     private val scope: CoroutineScope,
     /** 启动时解析出的配置（不可变，全程只读）。 */
     val config: AppConfig,
+    /** 后端数据根（`HERMES_HOME`）的绝对路径：维护页要用它拼记忆文件路径。 */
+    val hermesHome: String = "",
     /** 后端来源：`local` 拉起随包 payload 的子进程，`remote` 连既有服务。 */
     val backend: BackendProvider,
     /** 设置页的落盘入口：只写 `*.custom.json`。 */

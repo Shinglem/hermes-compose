@@ -281,10 +281,11 @@ New-Item -ItemType SymbolicLink -Path .github\skills -Target '../.ai/skill'
    hash 核对 → `schtasks /Run` 以托盘态拉起 → 读 `startup.log` 确认。
    **禁止**整目录覆盖（会连带 `config/`、`data/`、`hermes/` 一起冲掉）。
 4. **发版前先读 `CHANGELOG.md` 文末「版本号说明」**：桌面 Release 的 tag 是
-   `v<桌面版本>-<hermes版本>`（例如 `v0.4.0-0.22.5`），由 `desktop-release` 出完整包；
-   同一位数内的小修只发**差异文件**、手工上传、覆盖式更新、**不走 CI**。
-   工具链（启动器 + 裁剪运行时）在 `toolchain-v<N>` 里，**只增不改**。
-   流程见技能 [`global-release-patch`](.ai/skill/global-release-patch/SKILL.md)。
+   `v<桌面版本>-<hermes版本>`（例如 `v0.5.1-0.23.0`）。**2026-11-07 起所有版本（含小版本）都发全量包**，
+   由 CI `desktop-release` 构建；产物是**纯外壳、不含 payload**，所以体量与耗时都很小。
+   不再发「只含替换文件」的 patch zip（历史 Release 保留）。工具链（启动器 + 裁剪运行时）在
+   `toolchain-v<N>` 里，**只增不改**。流程见技能
+   [`global-release-patch`](.ai/skill/global-release-patch/SKILL.md)。
 5. **视觉反馈先量化**：用户说"太淡 / 太小 / 看不清"时，先把判据写成可断言的数字与测试
    （如 `AppPaletteContrastTest` 的对比度门槛），再调数值；改配色要**找齐所有持有色值的地方**
    （界面色板与 Markdown 主题是两套，只改一处必然不一致）。

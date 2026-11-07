@@ -11,3 +11,14 @@ actual val appDataDir: String by lazy {
         ?: System.getProperty("user.home")
     File(root, "hermes-compose").apply { mkdirs() }.absolutePath
 }
+
+actual fun writeBytesToFile(path: String, bytes: ByteArray): Boolean = runCatching {
+    val file = File(path)
+    file.parentFile?.mkdirs()
+    file.writeBytes(bytes)
+    true
+}.getOrDefault(false)
+
+actual fun readLocalTextFile(path: String): String? = runCatching {
+    File(path).readText()
+}.getOrNull()

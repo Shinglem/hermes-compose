@@ -102,6 +102,24 @@ sealed interface SettingsPage {
 
     /** 关于 / 检查后端更新。 */
     data object About : SettingsPage
+
+    /** 智能体 · 记忆（provider 切换与内置记忆文件重置）。 */
+    data object Memory : SettingsPage
+
+    /** 应用 · 诊断与维护（doctor / 安全审计 / 备份 / 检查点 / curator）。 */
+    data object Maintenance : SettingsPage
+
+    /** 应用 · 用量与成本（跨会话统计）。 */
+    data object Usage : SettingsPage
+
+    /** 应用 · 会话维护（整库统计与空会话清理）。 */
+    data object SessionMaintenance : SettingsPage
+
+    /** 提供方 · 凭据池（同一 provider 多把 key 轮换）。 */
+    data object CredentialPool : SettingsPage
+
+    /** 集成 · 外部集成（shell 钩子 + 配对白名单）。 */
+    data object Integrations : SettingsPage
 }
 
 /** 设置页一级分组：可折叠，组内是二级页面。 */
@@ -310,6 +328,7 @@ object SettingsCatalog {
                     "备用模型" to SettingsPage.FallbackModels,
                     "混合代理 MoA" to SettingsPage.MoaModels,
                     "配置档案" to SettingsPage.Profiles,
+                    "记忆" to SettingsPage.Memory,
                 ),
             ),
         )
@@ -319,6 +338,7 @@ object SettingsCatalog {
                 title = "提供方",
                 pages = listOf(
                     "密钥" to SettingsPage.ProviderKeys,
+                    "凭据池" to SettingsPage.CredentialPool,
                     "自定义端点" to SettingsPage.CustomEndpoints,
                 ),
             ),
@@ -354,19 +374,24 @@ object SettingsCatalog {
                     "常规" to SettingsPage.Catalog(4),
                     "启动与权限" to SettingsPage.Catalog(5),
                     "日志" to SettingsPage.Catalog(6),
+                    "用量与成本" to SettingsPage.Usage,
+                    "会话维护" to SettingsPage.SessionMaintenance,
+                    "诊断与维护" to SettingsPage.Maintenance,
                     "关于" to SettingsPage.About,
                 ),
             ),
         )
-        if (debugAvailable) {
-            add(
-                SettingsSection(
-                    key = "integration",
-                    title = "集成",
-                    pages = listOf("官方桌面端" to SettingsPage.Debug),
-                ),
-            )
-        }
+        add(
+            SettingsSection(
+                key = "integration",
+                title = "集成",
+                pages = buildList {
+                    add("外部集成" to SettingsPage.Integrations)
+                    // 只有 payload 里带了官方桌面端时才出现对照入口（ADR-045）。
+                    if (debugAvailable) add("官方桌面端" to SettingsPage.Debug)
+                },
+            ),
+        )
     }
 
     /** 默认选中的页面：第一组的第一个二级项。 */
