@@ -137,9 +137,9 @@ pwsh packaging/assemble-release-test.ps1 -RefreshPayload   # 强制换 payload
 | 壳 | `:composeApp:syncReleaseTest` | 启动器与 `rt/` 已就位时 Gradle 自动跳过 jpackage / jlink |
 | payload | `Shinglem/hermes-bundle` 的 Release | 解压到 `release-test/hermes`；public 仓库，无需 token |
 
-> **发版流程以 [`CHANGELOG.md`](CHANGELOG.md)「版本号说明」为准**：桌面版本升位（如
-> `0.4.0` → `0.5.0`）走 CI 出完整包；之后的小版本只发**差异文件**（`...-patch.zip`）、
-> **手工上传**、覆盖式更新、**不走 CI**。
+> **发版流程以 [`CHANGELOG.md`](CHANGELOG.md)「版本号说明」为准**：**所有版本（含小版本）都发全量包**，
+> 由 CI `desktop-release` 构建；产物是纯外壳、不含 payload，所以体量与耗时都很小。
+> 旧的「小版本只发差异文件、手工上传」做法已废止。
 > 具体步骤与坑见技能 [`global-release-patch`](.ai/skill/global-release-patch/SKILL.md)。
 
 它的 `hermes/` 同时就是**开发时的后端**：
@@ -194,9 +194,10 @@ Release 标题**不带平台** —— 同一个 Release 以后要能放多个桌
 客户端版本号在 `composeApp/build.gradle.kts` 的 `appVersion`，与 tag 的关系见
 [CHANGELOG.md](CHANGELOG.md) 文末「版本号说明」。
 
-**小版本不走 CI**：`<桌面版本>-<hermes版本>` 之后只打新 tag 并**手工上传**替换用文件
-（`hermes-desktop-compose-<版本>-patch.zip` + `SHA256SUMS.txt`），下载后覆盖安装目录里的
-`bin/App.jar` 即可。完整步骤见技能 [`global-release-patch`](.ai/skill/global-release-patch/SKILL.md)。
+**所有版本都走 CI**：改 `appVersion` 与 CHANGELOG 后触发 `desktop-release`（`workflow_dispatch`），
+由 CI 打 `v<桌面版本>-<hermes版本>` tag 并上传 `…-windows-x64.7z.001` + `SHA256SUMS.txt`。
+小版本同样发全量包（纯外壳，成本很低）；不再发「只含替换文件」的 patch zip。
+完整步骤见技能 [`global-release-patch`](.ai/skill/global-release-patch/SKILL.md)。
 
 ## 许可证
 

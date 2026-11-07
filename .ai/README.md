@@ -27,7 +27,7 @@
 |---|---|
 | [`global-git-ops`](skill/global-git-ops/SKILL.md) | 拉取 / 推送 / 同步 GitHub、代理探活、提交前凭据自查与提交纪律 |
 | [`global-repo-layout`](skill/global-repo-layout/SKILL.md) | 内容该放哪、新建技能怎么命名、技能目录结构与多 agent 接入 |
-| [`global-release-patch`](skill/global-release-patch/SKILL.md) | 发版 / 本机升级前 —— 该发完整包还是 patch、只打包差异文件、手工上传 Release、覆盖式部署与 `startup.log` 验证 |
+| [`global-release-patch`](skill/global-release-patch/SKILL.md) | 发版 / 本机升级前 —— 全量 CI release 的步骤（改版本号与 CHANGELOG、触发 `desktop-release`、核验资产）、覆盖式部署与 `startup.log` 验证 |
 | [`dev-desktop-gui-e2e-testing`](skill/dev-desktop-gui-e2e-testing/SKILL.md) | 用脚本驱动真实窗口做端到端验证前 —— 中文输入法吞按键、Enter 不生效、抢前台、DPI 坐标偏移、elevated 窗口注入失效、截图断言、测试数据隔离 |
 | [`dev-windows-integration-debug`](skill/dev-windows-integration-debug/SKILL.md) | 自启 / 单实例 / 提权 / 托盘「不工作」时 —— 先读系统真实状态（`schtasks`、进程、`startup.log`）再改代码 |
 
