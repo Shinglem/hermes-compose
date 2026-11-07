@@ -242,7 +242,7 @@ val appMainClass = "dev.shinglem.hermes.MainKt"
  *
  * 从 0.5.1 起**小版本也发全量包**（CI `desktop-release`，产物是纯外壳、不含 payload）。
  */
-val appVersion = "0.5.0"
+val appVersion = "0.5.1"
 
 /**
  * 产物名：jpackage 的 `--name` / `packageName`，决定
