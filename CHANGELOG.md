@@ -5,6 +5,31 @@
 
 ---
 
+## [0.5.5] · 2026-11-09（hermes 0.23.0）
+
+> **完整包版本**：tag `v0.5.5-0.23.0`，由 CI `desktop-release` 构建。
+> 纯桌面外壳（不含 payload）；payload 与工具链不变：hermes 0.23.0 / `toolchain-v1`。
+
+### 修复
+
+- **切模型回 `4001 revision_conflict`**（0.5.4 修好 `not_found` 后暴露的下一层）：
+  `expected_revision` 每轮对话都会推进，而本地只在 resume / mutate 回执里更新 ——
+  发过消息之后再切模型，带的就是旧 fence。现在三条一起堵住：
+  - `session.mutate` 统一走 `mutateSession`：`revision_conflict` / `stale_generation` 的拒绝
+    回执里带新鲜 revision / generation，用**同一个 request_id** 重试一次（后端注释里的约定）；
+  - 守卫确认框（贵模型 / 数据策略 / 大上下文）弹出时也**采纳**回执里的 fence，
+    点「继续」不再带旧值；
+  - 若重试仍撞上（期间又推进了一轮），先重新 resume 拿新鲜 fence 再试一次。
+
+### 升级
+
+1. 下载 `hermes-desktop-compose-0.5.5-0.23.0-windows-x64.7z.001`（+ 后续卷）与 `SHA256SUMS.txt`，
+   核对 SHA-256；
+2. 解压覆盖安装目录；`config/`、`data/`、`hermes/`、`rt/` 不动；
+3. 重启客户端。只换 `bin/App.jar` 也等价（`lib/` 未变）。
+
+---
+
 ## [0.5.4] · 2026-11-09（hermes 0.23.0）
 
 > **完整包版本**：tag `v0.5.4-0.23.0`，由 CI `desktop-release` 构建。
@@ -785,7 +810,7 @@ jlink 裁剪运行时、原生启动器打包、单实例与自启任务清理�
 
 | Release | tag 形式 | 资产 |
 |---|---|---|
-| 桌面端 | `v0.5.4-0.23.0` | `hermes-desktop-compose-0.5.4-0.23.0-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
+| 桌面端 | `v0.5.5-0.23.0` | `hermes-desktop-compose-0.5.5-0.23.0-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
 | 工具链 | `toolchain-v1` | `launcher-windows-x64.zip` / `runtime-windows-x64.zip` / `SHA256SUMS.txt` |
 | payload | 另一个仓库 `Shinglem/hermes-bundle` 的 `v0.23.0` | payload 压缩分卷 |
 
