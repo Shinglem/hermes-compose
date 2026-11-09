@@ -952,15 +952,15 @@ class ChatViewModel(
         }
     }
 
-    /** 切模型：有 live session 走 `config.set`，草稿态只落本地偏好（建会话时带过去）。 */
-    fun switchModel(provider: String, model: String, confirmExpensive: Boolean = false) {
+    /** 切模型：有 live session 走 `session.mutate {operation:"model"}`，草稿态只落本地偏好（建会话时带过去）。 */
+    fun switchModel(provider: String, model: String, confirmToken: String? = null) {
         val current = _state.value
         val key = current.key
         preferences.draftProvider = provider
         preferences.draftModel = model
 
         if (key == null) {
-            // 还没会话：`config.set model` 会返回 4001（requires a live session），
+            // 还没会话：`session.mutate` 需要活会话（否则 4001），
             // 所以先只更新本地显示，新建会话时通过 `session.create` 生效。
             _state.update {
                 it.copy(model = model, provider = provider, modelSwitching = false, modelConfirm = null)
@@ -979,7 +979,7 @@ class ChatViewModel(
                     model = model,
                     revision = revisions[key],
                     executionGeneration = generations[key],
-                    confirmExpensive = confirmExpensive,
+                    confirmToken = confirmToken,
                 )
                 if (outcome.confirmRequired) {
                     _state.update {
@@ -989,6 +989,7 @@ class ChatViewModel(
                                 provider = provider,
                                 model = model,
                                 message = outcome.confirmMessage.orEmpty(),
+                                token = outcome.confirmToken.orEmpty(),
                             ),
                         )
                     }
@@ -1001,21 +1002,22 @@ class ChatViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                Log.info("config.set model failed: ${throwable.message}")
+                Log.info("session.mutate model failed: ${throwable.message}")
                 _state.update {
                     it.copy(
                         modelSwitching = false,
-                        modelError = ErrorMapper.from(throwable, RpcMethods.CONFIG_SET),
+                        modelError = ErrorMapper.from(throwable, RpcMethods.SESSION_MUTATE),
                     )
                 }
             }
         }
     }
 
-    /** 贵模型确认框点了"继续"。 */
+    /** 守卫确认框点了"继续"：把后端下发的 token 原样带回。 */
     fun confirmModelSwitch() {
         val confirm = _state.value.modelConfirm ?: return
-        switchModel(confirm.provider, confirm.model, confirmExpensive = true)
+        if (confirm.token.isBlank()) return
+        switchModel(confirm.provider, confirm.model, confirmToken = confirm.token)
     }
 
     fun dismissModelConfirm() {
@@ -1053,11 +1055,11 @@ class ChatViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                Log.info("config.set reasoning failed: ${throwable.message}")
+                Log.info("session.mutate reasoning failed: ${throwable.message}")
                 _state.update {
                     it.copy(
                         modelSwitching = false,
-                        modelError = ErrorMapper.from(throwable, RpcMethods.CONFIG_SET),
+                        modelError = ErrorMapper.from(throwable, RpcMethods.SESSION_MUTATE),
                     )
                 }
             }

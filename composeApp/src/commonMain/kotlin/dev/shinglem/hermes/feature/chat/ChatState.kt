@@ -9,11 +9,13 @@ import kotlin.time.Instant
 /** 会话身份：profile 参与 key，切回同一 profile 的同一会话才算"同一份缓存"。 */
 data class SessionKey(val profile: String?, val sessionId: String)
 
-/** 待确认的模型切换（`config.set` 返回 `confirm_required` 时填充）。 */
+/** 待确认的模型切换（`session.mutate` 返回 `confirmation_required` 时填充）。 */
 data class ModelConfirm(
     val provider: String,
     val model: String,
     val message: String,
+    /** 后端下发的守卫 token，确认时必须原样带回（不是布尔）。 */
+    val token: String = "",
 )
 
 /**

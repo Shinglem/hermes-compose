@@ -56,7 +56,8 @@ object RpcContracts {
             required = emptySet<String>(),
         ),
         RpcMethods.SESSION_INFO to RpcContractSpec(
-            allowed = setOf("session_id"),
+            // PROFILE_IMPLICIT：跨 profile 必须带 profile（见 [PROFILE_IMPLICIT] 的说明）。
+            allowed = setOf("profile", "session_id"),
             required = setOf("session_id"),
         ),
         RpcMethods.SESSION_LIST to RpcContractSpec(
@@ -64,8 +65,12 @@ object RpcContracts {
             required = emptySet<String>(),
         ),
         RpcMethods.SESSION_MUTATE to RpcContractSpec(
+            // `profile` 不在后端的闭集里，但**必须**带：多 profile 时 `dispatch` 会在闭集校验
+            // 之前按它路由到 sibling authority 并从参数里剥离（见 [PROFILE_IMPLICIT]）。
+            // 不带就只能落到连接 actor 的 home profile，跨 profile 的会话会 4001 not_found。
+            // 与其他 PROFILE_IMPLICIT 方法（interrupt / prompt.submit 等）保持一致，显式列出。
             allowed = setOf(
-                "session_id", "request_id", "expected_revision", "operation", "payload",
+                "profile", "session_id", "request_id", "expected_revision", "operation", "payload",
                 "expected_generation",
             ),
             required = setOf("session_id", "request_id", "expected_revision", "operation", "payload"),
@@ -111,7 +116,8 @@ object RpcContracts {
             required = setOf("session_id", "execution_generation", "prompt_id", "choice"),
         ),
         RpcMethods.CLARIFY_RESPOND to RpcContractSpec(
-            allowed = setOf("session_id", "execution_generation", "prompt_id", "answer"),
+            // PROFILE_IMPLICIT：`respondClarify` 已经带 profile，这里必须显式允许。
+            allowed = setOf("profile", "session_id", "execution_generation", "prompt_id", "answer"),
             required = setOf("session_id", "execution_generation", "prompt_id", "answer"),
         ),
         RpcMethods.IMAGE_ATTACH_BYTES to RpcContractSpec(
@@ -127,7 +133,8 @@ object RpcContracts {
             required = setOf("key"),
         ),
         RpcMethods.SESSION_STATS to RpcContractSpec(
-            allowed = setOf("session_id"),
+            // PROFILE_IMPLICIT：走 RPC 时必须带 profile（维护页目前走 REST `/api/sessions/stats`）。
+            allowed = setOf("profile", "session_id"),
             required = setOf("session_id"),
         ),
         RpcMethods.PROFILES_LIST to RpcContractSpec(

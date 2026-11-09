@@ -40,12 +40,18 @@ fun AppError.text(): String = when (this) {
     is AppError.Unknown -> stringResource(Res.string.error_unknown, summary)
 }
 
-/** 错误横幅：不阻塞操作，列表有缓存时继续显示旧数据。 */
+/**
+ * 错误横幅：不阻塞操作，列表有缓存时继续显示旧数据。
+ *
+ * [onRetry] 是右侧那个动作按钮的回调，[actionLabel] 覆盖按钮文案（默认「重试」）——
+ * 单纯用于消掉提示的场景要传「关闭」，否则名不副实。
+ */
 @Composable
 fun ErrorBanner(
     error: AppError,
     modifier: Modifier = Modifier,
     onRetry: (() -> Unit)? = null,
+    actionLabel: String? = null,
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -70,7 +76,7 @@ fun ErrorBanner(
             )
             if (onRetry != null) {
                 TextButton(onClick = onRetry) {
-                    Text(stringResource(Res.string.action_retry))
+                    Text(actionLabel ?: stringResource(Res.string.action_retry))
                 }
             }
         }

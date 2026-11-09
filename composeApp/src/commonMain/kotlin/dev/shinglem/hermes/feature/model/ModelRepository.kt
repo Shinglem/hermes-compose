@@ -20,9 +20,11 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 
 /**
- * 模型切换的结果（`config.set` 的 `ConfigSetResult` 子集）。
+ * 模型切换的结果（`session.mutate {operation:"model"}` 的回执子集）。
  *
- * - `confirmRequired`：目标模型价格偏高，需要带 `confirm_expensive_model=true` 重发
+ * - `confirmRequired`：目标模型被选择守卫拦下（价格 / 数据策略 / 大上下文），需要把
+ *   [confirmToken] **原样**放回 `payload.confirm` 重发 —— 后端只认它下发的那个 token
+ *   （绑定了目标、原模型与 revision），传 `true` 或旧 token 只会再被拒一次。
  * - `deferred`：正在生成中，后端把切换排到下一轮开始（此时**不要**立刻回读，等 `session.info`）
  */
 data class ModelSwitchOutcome(
@@ -30,6 +32,8 @@ data class ModelSwitchOutcome(
     val warning: String?,
     val confirmRequired: Boolean,
     val confirmMessage: String?,
+    /** `confirmation_required` 回执里的 token，确认时必须原样带回。 */
+    val confirmToken: String? = null,
     val deferred: Boolean,
     /** `session.mutate` 回执里的新鲜 fence，调用方要写回自己的 revision/generation。 */
     val revision: Int? = null,
@@ -103,11 +107,13 @@ class ModelRepository(
         model: String,
         revision: Int?,
         executionGeneration: Int?,
-        confirmExpensive: Boolean = false,
+        confirmToken: String? = null,
     ): ModelSwitchOutcome {
         val payload = buildJsonObject {
             put("model", model)
             if (provider.isNotBlank()) put("provider", provider)
+            // 守卫确认是 **token 交换**，不是布尔：后端把目标/原模型/revision 都绑进这个 token。
+            confirmToken?.takeIf { it.isNotBlank() }?.let { put("confirm", it) }
         }
         val result = mutate(profile, runtimeSessionId, "model", payload, revision, executionGeneration)
         return ModelSwitchOutcome(
@@ -115,6 +121,7 @@ class ModelRepository(
             warning = result.stringOrNull("warning")?.takeIf { it.isNotBlank() },
             confirmRequired = (result["confirm_required"] as? JsonPrimitive)?.booleanOrNull == true,
             confirmMessage = result.stringOrNull("confirm_message")?.takeIf { it.isNotBlank() },
+            confirmToken = result.stringOrNull("confirm")?.takeIf { it.isNotBlank() },
             deferred = (result["deferred"] as? JsonPrimitive)?.booleanOrNull == true,
             revision = (result["revision"] as? JsonPrimitive)?.intOrNull,
             executionGeneration = (result["execution_generation"] as? JsonPrimitive)?.intOrNull,
@@ -149,7 +156,14 @@ class ModelRepository(
         )
     }
 
-    /** `session.mutate` 的会话级写入（fence 校验失败时的重试在 `ChatRepository`，这里不重复）。 */
+    /**
+     * `session.mutate` 的会话级写入（fence 校验失败时的重试在 `ChatRepository`，这里不重复）。
+     *
+     * **必须带 `profile`**：后端 `dispatch` 在闭集校验之前按它路由到 sibling authority
+     * 并从参数里剥离（`gateway/session_controls.py` 的 `_PROFILE_IMPLICIT`）。
+     * 不带的话只能落到连接 actor 的 home profile —— 多 profile 下（例如连 `default`、
+     * 会话在 `ops`）后端查不到该会话，直接回 `4001 not_found`（v0.5.3 实测每次都这样）。
+     */
     private suspend fun mutate(
         profile: String?,
         sessionId: String,
@@ -160,6 +174,7 @@ class ModelRepository(
     ): JsonObject {
         if (revision == null) throw AppError.Protocol("session.mutate 需要 expected_revision")
         val params = buildJsonObject {
+            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
             put("session_id", sessionId)
             put("request_id", "hdc-m-${kotlin.time.Clock.System.now().toEpochMilliseconds()}-$operation")
             put("expected_revision", revision)

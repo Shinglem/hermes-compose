@@ -86,6 +86,7 @@ import dev.shinglem.hermes.resources.chat_rewind_title
 import dev.shinglem.hermes.resources.chat_streaming
 import dev.shinglem.hermes.resources.chat_subagents
 import dev.shinglem.hermes.resources.chat_untitled
+import dev.shinglem.hermes.resources.common_close
 import dev.shinglem.hermes.resources.detail_empty_body
 import dev.shinglem.hermes.resources.detail_empty_title
 import dev.shinglem.hermes.resources.detail_messages_count
@@ -400,6 +401,7 @@ fun ChatPane(
             ErrorBanner(
                 error = modelError,
                 onRetry = onDismissModelError,
+                actionLabel = stringResource(Res.string.common_close),
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
             )
         }
@@ -409,6 +411,7 @@ fun ChatPane(
             ErrorBanner(
                 error = usageError,
                 onRetry = onDismissUsageError,
+                actionLabel = stringResource(Res.string.common_close),
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
             )
         }
