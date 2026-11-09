@@ -315,44 +315,52 @@ fun main(args: Array<String>) {
             onDispose { tray.dispose() }
         }
 
-        if (windowVisible) {
-            Window(
-                onCloseRequest = {
-                    // 最大化时记的是**还原后**的 bounds：下次启动先按普通窗口恢复。
-                    if (windowState.placement == WindowPlacement.Floating) {
-                        container.preferences.windowBounds = windowState.toBounds()
-                    }
-                    container.preferences.flush()
-                    if (closeToTray) windowVisible = false else quit()
-                },
-                title = ProductInfo.DISPLAY_NAME,
-                icon = appIcon,
-                state = windowState,
-            ) {
-                LaunchedEffect(Unit) {
-                    window.minimumSize = Dimension(windowConfig.minWidth, windowConfig.minHeight)
+        // 窗口**常驻组合、只切换可见性**（`visible`），不再用 `if (windowVisible)` 把它整块移除。
+        // 关到托盘时销毁 AWT 窗口，下次从托盘唤起就是一个新窗口：它的 `InputMethodRequests`
+        // 是空的，用户此时敲下的**第一个键**会被当成普通字符直接塞进输入框（输入法来不及接管），
+        // 第二个键才正常 —— 也就是「偶尔第一个字母绕过输入法」。复用同一个窗口对象即可避免。
+        Window(
+            onCloseRequest = {
+                // 最大化时记的是**还原后**的 bounds：下次启动先按普通窗口恢复。
+                if (windowState.placement == WindowPlacement.Floating) {
+                    container.preferences.windowBounds = windowState.toBounds()
                 }
-                App(
-                    container = container,
-                    onExitRequest = { quit() },
-                    terminalContent = { _, modifier ->
-                        TerminalContent(
-                            viewModel = container.terminalViewModel,
-                            modifier = modifier,
-                        )
-                    },
-                    onQuoteTerminalSelection = {
-                        val tabId = container.terminalViewModel.state.value.activeTab?.id
-                        val selected = tabId?.let { terminalSelectedText(it) }
-                        if (!selected.isNullOrBlank()) {
-                            TerminalQuoteBridge.publish(selected)
-                        } else if (tabId != null) {
-                            // 没有选中就退一步：取最近 40 行（"把刚才的输出带进对话"是最常见诉求）。
-                            TerminalQuoteBridge.publish(terminalTailText(tabId, 40))
-                        }
-                    },
-                )
+                container.preferences.flush()
+                if (closeToTray) windowVisible = false else quit()
+            },
+            title = ProductInfo.DISPLAY_NAME,
+            icon = appIcon,
+            state = windowState,
+            visible = windowVisible,
+        ) {
+            LaunchedEffect(Unit) {
+                window.minimumSize = Dimension(windowConfig.minWidth, windowConfig.minHeight)
             }
+            // 窗口从托盘重新显示时，AWT 的输入法上下文可能被系统停用过 —— 显式再启用一次
+            // （幂等；不这么做的话，第一批按键会以普通字符落进输入框）。
+            LaunchedEffect(windowVisible) {
+                if (windowVisible) window.enableInputMethods(true)
+            }
+            App(
+                container = container,
+                onExitRequest = { quit() },
+                terminalContent = { _, modifier ->
+                    TerminalContent(
+                        viewModel = container.terminalViewModel,
+                        modifier = modifier,
+                    )
+                },
+                onQuoteTerminalSelection = {
+                    val tabId = container.terminalViewModel.state.value.activeTab?.id
+                    val selected = tabId?.let { terminalSelectedText(it) }
+                    if (!selected.isNullOrBlank()) {
+                        TerminalQuoteBridge.publish(selected)
+                    } else if (tabId != null) {
+                        // 没有选中就退一步：取最近 40 行（"把刚才的输出带进对话"是最常见诉求）。
+                        TerminalQuoteBridge.publish(terminalTailText(tabId, 40))
+                    }
+                },
+            )
         }
     }
 }
