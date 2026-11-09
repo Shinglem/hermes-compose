@@ -82,6 +82,17 @@ class ScrollFollowTest {
     }
 
     @Test
+    fun jumpToLatestOnlyWhenUserTookOver() {
+        // 跟随开着时不显示：补滚动画进行中列表天生"没贴底"，按贴底判断会一帧一闪。
+        assertFalse(shouldShowJumpToLatest(followTail = true, atBottom = false))
+        assertFalse(shouldShowJumpToLatest(followTail = true, atBottom = true))
+        // 用户接管（向上滚过）且下面还有内容：显示。
+        assertTrue(shouldShowJumpToLatest(followTail = false, atBottom = false))
+        // 已经贴底就没有必要显示。
+        assertFalse(shouldShowJumpToLatest(followTail = false, atBottom = true))
+    }
+
+    @Test
     fun screenshotScenarioKeepsFollowingWhileStreaming() {
         // 场景：用户在底部，AI 每来一段内容距底 distance>0 → 应当补滚（followTail 保持 true）。
         var following = true

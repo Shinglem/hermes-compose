@@ -5,6 +5,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasScrollAction
@@ -23,6 +25,7 @@ import dev.shinglem.hermes.feature.composer.ComposerUiState
 import dev.shinglem.hermes.feature.session.SessionSummary
 import dev.shinglem.hermes.markdown.MarkdownText
 import dev.shinglem.hermes.ui.theme.HermesTheme
+import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -394,6 +397,79 @@ class ChatPaneTest {
             "用户向上滚之后不该再被自动追到底部（末尾内容不该被滚进视口）",
         )
         onNodeWithText(anchor, substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun `流式增长时补滚逐帧平滑，不会整块瞬移`() = runComposeUiTest {
+        val history = (1..30).map { index ->
+            ChatItem.UserMessage("u$index", null, "历史消息 $index：这条用来把列表撑过一屏")
+        }
+        var state by mutableStateOf(
+            ChatState(
+                load = Loadable.Ready(history),
+                streaming = StreamingState(
+                    segments = listOf(StreamSegment.Answer("开头\n\n".repeat(20))),
+                ),
+            ),
+        )
+        setContent(paneOf(state = { state }))
+        mainClock.autoAdvance = false
+        repeat(60) { mainClock.advanceTimeByFrame() }
+
+        fun scrollRange(): Pair<Float, Float>? {
+            val node = onAllNodes(hasScrollAction()).fetchSemanticsNodes().firstOrNull() ?: return null
+            val r = node.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange) ?: return null
+            return r.value() to r.maxValue()
+        }
+
+        val start = scrollRange() ?: error("找不到可滚动列表")
+
+        // 内容长高约两三行：旧实现（requestScrollToItem + Int.MAX_VALUE）会在**一帧内**
+        // 把视口瞬移整段差距，看起来就是"一帧跳一下"的闪烁。
+        state = state.copy(
+            streaming = state.streaming!!.appendAnswer("后续内容\n\n".repeat(8)),
+        )
+
+        var previous = start.first
+        var maxStep = 0f
+        repeat(30) {
+            mainClock.advanceTimeByFrame()
+            val current = scrollRange() ?: return@repeat
+            val step = abs(current.first - previous)
+            if (step > maxStep) maxStep = step
+            previous = current.first
+        }
+        val end = scrollRange() ?: error("找不到可滚动列表")
+
+        assertTrue(maxStep <= 40f, "补滚应逐帧滑过去，单帧位移过大=$maxStep")
+        assertEquals(end.second, end.first, 1f, "补滚结束后应贴底")
+    }
+
+    @Test
+    fun `跟随补滚期间不出现回到最新`() = runComposeUiTest {
+        val history = (1..30).map { index ->
+            ChatItem.UserMessage("u$index", null, "历史消息 $index：这条用来把列表撑过一屏")
+        }
+        var state by mutableStateOf(
+            ChatState(
+                load = Loadable.Ready(history),
+                streaming = StreamingState(
+                    segments = listOf(StreamSegment.Answer("开头\n\n".repeat(20))),
+                ),
+            ),
+        )
+        setContent(paneOf(state = { state }))
+        waitForIdle()
+        assertTrue(onAllNodesWithText("回到最新").fetchSemanticsNodes().isEmpty())
+
+        state = state.copy(streaming = state.streaming!!.appendAnswer("后续内容\n\n".repeat(8)))
+        repeat(5) {
+            waitForIdle()
+            assertTrue(
+                onAllNodesWithText("回到最新").fetchSemanticsNodes().isEmpty(),
+                "跟随补滚期间不该出现「回到最新」",
+            )
+        }
     }
 
     @Test

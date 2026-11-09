@@ -1,6 +1,8 @@
 package dev.shinglem.hermes.feature.chat
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -33,6 +35,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -52,6 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.shinglem.hermes.core.app.ProductInfo
+import dev.shinglem.hermes.core.log.Log
 import dev.shinglem.hermes.core.time.TimeFormat
 import dev.shinglem.hermes.platform.touchDragScroll
 import dev.shinglem.hermes.feature.composer.Composer
@@ -217,7 +221,6 @@ fun ChatPane(
     //    snapshotFlow conflate 掉 → 表现为「点了回到最新之后再也不跟随」。
     //    这里只往 conflate 通道里丢一个请求，真正的滚动由下面的独立循环顺序执行。
     val streamingNow by rememberUpdatedState(state.streaming != null)
-    val totalItemsNow by rememberUpdatedState(totalItems)
     val followRequests = remember { Channel<Unit>(Channel.CONFLATED) }
     LaunchedEffect(state.key) {
         snapshotFlow { listState.distanceFromBottomPx() }.collect { distance ->
@@ -231,12 +234,20 @@ fun ChatPane(
             }
         }
     }
+    // 补滚：**按实测差距平滑追上**，而不是 `requestScrollToItem(last, Int.MAX_VALUE)`。
+    // 后者每次都要按条目下标重新锚定 + `forceRemeasure`，代价大而且是整块瞬移 ——
+    // 流式时内容每 40ms 长几十像素，看起来就是"一帧跳一下"的闪烁（实测一次 53–110px）。
+    // 用 `animateScrollBy` 只挪视口，不动锚点；用户一滚（`followTail=false`）就停。
     LaunchedEffect(state.key) {
         for (unused in followRequests) {
-            // 用户已经在滚（followTail=false）：把排队中的补滚丢掉，别再把他拽回底部。
-            if (!followTail) continue
-            val last = totalItemsNow - 1
-            if (last >= 0) listState.requestScrollToItem(last, Int.MAX_VALUE)
+            while (followTail) {
+                val gap = listState.distanceFromBottomPx()
+                if (gap <= 0) break
+                listState.animateScrollBy(
+                    gap.toFloat(),
+                    tween(durationMillis = followTweenMs(gap), easing = LinearEasing),
+                )
+            }
         }
     }
 
@@ -360,14 +371,12 @@ fun ChatPane(
                 }
             }
 
-            // 正在接收回复且用户已向上翻看历史时，给一个回到底部的入口。
-            // 用 canScrollForward 而不是 followTail：前者是"真的还有内容在下面"，
-            // 后者只是"用户最后一次滚轮方向"。
+            // 用户接管了滚动、且下面确实还有内容时才给「回到最新」入口（判据见 ScrollFollow）。
             val atBottom by remember(listState) {
                 derivedStateOf { !listState.canScrollForward }
             }
             JumpToLatestButton(
-                visible = !atBottom && (state.streaming != null || state.sending),
+                visible = shouldShowJumpToLatest(followTail, atBottom),
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 24.dp, bottom = 16.dp),
@@ -709,6 +718,12 @@ private val ChatItem.kind: String
  */
 private val ChatSidePaddingMin = 24.dp
 private val ChatSidePaddingMax = 96.dp
+
+/**
+ * 补滚动画时长：按差距线性给时长（约 1.2px/ms），并夹在 [40, 160]ms ——
+ * 小步长时是「顺滑地跟上」，内容一次长很多时也只是快速滑过去，不会突然闪一下。
+ */
+private fun followTweenMs(gapPx: Int): Int = (gapPx / 1.2f).toInt().coerceIn(40, 160)
 
 private fun chatSidePadding(available: Dp): Dp =
     (available * 0.06f).coerceIn(ChatSidePaddingMin, ChatSidePaddingMax)

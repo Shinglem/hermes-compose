@@ -67,3 +67,13 @@ internal fun shouldResumeFollow(
     distanceFromBottomPx: Int,
     stickSlopPx: Int = ScrollFollow.STICK_SLOP_PX,
 ): Boolean = distanceFromBottomPx <= stickSlopPx
+
+/**
+ * 该不该显示「回到最新」。
+ *
+ * **只看跟随是否开着**，不看这一刻是否贴底：补滚是逐帧动画，动画进行中列表本来就没贴底，
+ * 按「是否贴底」判断会让按钮跟着补滚一帧显示、一帧隐藏地闪（真机反馈的就是这个）。
+ * 跟随开着时我们本来就会走到底，所以没有显示的必要。
+ */
+internal fun shouldShowJumpToLatest(followTail: Boolean, atBottom: Boolean): Boolean =
+    !followTail && !atBottom
