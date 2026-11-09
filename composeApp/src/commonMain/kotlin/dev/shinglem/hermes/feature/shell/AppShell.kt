@@ -344,27 +344,29 @@ fun AppShell(
         body: String,
         actions: List<NotificationAction> = emptyList(),
         foreground: Boolean = AppFocus.isForeground,
+        /** 这张卡片是不是已经渲染在用户眼前的会话里（判据见 NotificationRules）。 */
+        onScreen: Boolean = false,
     ) {
         if (!container.preferences.notificationsEnabled || !SystemNotifications.supported) {
             Log.info("remind skipped id=$id (enabled=${container.preferences.notificationsEnabled} supported=${SystemNotifications.supported})")
             return
         }
-        // 正在看这个会话且窗口在前台：不打扰（判据见 NotificationRules）。
+        val selected = sessionViewModel.state.value.selectedId
         val remind = shouldRemindForSession(
             target = target,
             foreground = foreground,
-            activeProfile = shellViewModel.state.value.activeProfile,
-            selectedSessionId = sessionViewModel.state.value.selectedId,
+            selectedSessionId = selected,
+            onScreen = onScreen,
         )
         if (!remind) {
-            Log.info("remind skipped id=$id (foreground=$foreground, viewing this session)")
+            Log.info("remind skipped id=$id (foreground=$foreground onScreen=$onScreen target=${target?.sessionId} selected=$selected)")
             return
         }
         if (!reminders.shouldRemind(id)) {
             Log.info("remind skipped id=$id (already reminded)")
             return
         }
-        Log.info("remind show id=$id actions=${actions.size} foreground=$foreground")
+        Log.info("remind show id=$id actions=${actions.size} foreground=$foreground onScreen=$onScreen target=${target?.sessionId} selected=$selected")
         SystemNotifications.setPendingAction(target?.let { key -> { notifyScope.launch { jumpToSession(key) } } })
         SystemNotifications.show(title, body.take(180), actions)
     }
@@ -374,6 +376,10 @@ fun AppShell(
         approval: PendingApproval,
         target: SessionKey?,
         foreground: Boolean = AppFocus.isForeground,
+        /** 卡片已经在界面上（当前会话的审批）——此时再弹系统通知就是纯噪音。 */
+        onScreen: Boolean = chatViewModel.state.value.visibleApprovals.any {
+            it.requestId == approval.requestId
+        },
     ) {
         remind(
             id = "approval:${approval.requestId}",
@@ -387,6 +393,7 @@ fun AppShell(
                 NotificationAction("拒绝") { chatViewModel.resolveApproval(approval.requestId, "deny") },
             ),
             foreground = foreground,
+            onScreen = onScreen,
         )
     }
 
@@ -415,6 +422,9 @@ fun AppShell(
                 title = "${ProductInfo.DISPLAY_NAME} · 等待回答",
                 body = clarify.questions.firstOrNull()?.question?.trim().orEmpty()
                     .ifBlank { "agent 正在等你回答一个问题" },
+                onScreen = chatViewModel.state.value.visibleClarify.any {
+                    it.requestId == clarify.requestId
+                },
             )
         }
         onDispose {
@@ -449,6 +459,7 @@ fun AppShell(
                 body = clarify.questions.firstOrNull()?.question?.trim().orEmpty()
                     .ifBlank { "agent 正在等你回答一个问题" },
                 foreground = windowFocused,
+                onScreen = chatState.visibleClarify.any { it.requestId == clarify.requestId },
             )
         }
     }

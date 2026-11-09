@@ -1796,11 +1796,17 @@ class ChatViewModel(
      *
      * 优先按 runtime id 反查（多会话场景）；查不到时退回当前打开的会话（单会话场景）。
      * 通知点击要跳转，所以必须给 stored id 而不是 runtime id。
+     *
+     * **当前会话的 runtime 命中时优先用它**：反查表里同一个 runtime 可能残留过别的
+     * stored key（重连 / 重开同一会话），拿到旧 key 会把「正在看的会话」判成别的会话，
+     * 表现为审批卡片就在眼前却又弹一条系统通知。
      */
-    private fun keyFor(runtimeSessionId: String?): SessionKey? =
-        runtimeSessionId
-            ?.let { sid -> runtimeIds.entries.firstOrNull { it.value == sid }?.key }
-            ?: _state.value.key
+    private fun keyFor(runtimeSessionId: String?): SessionKey? {
+        val current = _state.value.key
+        if (runtimeSessionId == null) return current
+        if (current != null && runtimeIds[current] == runtimeSessionId) return current
+        return runtimeIds.entries.firstOrNull { it.value == runtimeSessionId }?.key ?: current
+    }
 
     private fun acknowledgeApproval(requestId: String, runtimeId: String?) {
         val key = _state.value.key ?: return
