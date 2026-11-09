@@ -5,12 +5,12 @@ import androidx.compose.foundation.lazy.LazyListState
 /**
  * 流式输出时的「自动跟随底部」判定。
  *
- * 规则（来自实测需求）：默认一直跟随最新输出；**只有用户真的向上翻走**才暂停，
- * 滚回接近底部就自动恢复。三处细节都是为了不误判：
+ * 规则（来自实测需求）：默认一直跟随最新输出；**用户向上滚一下就把滚动权交还给他**，
+ * 滚回接近底部（或点「回到最新」）再恢复跟随。
  *
- * 1. 上翻要超过 [PAUSE_SLOP_PX] 才算「离开底部」—— 触摸板的惯性余量、滚轮一格
- *    都会产生小幅负 delta，按「方向」判定会让跟随永久失效（旧实现的症状：
- *    流式回答不动了，用户以为自己没滚）。
+ * 1. 上翻**立刻**暂停跟随，不看「离开底部多远」—— 曾经用 24px 阈值想过滤触摸板惯性，
+ *    代价是流式期间每一帧向上滚都会被补滚拉回去：用户和自动跟随互抢，
+ *    表现为滚轮向上时画面闪烁跳变。
  * 2. 向下滚**不**立即恢复跟随 —— 离底部还很远时方向向下不代表想追最新，
  *    恢复交给「是否贴底」判定。
  * 3. 「贴底」留 [STICK_SLOP_PX] 余量：布局取整常常差几个像素，严格等于 0 会导致
@@ -19,9 +19,6 @@ import androidx.compose.foundation.lazy.LazyListState
 internal object ScrollFollow {
     /** 距底部小于该值视为「在底部」，恢复跟随。 */
     const val STICK_SLOP_PX = 8
-
-    /** 上翻离开底部超过该值才暂停跟随。 */
-    const val PAUSE_SLOP_PX = 24
 }
 
 /**
@@ -62,12 +59,8 @@ internal fun contentEndGapPx(
     return gap.coerceAtLeast(0)
 }
 
-/** 用户滚动后是否要暂停跟随：只有真的向上翻离底部才暂停。 */
-internal fun shouldPauseFollow(
-    deltaY: Float,
-    distanceFromBottomPx: Int,
-    pauseSlopPx: Int = ScrollFollow.PAUSE_SLOP_PX,
-): Boolean = deltaY < 0f && distanceFromBottomPx > pauseSlopPx
+/** 用户滚动后是否要暂停跟随：向上滚就是接管，立刻停。 */
+internal fun shouldPauseFollow(deltaY: Float): Boolean = deltaY < 0f
 
 /** 布局变化后是否要恢复跟随：贴底（含少量余量）就恢复。 */
 internal fun shouldResumeFollow(

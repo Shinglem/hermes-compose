@@ -7,29 +7,25 @@ import kotlin.test.assertTrue
 
 /**
  * 流式跟随的判定逻辑：这些分支直接决定「AI 回答时画面会不会自己走」，
- * 用最小用例把四类误判钉住。
+ * 用最小用例把误判钉住。
  */
 class ScrollFollowTest {
 
     @Test
-    fun slightUpwardFlickDoesNotPauseFollow() {
-        // 触摸板惯性 / 滚轮余量：delta 负、但离底部只有几个像素 —— 不该停跟。
-        assertFalse(shouldPauseFollow(deltaY = -1f, distanceFromBottomPx = 0))
-        assertFalse(shouldPauseFollow(deltaY = -40f, distanceFromBottomPx = 12))
-        assertFalse(shouldPauseFollow(deltaY = -40f, distanceFromBottomPx = 24))
-    }
-
-    @Test
-    fun realUpwardScrollPausesFollow() {
-        assertTrue(shouldPauseFollow(deltaY = -40f, distanceFromBottomPx = 25))
-        assertTrue(shouldPauseFollow(deltaY = -120f, distanceFromBottomPx = 800))
+    fun anyUpwardScrollHandsControlBack() {
+        // 流式期间向上滚就是接管：哪怕只滚了一点点，也必须立刻停跟随 ——
+        // 否则补滚会把画面拽回底部，用户看到的是滚轮向上时闪烁跳变。
+        assertTrue(shouldPauseFollow(deltaY = -1f))
+        assertTrue(shouldPauseFollow(deltaY = -40f))
+        assertTrue(shouldPauseFollow(deltaY = -120f))
     }
 
     @Test
     fun downwardScrollNeverPausesFollow() {
         // 向下滚不暂停；是否恢复跟随由「是否贴底」决定，不看方向。
-        assertFalse(shouldPauseFollow(deltaY = 40f, distanceFromBottomPx = 500))
-        assertFalse(shouldPauseFollow(deltaY = 0.5f, distanceFromBottomPx = 500))
+        assertFalse(shouldPauseFollow(deltaY = 40f))
+        assertFalse(shouldPauseFollow(deltaY = 0.5f))
+        assertFalse(shouldPauseFollow(deltaY = 0f))
     }
 
     @Test
@@ -50,9 +46,9 @@ class ScrollFollowTest {
             lastVisibleBottomPx = 600,
             viewportBottomPx = 600,
         )
-        assertTrue(gap > ScrollFollow.PAUSE_SLOP_PX, "还有内容在视口外时必须算作离底很远")
+        assertTrue(gap > ScrollFollow.STICK_SLOP_PX, "还有内容在视口外时必须算作离底很远")
         assertFalse(shouldResumeFollow(gap))
-        assertTrue(shouldPauseFollow(deltaY = -40f, distanceFromBottomPx = gap))
+        assertTrue(shouldPauseFollow(deltaY = -1f))
 
         // 最后一项已进视口、底部贴着视口底：才算到末尾。
         assertEquals(

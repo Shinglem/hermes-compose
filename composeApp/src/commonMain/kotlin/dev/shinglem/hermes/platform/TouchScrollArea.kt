@@ -26,11 +26,12 @@ import androidx.compose.ui.Modifier
 @Composable
 fun Modifier.touchDragScroll(
     state: LazyListState,
-    onUserDrag: () -> Unit = {},
+    /** 每次拖动回调一次手指位移（正 = 手指向下 = 内容往回翻）。 */
+    onUserDrag: (delta: Float) -> Unit = {},
 ): Modifier {
     val currentOnDrag = rememberUpdatedState(onUserDrag)
     val draggableState = rememberDraggableState { delta ->
-        currentOnDrag.value()
+        currentOnDrag.value(delta)
         state.dispatchRawDelta(-delta)
     }
     // **不要** startDragImmediately：它会立刻抢占手势，把点击 / 长按 / 文本选择一起吞掉

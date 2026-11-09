@@ -159,6 +159,18 @@ fun ChatPane(
 
     val listState = rememberLazyListState()
     var followTail by remember { mutableStateOf(true) }
+    // 用户「向下滚」之后才允许自动恢复跟随。否则补滚自己造成的「贴底」会被当成
+    // 用户回到底部，于是形成「滚一格 → 被拉回 → 判成回底 → 恢复跟随」的来回闪。
+    var resumeArmed by remember { mutableStateOf(false) }
+    fun userScrolledUp() {
+        followTail = false
+        resumeArmed = false
+    }
+
+    fun userScrolledDown() {
+        resumeArmed = true
+    }
+
     val onCopy = remember { { text: String -> Clipboard.setText(text) } }
     // 向上加载的锚点：点击时记住「首项下标 + 偏移」，插入完成后按新增条数补滚。
     var olderAnchor by remember { mutableStateOf<Pair<Int, Int>?>(null) }
@@ -177,7 +189,10 @@ fun ChatPane(
 
     // 发新消息时重新跟随底部（用户此刻想看自己刚发的内容，而不是被上一次滚动状态挡住）。
     LaunchedEffect(state.sending) {
-        if (state.sending) followTail = true
+        if (state.sending) {
+            followTail = true
+            resumeArmed = false
+        }
     }
 
     // 结构变化（切会话 / 新消息 / 新工具卡片）时定位到末尾一项。
@@ -206,20 +221,20 @@ fun ChatPane(
     val followRequests = remember { Channel<Unit>(Channel.CONFLATED) }
     LaunchedEffect(state.key) {
         snapshotFlow { listState.distanceFromBottomPx() }.collect { distance ->
-            if (streamingNow) {
-                if (followTail && distance > 0) {
-                    followRequests.trySend(Unit)
-                } else if (!followTail && shouldResumeFollow(distance)) {
-                    // 用户自己滚回底部：说明他想继续看新输出。
-                    followTail = true
-                }
-            } else if (!followTail && shouldResumeFollow(distance)) {
+            // 只在「跟随开启 + 有流式输出 + 落后于内容」时补滚。
+            if (streamingNow && followTail && distance > 0) {
+                followRequests.trySend(Unit)
+            } else if (!followTail && resumeArmed && shouldResumeFollow(distance)) {
+                // 用户自己向下滚回了底部（`resumeArmed` 保证这是用户的动作，不是补滚的结果）。
                 followTail = true
+                resumeArmed = false
             }
         }
     }
     LaunchedEffect(state.key) {
         for (unused in followRequests) {
+            // 用户已经在滚（followTail=false）：把排队中的补滚丢掉，别再把他拽回底部。
+            if (!followTail) continue
             val last = totalItemsNow - 1
             if (last >= 0) listState.requestScrollToItem(last, Int.MAX_VALUE)
         }
@@ -243,17 +258,25 @@ fun ChatPane(
                 .weight(1f)
                 .fillMaxWidth()
                 // 触屏拖动（`scrollable` 不认鼠标类型拖动，见 touchDragScroll 说明）。
-                .touchDragScroll(listState, onUserDrag = { followTail = false })
+                // 手指向下拖 = 往回翻（向上滚）→ 接管；向上拖 = 追新 → 允许恢复跟随。
+                .touchDragScroll(
+                    listState,
+                    onUserDrag = { delta ->
+                        if (delta > 0f) userScrolledUp() else userScrolledDown()
+                    },
+                )
                 .onPointerEvent(PointerEventType.Scroll) { event ->
                     val delta = event.changes.firstOrNull()?.scrollDelta ?: Offset.Zero
                     // 只处理**垂直**滚动。Shift+滚轮 / 触摸板双指横划（以及公式块的横向滚动）
                     // 的 delta 全在 x 上、y 为 0；按 `y >= 0` 判定会被当成「向下滚」，
                     // 于是整篇文档跳到最底部 —— 真机反馈的就是这个。
                     if (abs(delta.x) >= abs(delta.y) || delta.y == 0f) return@onPointerEvent
-                    // 向上翻且确实离开了底部才暂停跟随。轻微惯性 / 一格滚轮不算 ——
-                    // 否则流式输出会在用户完全没察觉的情况下停止跟随。
-                    if (shouldPauseFollow(delta.y, listState.distanceFromBottomPx())) {
-                        followTail = false
+                    // 向上滚 = 接管滚动权，立刻停跟随（含触摸板惯性，第一帧就停）。
+                    // 按「离开底部多远」判定会让流式期间的向上滚被补滚反复拉回，画面闪烁跳变。
+                    if (shouldPauseFollow(delta.y)) {
+                        userScrolledUp()
+                    } else {
+                        userScrolledDown()
                     }
                 },
         ) {
@@ -350,6 +373,7 @@ fun ChatPane(
                     .padding(end = 24.dp, bottom = 16.dp),
                 onClick = {
                     followTail = true
+                    resumeArmed = false
                     if (totalItems > 0) listState.requestScrollToItem(totalItems - 1, Int.MAX_VALUE)
                 },
             )

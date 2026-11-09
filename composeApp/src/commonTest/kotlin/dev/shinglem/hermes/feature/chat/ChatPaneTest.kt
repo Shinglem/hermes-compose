@@ -25,6 +25,7 @@ import dev.shinglem.hermes.markdown.MarkdownText
 import dev.shinglem.hermes.ui.theme.HermesTheme
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalTestApi::class)
@@ -347,6 +348,52 @@ class ChatPaneTest {
                 onNodeWithText("末行-END", substring = true).assertIsDisplayed()
             }.isSuccess
         }
+    }
+
+    @Test
+    fun `流式输出时向上滚一次就接管滚动`() = runComposeUiTest {
+        val history = (1..40).map { index ->
+            ChatItem.UserMessage("u$index", null, "历史消息 $index：这条用来把列表撑过一屏")
+        }
+        var state by mutableStateOf(
+            ChatState(
+                load = Loadable.Ready(history),
+                streaming = StreamingState(segments = listOf(StreamSegment.Answer("流式开头"))),
+            ),
+        )
+        setContent(paneOf(state = { state }))
+        waitForIdle()
+
+        // 只滚一格：跟随必须立刻停下。旧实现按「离开底部超过 24px」判定，
+        // 第一次滚动事件时距离还是 0 → 不停 → 补滚把画面拽回底部，滚轮向上时闪烁跳变。
+        onNode(hasScrollAction()).performMouseInput {
+            moveTo(center)
+            scroll(-3f)
+        }
+        waitForIdle()
+
+        // 内容继续增长：列表应当停在用户滚到的位置，末尾不该被带进视口。
+        // 先抓一条滚动后仍在视口里的历史消息当锚点（滚多少像素取决于注入的滚轮粒度，
+        // 写死条号会随布局变），增长后它必须还在原处。
+        val anchor = (40 downTo 1).map { "历史消息 $it" }.first { text ->
+            runCatching { onNodeWithText(text, substring = true).assertIsDisplayed() }.isSuccess
+        }
+        val longAnswer = buildString {
+            repeat(60) { index ->
+                append("第 $index 段：继续输出，用户已经接管滚动。")
+                append("\n\n")
+            }
+            append("末行-END")
+        }
+        state = state.copy(
+            streaming = StreamingState(segments = listOf(StreamSegment.Answer(longAnswer))),
+        )
+        repeat(5) { waitForIdle() }
+        assertTrue(
+            onAllNodesWithText("末行-END", substring = true).fetchSemanticsNodes().isEmpty(),
+            "用户向上滚之后不该再被自动追到底部（末尾内容不该被滚进视口）",
+        )
+        onNodeWithText(anchor, substring = true).assertIsDisplayed()
     }
 
     @Test
