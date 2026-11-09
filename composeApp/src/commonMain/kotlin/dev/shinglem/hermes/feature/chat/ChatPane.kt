@@ -38,6 +38,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -194,9 +195,15 @@ fun ChatPane(
     // 跟随底部：只在「有流式输出」时把新增内容滚进视口；同时负责「用户滚回底部就恢复跟随」。
     // snapshotFlow 监听的是**布局结果**（距底距离），滚完 distance 归零，不会自激。
     // 非流式时不动 —— 否则用户展开一个历史思考块也会把画面顶到底部（那是抢滚动）。
+    //
+    // `state` 每来一段输出就是一个**新的不可变快照**，而 LaunchedEffect 的 block 只捕获
+    // 首次组合时那一个；直接读 `state.streaming` 会永远停在「没有流式输出」，跟随彻底失效
+    // （v0.5.2 的症状：点了「回到最新」也不再跟着输出走）。用 rememberUpdatedState 转成
+    // 随组合更新的 State，block 里读到的一直是最新值。
+    val streamingNow by rememberUpdatedState(state.streaming != null)
     LaunchedEffect(state.key) {
         snapshotFlow { listState.distanceFromBottomPx() }.collect { distance ->
-            if (state.streaming != null) {
+            if (streamingNow) {
                 if (followTail && distance > 0) {
                     listState.scrollBy(distance.toFloat())
                 } else if (!followTail && shouldResumeFollow(distance)) {

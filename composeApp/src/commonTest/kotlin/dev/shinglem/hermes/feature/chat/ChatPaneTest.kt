@@ -1,6 +1,9 @@
 package dev.shinglem.hermes.feature.chat
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -37,6 +40,13 @@ class ChatPaneTest {
         state: ChatState,
         session: SessionSummary? = summary,
         onKillBackgroundTask: (String) -> Unit = {},
+    ): @Composable () -> Unit = paneOf({ state }, session, onKillBackgroundTask)
+
+    /** 同一份界面但状态是**每次组合重新读**的：用来模拟流式输出一段段到达。 */
+    private fun paneOf(
+        state: () -> ChatState,
+        session: SessionSummary? = summary,
+        onKillBackgroundTask: (String) -> Unit = {},
     ): @Composable () -> Unit = {
         val composer = ComposerController(
             state = ComposerUiState(),
@@ -52,7 +62,7 @@ class ChatPaneTest {
         HermesTheme {
             ChatPane(
                 summary = session,
-                state = state,
+                state = state(),
                 composer = composer,
                 onRetry = {},
                 onReload = {},
@@ -248,6 +258,40 @@ class ChatPaneTest {
         val answerTop = onNodeWithText("目录里只有一个文件", substring = true).fetchSemanticsNode().boundsInRoot.top
         assertTrue(reasoningTop < toolTop, "思考应在工具之前")
         assertTrue(toolTop < answerTop, "工具应在正文之前")
+    }
+
+    @Test
+    fun `流式输出继续增长时仍跟随底部`() = runComposeUiTest {
+        val items = listOf(
+            ChatItem.UserMessage("u1", null, "帮我写一篇长文"),
+            ChatItem.AssistantMessage("a1", null, "好的"),
+        )
+        var state by mutableStateOf(ChatState(load = Loadable.Ready(items)))
+        setContent(paneOf(state = { state }))
+        waitForIdle()
+
+        // 新的一轮输出开始：此刻只有一句话，列表贴底。
+        state = state.copy(
+            streaming = StreamingState(segments = listOf(StreamSegment.Answer("开始写"))),
+        )
+        waitForIdle()
+
+        // 继续增长到远超一屏。跟随没断的话，末尾那一段应该仍落在视口里
+        // （v0.5.2 的缺陷：跟随逻辑读到的是首次组合时的 ChatState，streaming 永远为 null）。
+        val longAnswer = buildString {
+            repeat(60) { index ->
+                append("第 $index 段：这一段用来把内容撑到一屏之外，方便验证滚动跟随。")
+                append("\n\n")
+            }
+            append("末行-END")
+        }
+        state = state.copy(
+            streaming = StreamingState(segments = listOf(StreamSegment.Answer(longAnswer))),
+        )
+        waitUntil(timeoutMillis = 5_000) {
+            onAllNodesWithText("末行-END", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        onNodeWithText("末行-END", substring = true).assertIsDisplayed()
     }
 
     @Test
