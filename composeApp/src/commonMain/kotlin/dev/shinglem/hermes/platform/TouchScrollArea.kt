@@ -1,5 +1,6 @@
 package dev.shinglem.hermes.platform
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
@@ -38,6 +39,33 @@ fun Modifier.touchDragScroll(
     // （实测：ChatPaneTest 里 4 个"展开工具卡片"类用例直接失败）。
     // 默认行为要超过 slop 才进入拖动，而鼠标类型的 slop 只有 0.125dp（DragGestureDetector
     // 的 mouseSlop），所以仍然近似跟手。
+    return this.draggable(
+        state = draggableState,
+        orientation = Orientation.Vertical,
+    )
+}
+
+/**
+ * [touchDragScroll] 的 `ScrollState` 版本：给 `Column().verticalScroll(...)` 这类
+ * **非 Lazy** 滚动容器用（例如思考过程块的限高内滚）。
+ *
+ * 同一个坑：`verticalScroll` 的 `scrollable` 也按指针类型拒绝鼠标式拖动，Windows 把触屏
+ * 报成鼠标拖动，所以触摸落在块内滚不动。
+ *
+ * 只在内容确实溢出时挂这个修饰符（见调用方）：`draggable` 没有「到边界就不消费」的语义，
+ * 挂在内容不足一屏的块上会把本该滚外层列表的拖动吞掉。
+ */
+@Composable
+fun Modifier.touchDragScroll(
+    state: ScrollState,
+    /** 每次拖动回调一次手指位移（正 = 手指向下 = 内容往回翻）。 */
+    onUserDrag: (delta: Float) -> Unit = {},
+): Modifier {
+    val currentOnDrag = rememberUpdatedState(onUserDrag)
+    val draggableState = rememberDraggableState { delta ->
+        currentOnDrag.value(delta)
+        state.dispatchRawDelta(-delta)
+    }
     return this.draggable(
         state = draggableState,
         orientation = Orientation.Vertical,

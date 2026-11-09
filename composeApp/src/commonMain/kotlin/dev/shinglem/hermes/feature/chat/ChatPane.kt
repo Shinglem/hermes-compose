@@ -677,7 +677,7 @@ private fun StreamingBlock(state: StreamingState, selectable: Boolean) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         state.segments.forEach { segment ->
             when (segment) {
-                is StreamSegment.Reasoning -> ReasoningBlock(text = segment.text)
+                is StreamSegment.Reasoning -> ReasoningBlock(text = segment.text, streaming = true)
                 is StreamSegment.Answer -> AssistantAnswer(
                     text = segment.text,
                     selectable = selectable,
