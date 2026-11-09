@@ -6,7 +6,9 @@ import dev.shinglem.hermes.core.error.ErrorMapper
 import dev.shinglem.hermes.core.transport.GatewayClient
 import dev.shinglem.hermes.core.transport.RestClient
 import dev.shinglem.hermes.core.transport.RpcJson
+import dev.shinglem.hermes.core.transport.SessionFence
 import dev.shinglem.hermes.core.transport.Timeouts
+import dev.shinglem.hermes.core.transport.mutateSession
 import io.ktor.http.encodeURLParameter
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -115,7 +117,14 @@ class ModelRepository(
             // 守卫确认是 **token 交换**，不是布尔：后端把目标/原模型/revision 都绑进这个 token。
             confirmToken?.takeIf { it.isNotBlank() }?.let { put("confirm", it) }
         }
-        val result = mutate(profile, runtimeSessionId, "model", payload, revision, executionGeneration)
+        val receipt = gateway.mutateSession(
+            sessionId = runtimeSessionId,
+            profile = profile,
+            operation = "model",
+            payload = payload,
+            fence = SessionFence(revision = revision, generation = executionGeneration),
+        )
+        val result = receipt.result as? JsonObject ?: JsonObject(emptyMap())
         return ModelSwitchOutcome(
             value = result.stringOrNull("model") ?: result.stringOrNull("value"),
             warning = result.stringOrNull("warning")?.takeIf { it.isNotBlank() },
@@ -123,8 +132,8 @@ class ModelRepository(
             confirmMessage = result.stringOrNull("confirm_message")?.takeIf { it.isNotBlank() },
             confirmToken = result.stringOrNull("confirm")?.takeIf { it.isNotBlank() },
             deferred = (result["deferred"] as? JsonPrimitive)?.booleanOrNull == true,
-            revision = (result["revision"] as? JsonPrimitive)?.intOrNull,
-            executionGeneration = (result["execution_generation"] as? JsonPrimitive)?.intOrNull,
+            revision = receipt.fence.revision,
+            executionGeneration = receipt.fence.generation,
         )
     }
 
@@ -141,53 +150,23 @@ class ModelRepository(
         revision: Int?,
         executionGeneration: Int?,
     ): ModelSwitchOutcome {
-        val result = mutate(
-            profile, runtimeSessionId, "reasoning",
-            buildJsonObject { put("effort", effort) }, revision, executionGeneration,
+        val receipt = gateway.mutateSession(
+            sessionId = runtimeSessionId,
+            profile = profile,
+            operation = "reasoning",
+            payload = buildJsonObject { put("effort", effort) },
+            fence = SessionFence(revision = revision, generation = executionGeneration),
         )
+        val result = receipt.result as? JsonObject ?: JsonObject(emptyMap())
         return ModelSwitchOutcome(
             value = result.stringOrNull("effort") ?: effort,
             warning = result.stringOrNull("warning")?.takeIf { it.isNotBlank() },
             confirmRequired = false,
             confirmMessage = null,
             deferred = (result["deferred"] as? JsonPrimitive)?.booleanOrNull == true,
-            revision = (result["revision"] as? JsonPrimitive)?.intOrNull,
-            executionGeneration = (result["execution_generation"] as? JsonPrimitive)?.intOrNull,
+            revision = receipt.fence.revision,
+            executionGeneration = receipt.fence.generation,
         )
-    }
-
-    /**
-     * `session.mutate` 的会话级写入（fence 校验失败时的重试在 `ChatRepository`，这里不重复）。
-     *
-     * **必须带 `profile`**：后端 `dispatch` 在闭集校验之前按它路由到 sibling authority
-     * 并从参数里剥离（`gateway/session_controls.py` 的 `_PROFILE_IMPLICIT`）。
-     * 不带的话只能落到连接 actor 的 home profile —— 多 profile 下（例如连 `default`、
-     * 会话在 `ops`）后端查不到该会话，直接回 `4001 not_found`（v0.5.3 实测每次都这样）。
-     */
-    private suspend fun mutate(
-        profile: String?,
-        sessionId: String,
-        operation: String,
-        payload: JsonObject,
-        revision: Int?,
-        executionGeneration: Int?,
-    ): JsonObject {
-        if (revision == null) throw AppError.Protocol("session.mutate 需要 expected_revision")
-        val params = buildJsonObject {
-            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-            put("session_id", sessionId)
-            put("request_id", "hdc-m-${kotlin.time.Clock.System.now().toEpochMilliseconds()}-$operation")
-            put("expected_revision", revision)
-            executionGeneration?.let { put("expected_generation", it) }
-            put("operation", operation)
-            put("payload", payload)
-        }
-        val element = try {
-            gateway.call(RpcMethods.SESSION_MUTATE, params, Timeouts.WRITE_MS)
-        } catch (throwable: Throwable) {
-            throw ErrorMapper.from(throwable, RpcMethods.SESSION_MUTATE)
-        }
-        return element as? JsonObject ?: JsonObject(emptyMap())
     }
 
     private suspend fun configSet(

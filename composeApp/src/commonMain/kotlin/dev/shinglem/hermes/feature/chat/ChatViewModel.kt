@@ -18,6 +18,7 @@ import dev.shinglem.hermes.feature.composer.ComposerSessionContext
 import dev.shinglem.hermes.feature.composer.RuntimeHandle
 import dev.shinglem.hermes.feature.model.ModelCatalog
 import dev.shinglem.hermes.feature.model.ModelRepository
+import dev.shinglem.hermes.feature.model.ModelSwitchOutcome
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
@@ -971,16 +972,10 @@ class ChatViewModel(
         _state.update { it.copy(modelSwitching = true, modelError = null, modelConfirm = null) }
         viewModelScope.launch {
             try {
-                val runtimeId = ensureRuntime(key)
-                val outcome = models.setModel(
-                    profile = key.profile,
-                    runtimeSessionId = runtimeId,
-                    provider = provider,
-                    model = model,
-                    revision = revisions[key],
-                    executionGeneration = generations[key],
-                    confirmToken = confirmToken,
-                )
+                val outcome = switchModelRemote(key, provider, model, confirmToken)
+                // 守卫拒绝是**成功回执**，里面的 revision/generation 也可能是新的：不采纳的话，
+                // 用户点「继续」时带的是旧 fence，直接判 revision_conflict（v0.5.4 实测）。
+                adoptFence(key, outcome.revision, outcome.executionGeneration)
                 if (outcome.confirmRequired) {
                     _state.update {
                         it.copy(
@@ -997,7 +992,6 @@ class ChatViewModel(
                 }
                 // 不在这里回读模型：切换成功后后端会推 `session.info`（deferred 时也可能延后），
                 // 那才是显示的唯一真相源。mutate 回执带着新鲜 fence，写回去让下一次编辑不用试错。
-                adoptFence(key, outcome.revision, outcome.executionGeneration)
                 _state.update { it.copy(modelSwitching = false, model = model, provider = provider) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -1011,6 +1005,52 @@ class ChatViewModel(
                 }
             }
         }
+    }
+
+    /**
+     * 切模型的写入，fence 过期时自愈。
+     *
+     * `expected_revision` 每轮对话都会推进，而本地只在 resume / mutate 回执里更新 ——
+     * 发过一轮消息后再切模型，本地值就是旧的，后端回 `revision_conflict`
+     * （v0.5.4 实测：守卫确认框点「继续」必失败）。`mutateSession` 已用拒绝回执里的新鲜值
+     * 重试过一次；这里再补一次 resume 兜底，覆盖"重试时又推进了"的情况。
+     */
+    private suspend fun switchModelRemote(
+        key: SessionKey,
+        provider: String,
+        model: String,
+        confirmToken: String?,
+    ): ModelSwitchOutcome = retryOnStaleFence(key) {
+        models.setModel(
+            profile = key.profile,
+            runtimeSessionId = ensureRuntime(key),
+            provider = provider,
+            model = model,
+            revision = revisions[key],
+            executionGeneration = generations[key],
+            confirmToken = confirmToken,
+        )
+    }
+
+    private suspend fun retryOnStaleFence(
+        key: SessionKey,
+        action: suspend () -> ModelSwitchOutcome,
+    ): ModelSwitchOutcome = try {
+        action()
+    } catch (refused: AppError.Server) {
+        if (refused.reason !in STALE_FENCE_REASONS) throw refused
+        Log.info("session.mutate refused (${refused.reason}); re-resuming ${key.sessionId} and retrying")
+        refreshFence(key)
+        action()
+    }
+
+    /** 只刷新 fence：不重跑 [ensureRuntime] 的整套副作用（轮询 / 审批补拉 / 用量刷新）。 */
+    private suspend fun refreshFence(key: SessionKey) {
+        val resumed = repository.resumeSession(key.profile, key.sessionId)
+        runtimeIds[key] = resumed.runtimeId
+        resumed.cwd?.let { cwds[key] = it }
+        generations[key] = resumed.executionGeneration
+        revisions[key] = resumed.revision
     }
 
     /** 守卫确认框点了"继续"：把后端下发的 token 原样带回。 */
@@ -1042,14 +1082,15 @@ class ChatViewModel(
         _state.update { it.copy(modelSwitching = true, modelError = null, reasoningEffort = effort) }
         viewModelScope.launch {
             try {
-                val runtimeId = ensureRuntime(key)
-                val outcome = models.setReasoning(
-                    key.profile,
-                    runtimeId,
-                    effort,
-                    revisions[key],
-                    generations[key],
-                )
+                val outcome = retryOnStaleFence(key) {
+                    models.setReasoning(
+                        key.profile,
+                        ensureRuntime(key),
+                        effort,
+                        revisions[key],
+                        generations[key],
+                    )
+                }
                 adoptFence(key, outcome.revision, outcome.executionGeneration)
                 _state.update { it.copy(modelSwitching = false) }
             } catch (cancelled: CancellationException) {
@@ -1935,6 +1976,9 @@ class ChatViewModel(
         /** 会话已被回收的错误码：再轮询只会一直撞同一个错。 */
         val GONE_CODES = setOf(4001, 4044)
         const val LOCAL_ID_PREFIX = "local:"
+
+        /** fence 过期的拒绝原因：重新 resume 拿新鲜值后重试一次（`gateway/session_controls.py`）。 */
+        val STALE_FENCE_REASONS = setOf("revision_conflict", "stale_generation")
 
         /** 后端"会话忙"的错误码（`methods_prompt.py`）。 */
         const val BUSY_CODE = 4009
