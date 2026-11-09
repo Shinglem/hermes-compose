@@ -5,6 +5,37 @@
 
 ---
 
+## [0.5.4] · 2026-11-09（hermes 0.23.0）
+
+> **完整包版本**：tag `v0.5.4-0.23.0`，由 CI `desktop-release` 构建。
+> 纯桌面外壳（不含 payload）；payload 与工具链不变：hermes 0.23.0 / `toolchain-v1`。
+
+### 修复
+
+- **多 profile 下切模型报 `4001 not_found`**（必现，模型完全切不了）：`session.mutate` 没带
+  `profile`。后端在闭集校验**之前**就按它路由到对应 profile 的 authority，不带就只能落到连接
+  home（`default`）；会话若在 `ops` 等 profile 下，后端两边都查不到该会话 → `not_found`。
+  现在带上 `profile`，与 `session.interrupt` / `prompt.submit` / `approval.respond` 一致。
+- **守卫确认（贵模型 / 数据策略 / 大上下文）永远切不过去**：后端要求把
+  `confirmation_required` 回执里的 **token** 原样放回 `payload.confirm`（它绑定了目标、原模型
+  与 revision），旧实现只传布尔，于是每点一次「继续」都被重新拒一次。现在按 token 交换。
+- **长思考过程涨到限高后不再跟随最新**：思考块内滚以前只停在开头，新内容全在视口下方。
+  现在流式时跟随到最新；用户一上翻（滚轮 / 拖滚动条 / 触摸）立刻交还滚动权，滚回底部恢复。
+  历史思考段仍定位在开头，不会抢滚动。
+- **思考块没有滚动条、触摸滚不动**：内容溢出时在右侧显示竖向滚动条；
+  `Column().verticalScroll()` 也接上了触摸拖动（此前 `touchDragScroll` 只装在列表外层）。
+- 模型切换失败的错误横幅按钮写着「重试」但行为是关闭 —— 改为「关闭」；错误归属也从
+  `config.set` 更正为 `session.mutate`（排障时不再指错方法）。
+
+### 升级
+
+1. 下载 `hermes-desktop-compose-0.5.4-0.23.0-windows-x64.7z.001`（+ 后续卷）与 `SHA256SUMS.txt`，
+   核对 SHA-256；
+2. 解压覆盖安装目录；`config/`、`data/`、`hermes/`、`rt/` 不动；
+3. 重启客户端。只换 `bin/App.jar` 也等价（`lib/` 未变）。
+
+---
+
 ## [0.5.3] · 2026-11-09（hermes 0.23.0）
 
 > **完整包版本**：tag `v0.5.3-0.23.0`，由 CI `desktop-release` 构建。
@@ -754,7 +785,7 @@ jlink 裁剪运行时、原生启动器打包、单实例与自启任务清理�
 
 | Release | tag 形式 | 资产 |
 |---|---|---|
-| 桌面端 | `v0.5.3-0.23.0` | `hermes-desktop-compose-0.5.3-0.23.0-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
+| 桌面端 | `v0.5.4-0.23.0` | `hermes-desktop-compose-0.5.4-0.23.0-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
 | 工具链 | `toolchain-v1` | `launcher-windows-x64.zip` / `runtime-windows-x64.zip` / `SHA256SUMS.txt` |
 | payload | 另一个仓库 `Shinglem/hermes-bundle` 的 `v0.23.0` | payload 压缩分卷 |
 
