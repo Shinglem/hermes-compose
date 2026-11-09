@@ -33,8 +33,33 @@ internal object ScrollFollow {
 internal fun LazyListState.distanceFromBottomPx(): Int {
     val info = layoutInfo
     val last = info.visibleItemsInfo.lastOrNull() ?: return 0
-    val viewportBottom = info.viewportEndOffset - info.afterContentPadding
-    return (last.offset + last.size - viewportBottom).coerceAtLeast(0)
+    return contentEndGapPx(
+        lastVisibleIndex = last.index,
+        totalItemsCount = info.totalItemsCount,
+        lastVisibleBottomPx = last.offset + last.size,
+        viewportBottomPx = info.viewportEndOffset - info.afterContentPadding,
+    )
+}
+
+/**
+ * 「离内容末尾还有多远」，纯函数（[LazyListState.distanceFromBottomPx] 的判定本体）。
+ *
+ * 关键一条：**最后一项还没进视口时不能说「贴底」**。只量「最后可见项的底部超出视口多少」
+ * 时，列表停在中间（最后可见项正好贴着视口底、后面还有好几屏内容）也会算出 0，
+ * 跟随逻辑于是认为已经到了末尾、不再补滚 —— 表现为「点了回到最新之后再也不跟随」。
+ * 这种情形按「至少还有一屏」处理（用视口高度当下界），既能让跟随继续补滚，
+ * 也让「上翻离开底部」的暂停判定成立。
+ */
+internal fun contentEndGapPx(
+    lastVisibleIndex: Int,
+    totalItemsCount: Int,
+    lastVisibleBottomPx: Int,
+    viewportBottomPx: Int,
+): Int {
+    if (totalItemsCount <= 0) return 0
+    val gap = lastVisibleBottomPx - viewportBottomPx
+    if (lastVisibleIndex < totalItemsCount - 1) return maxOf(gap, viewportBottomPx)
+    return gap.coerceAtLeast(0)
 }
 
 /** 用户滚动后是否要暂停跟随：只有真的向上翻离底部才暂停。 */

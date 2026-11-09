@@ -32,12 +32,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.getValue
@@ -96,7 +94,7 @@ import dev.shinglem.hermes.resources.model_confirm_title
 import dev.shinglem.hermes.ui.component.EmptyState
 import dev.shinglem.hermes.ui.component.ErrorBanner
 import dev.shinglem.hermes.ui.icon.AppIcons
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
 
 /**
  * 会话模式的右栏：顶栏 + 消息列表 + 审批卡片 + composer。
@@ -161,7 +159,6 @@ fun ChatPane(
 
     val listState = rememberLazyListState()
     var followTail by remember { mutableStateOf(true) }
-    val scope = rememberCoroutineScope()
     val onCopy = remember { { text: String -> Clipboard.setText(text) } }
     // 向上加载的锚点：点击时记住「首项下标 + 偏移」，插入完成后按新增条数补滚。
     var olderAnchor by remember { mutableStateOf<Pair<Int, Int>?>(null) }
@@ -189,23 +186,29 @@ fun ChatPane(
     // offset 用 Int.MAX_VALUE：让**最后一项的底部**贴视口底边。默认 offset=0 会把这一项
     // 的顶部对齐视口顶部 —— 长回答时表现为「一直停在回答开头、看不到最新输出」。
     LaunchedEffect(state.key, totalItems) {
-        if (followTail && totalItems > 0) listState.scrollToItem(totalItems - 1, Int.MAX_VALUE)
+        if (followTail && totalItems > 0) listState.requestScrollToItem(totalItems - 1, Int.MAX_VALUE)
     }
 
     // 跟随底部：只在「有流式输出」时把新增内容滚进视口；同时负责「用户滚回底部就恢复跟随」。
     // snapshotFlow 监听的是**布局结果**（距底距离），滚完 distance 归零，不会自激。
     // 非流式时不动 —— 否则用户展开一个历史思考块也会把画面顶到底部（那是抢滚动）。
     //
-    // `state` 每来一段输出就是一个**新的不可变快照**，而 LaunchedEffect 的 block 只捕获
-    // 首次组合时那一个；直接读 `state.streaming` 会永远停在「没有流式输出」，跟随彻底失效
-    // （v0.5.2 的症状：点了「回到最新」也不再跟着输出走）。用 rememberUpdatedState 转成
-    // 随组合更新的 State，block 里读到的一直是最新值。
+    // 两个都不能踩的坑：
+    // 1. `state` 每来一段输出就是一个**新的不可变快照**，而 LaunchedEffect 的 block 只捕获
+    //    首次组合时那一个；直接读 `state.streaming` 会永远停在「没有流式输出」。
+    //    所以走 rememberUpdatedState。
+    // 2. collect 里**不能直接 await 滚动**：`scrollBy` / `scrollToItem` 都要排 `MutatorMutex`，
+    //    撞上手势或正在进行的 `scrollToItem` 时会一直挂起，collect 卡死 → 后续 emission 被
+    //    snapshotFlow conflate 掉 → 表现为「点了回到最新之后再也不跟随」。
+    //    这里只往 conflate 通道里丢一个请求，真正的滚动由下面的独立循环顺序执行。
     val streamingNow by rememberUpdatedState(state.streaming != null)
+    val totalItemsNow by rememberUpdatedState(totalItems)
+    val followRequests = remember { Channel<Unit>(Channel.CONFLATED) }
     LaunchedEffect(state.key) {
         snapshotFlow { listState.distanceFromBottomPx() }.collect { distance ->
             if (streamingNow) {
                 if (followTail && distance > 0) {
-                    listState.scrollBy(distance.toFloat())
+                    followRequests.trySend(Unit)
                 } else if (!followTail && shouldResumeFollow(distance)) {
                     // 用户自己滚回底部：说明他想继续看新输出。
                     followTail = true
@@ -213,6 +216,12 @@ fun ChatPane(
             } else if (!followTail && shouldResumeFollow(distance)) {
                 followTail = true
             }
+        }
+    }
+    LaunchedEffect(state.key) {
+        for (unused in followRequests) {
+            val last = totalItemsNow - 1
+            if (last >= 0) listState.requestScrollToItem(last, Int.MAX_VALUE)
         }
     }
 
@@ -341,9 +350,7 @@ fun ChatPane(
                     .padding(end = 24.dp, bottom = 16.dp),
                 onClick = {
                     followTail = true
-                    scope.launch {
-                        if (totalItems > 0) listState.scrollToItem(totalItems - 1, Int.MAX_VALUE)
-                    }
+                    if (totalItems > 0) listState.requestScrollToItem(totalItems - 1, Int.MAX_VALUE)
                 },
             )
         }

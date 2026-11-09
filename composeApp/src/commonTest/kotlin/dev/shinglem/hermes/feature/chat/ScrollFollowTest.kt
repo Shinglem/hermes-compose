@@ -1,6 +1,7 @@
 package dev.shinglem.hermes.feature.chat
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -38,6 +39,50 @@ class ScrollFollowTest {
         // 布局取整留一点余量也算贴底，但不该放宽到明显离开底部。
         assertFalse(shouldResumeFollow(distanceFromBottomPx = 9))
         assertFalse(shouldResumeFollow(distanceFromBottomPx = 400))
+    }
+
+    @Test
+    fun offscreenItemsAreNeverTreatedAsBottom() {
+        // 列表停在中途：最后可见项刚好贴着视口底，但后面还有项 —— 不能算贴底。
+        val gap = contentEndGapPx(
+            lastVisibleIndex = 10,
+            totalItemsCount = 42,
+            lastVisibleBottomPx = 600,
+            viewportBottomPx = 600,
+        )
+        assertTrue(gap > ScrollFollow.PAUSE_SLOP_PX, "还有内容在视口外时必须算作离底很远")
+        assertFalse(shouldResumeFollow(gap))
+        assertTrue(shouldPauseFollow(deltaY = -40f, distanceFromBottomPx = gap))
+
+        // 最后一项已进视口、底部贴着视口底：才算到末尾。
+        assertEquals(
+            0,
+            contentEndGapPx(
+                lastVisibleIndex = 41,
+                totalItemsCount = 42,
+                lastVisibleBottomPx = 600,
+                viewportBottomPx = 600,
+            ),
+        )
+        // 最后一项超出视口的部分就是真实距离。
+        assertEquals(
+            30,
+            contentEndGapPx(
+                lastVisibleIndex = 41,
+                totalItemsCount = 42,
+                lastVisibleBottomPx = 630,
+                viewportBottomPx = 600,
+            ),
+        )
+        assertEquals(
+            0,
+            contentEndGapPx(
+                lastVisibleIndex = 0,
+                totalItemsCount = 0,
+                lastVisibleBottomPx = 0,
+                viewportBottomPx = 600,
+            ),
+        )
     }
 
     @Test

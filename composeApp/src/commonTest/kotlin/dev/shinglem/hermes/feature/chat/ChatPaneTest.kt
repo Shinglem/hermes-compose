@@ -7,10 +7,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.v2.runComposeUiTest
 import dev.shinglem.hermes.core.error.AppError
@@ -292,6 +294,59 @@ class ChatPaneTest {
             onAllNodesWithText("末行-END", substring = true).fetchSemanticsNodes().isNotEmpty()
         }
         onNodeWithText("末行-END", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun `上翻后再滚回底部会继续跟随输出`() = runComposeUiTest {
+        val history = (1..40).map { index ->
+            ChatItem.UserMessage("u$index", null, "历史消息 $index：这条用来把列表撑过一屏")
+        }
+        var state by mutableStateOf(
+            ChatState(
+                load = Loadable.Ready(history),
+                streaming = StreamingState(segments = listOf(StreamSegment.Answer("流式开头"))),
+            ),
+        )
+        setContent(paneOf(state = { state }))
+        waitForIdle()
+
+        fun wheel(times: Int, delta: Float) {
+            repeat(times) {
+                onNode(hasScrollAction()).performMouseInput {
+                    moveTo(center)
+                    scroll(delta)
+                }
+                waitForIdle()
+            }
+        }
+
+        // 向上翻走：跟随暂停（否则下面的增长会立刻把列表拉回底部）。
+        wheel(times = 6, delta = -3f)
+        // 再滚回底部：跟随恢复 —— 与「点回到最新」是同一个状态。
+        wheel(times = 12, delta = 3f)
+
+        // 继续输出到远超一屏：末尾必须被带进视口。
+        // 旧实现把补滚 await 在 collect 里，滚动互斥量被手势/scrollToItem 占住时
+        // collect 会卡死，后续内容再也不跟随。
+        val longAnswer = buildString {
+            repeat(60) { index ->
+                append("第 $index 段：继续输出，用来验证滚回底部之后还在跟随。")
+                append("\n\n")
+            }
+            append("末行-END")
+        }
+        state = state.copy(
+            streaming = StreamingState(segments = listOf(StreamSegment.Answer(longAnswer))),
+        )
+        waitUntil(timeoutMillis = 5_000) {
+            onAllNodesWithText("末行-END", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        // 补滚是逐帧落到位的（每次测量都把新增高度滚掉），要等它稳定下来再断言。
+        waitUntil(timeoutMillis = 5_000) {
+            runCatching {
+                onNodeWithText("末行-END", substring = true).assertIsDisplayed()
+            }.isSuccess
+        }
     }
 
     @Test
