@@ -5,6 +5,59 @@
 
 ---
 
+## [0.5.6] · 2026-11-10（hermes 0.23.0）
+
+> **完整包版本**：tag `v0.5.6-0.23.0`，由 CI `desktop-release` 构建。
+> 纯桌面外壳（不含 payload）；payload 与工具链不变：hermes 0.23.0 / `toolchain-v1`。
+
+### 修复
+
+- **残留 gateway 占着 host，新后端起不来（`exit 75`）**（#13）：上一轮 daemon 优雅关闭超时被取消，
+  进程停在半死状态仍绑着端口，于是新 `ensure` 判定「host 被占」并拒绝启动，界面所有数据都拿不到。
+  现在识别这组特征（`runtime_exited` + 「already owns this host」且 control socket 未应答）后
+  **自动跑一次 `gateway run --replace` 接管**，成功则继续 attach；只有接管也失败才提示用户。
+  判据刻意只认这一组，`deadline` / `authorization` 等不被误判成"半死"。
+
+- **后端换端口后客户端不回连，界面「发消息没反应」**（#14）：daemon 的端口由系统分配，被外部重启必然变化，
+  而客户端只重试缓存的旧 URL。现在：
+  - 连续 3 次连不上就**重新解析**后端地址（`backend.revalidate()`），跟上新的 `api_origin`；
+  - 静默超过 90s 时给出「后端仍在执行（已等待 N）」与**「重连」**按钮；
+  - 后端跑完却返回 0 字符（上游断流被吞）时，在对话里留一条「本轮没有返回任何内容」；
+  - 「重连后必须重建会话订阅」的判据抽成纯函数并补了单测（`Connecting → Connected` 必 resume）。
+
+- **进历史会话时模型 pill 显示「选择模型」**（#16）：模型原先只存在 `ChatState` 的单值字段里，
+  而 `ChatState` 会被整块替换（置 Loading / `publish()` 重建），必然丢。现在按会话 key 存一份
+  （`sessionModels`）＋ profile 默认一份（`profileModels`），`publish()` / 置 Loading / 新建会话
+  都从 map 取；`session.resume` / `session.info` / `mutate` 回执统一写入。pill 文案改成「模型未知」，
+  明确表示"还没读到"而不是"没有可用"。
+
+- **点刷新后思考过程消失**（#17）：后端**每步一条 assistant 行、各自带 `reasoning`**（实测 60 行确认），
+  分段结构完整保留，客户端只是三层都没接。现在补上 `TranscriptRowDto.reasoning/reasoning_content`、
+  `ChatRow.reasoning`，`projectChat` 按**思考 → 正文 → 工具**的顺序产出，
+  与流式观感一一对应。同时删掉 `ChatMessage.kt` 里那句「后端不落库 reasoning」的错误注释。
+
+- **「卡住、排队不执行」= 长工具执行期间界面全静默**（#18）：后端一个 terminal 调用可能跑几分钟
+  （顺序工具有 420s 硬上限），期间只有 `tool.complete` 才推事件。现在：
+  - 工具卡片显示**执行中耗时**（每秒跳动），超过 60s 再补一行「后端单次工具调用上限 420 秒」；
+  - 看门狗对账结果从"只写日志"改为**上界面**，并在事件恢复时自动撤掉；
+  - 排队区补上因果：「上一轮已运行 N，本轮结束后自动执行」。
+
+### 新增
+
+- **桌面 → 后端（后端管理页）**（#15）：状态（含 `reason_code` / 端口 / instance / supervisor）、
+  **启动 / 停止 / 重启 / 重新解析地址 / 重连**、后端输出尾（最近 40 行）、「复制诊断信息」。
+  停止只作用于本客户端的数据目录（`gateway stop -y`，绝不 `--all`），**全程不需要管理员权限**。
+  状态栏在连接状态旁显示当前端口，chip 仍是心跳（保持宽度）。
+
+### 升级
+
+1. 下载 `hermes-desktop-compose-0.5.6-0.23.0-windows-x64.7z.001`（+ 后续卷）与 `SHA256SUMS.txt`，
+   核对 SHA-256；
+2. 解压覆盖安装目录；`config/`、`data/`、`hermes/`、`rt/` 不动；
+3. 重启客户端。只换 `bin/App.jar` 也等价（`lib/` 未变）。
+
+---
+
 ## [0.5.5] · 2026-11-09（hermes 0.23.0）
 
 > **完整包版本**：tag `v0.5.5-0.23.0`，由 CI `desktop-release` 构建。
