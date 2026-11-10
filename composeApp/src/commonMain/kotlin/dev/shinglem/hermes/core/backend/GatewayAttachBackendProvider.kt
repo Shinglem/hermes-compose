@@ -75,7 +75,20 @@ class GatewayAttachBackendProvider(
 
     override suspend fun start() {
         if (state.value is BackendBootState.Ready) return
+        ensureAndAttach()
+    }
 
+    /**
+     * 强制重跑一次 `gateway ensure`。
+     *
+     * daemon 的端口由 OS 分配，被外部重启后必然变化；不重新解析就会一直连旧端口，
+     * 症状是"连接看起来正常但没有任何事件"（#14）。
+     */
+    override suspend fun revalidate() {
+        ensureAndAttach()
+    }
+
+    private suspend fun ensureAndAttach() {
         if (!LocalBackendPlanner.isSealedPayload(payloadDir, fs::exists)) {
             fail(
                 "未找到内嵌 Hermes payload",
@@ -112,6 +125,45 @@ class GatewayAttachBackendProvider(
         effectiveToken = resolveToken()
 
         step("连接后端（gateway ensure）")
+        var parsed = runEnsure() ?: return
+        if (parsed is EnsureVerdict.Unavailable && GatewayEnsure.isStaleHostOccupancy(parsed)) {
+            // 上一轮 gateway 半死（优雅关闭超时被取消）却还占着 host：新 ensure 会以 75 拒绝。
+            // 上游给的接管路径就是 `gateway run --replace`，清完场再 ensure 一次（#13）。
+            step("接管被占用的后端（host 上有个未发布 served set 的 gateway）")
+            takeoverStaleHost()
+            parsed = runEnsure() ?: return
+        }
+
+        when (parsed) {
+            is EnsureVerdict.Ready -> {
+                attached = parsed.endpoint
+                onAttached(parsed.endpoint)
+                val baseUrl = parsed.endpoint.apiOrigin
+                logger.log(
+                    LogLevel.INFO,
+                    "gateway attached: ${parsed.endpoint.apiOrigin} " +
+                        "(instance=${parsed.endpoint.instanceId}, supervisor=${parsed.endpoint.supervisor})",
+                )
+                _state.value = BackendBootState.Ready(
+                    target = GatewayTarget(baseUrl = baseUrl, token = effectiveToken),
+                    instanceId = parsed.endpoint.instanceId.takeIf { it.isNotBlank() },
+                    supervisor = parsed.endpoint.supervisor.takeIf { it.isNotBlank() },
+                    profileId = parsed.endpoint.profileId.takeIf { it.isNotBlank() },
+                )
+            }
+
+            is EnsureVerdict.Unavailable -> fail(
+                diagnose(parsed.state, parsed.reasonCode),
+                listOfNotNull(parsed.reasonCode?.let { "reason=$it" }, parsed.detail).joinToString(" — ")
+                    .ifBlank { null },
+            )
+
+            is EnsureVerdict.Unparseable -> fail("后端握手失败", parsed.detail)
+        }
+    }
+
+    /** 跑一次 `gateway ensure` 并解析；进程都起不来时返回 null（已 [fail]）。 */
+    private suspend fun runEnsure(): EnsureVerdict? {
         val spec = GatewayAttachPlanner.ensureSpec(
             payloadDir = payloadDir,
             homeDir = homeDir,
@@ -126,37 +178,45 @@ class GatewayAttachBackendProvider(
             withContext(Dispatchers.Default) { runner.run(spec) }
         } catch (failure: Throwable) {
             fail("无法执行 gateway ensure", failure.message ?: failure::class.java.name)
-            return
+            return null
         }
         appendLogs(result.stderr)
         result.stderr.lineSequence()
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .forEach { Log.gateway(it) }
+        return GatewayEnsure.parse(result.stdout, result.exitCode)
+    }
 
-        when (val parsed = GatewayEnsure.parse(result.stdout, result.exitCode)) {
-            is EnsureVerdict.Ready -> {
-                attached = parsed.endpoint
-                onAttached(parsed.endpoint)
-                val baseUrl = parsed.endpoint.apiOrigin
-                logger.log(
-                    LogLevel.INFO,
-                    "gateway attached: ${parsed.endpoint.apiOrigin} " +
-                        "(instance=${parsed.endpoint.instanceId}, supervisor=${parsed.endpoint.supervisor})",
-                )
-                _state.value = BackendBootState.Ready(
-                    target = GatewayTarget(baseUrl = baseUrl, token = effectiveToken),
-                )
+    /**
+     * 用 `gateway run --replace` 把半死的 owner 顶掉。
+     *
+     * 命令本身是常驻的，靠 [GatewayAttachPlanner.TAKEOVER_TIMEOUT_MS] 收掉 —— **超时是预期的**，
+     * 我们只要它完成"替换"这一步；随后 [runEnsure] 会拉起一个干净的 daemon。
+     * 因此这里既不抛也不 fail，只记日志（成功的判据是接下来那次 ensure）。
+     */
+    private suspend fun takeoverStaleHost() {
+        val spec = GatewayAttachPlanner.takeoverSpec(
+            payloadDir = payloadDir,
+            homeDir = homeDir,
+            token = effectiveToken,
+            local = local,
+            osEnv = osEnv,
+            browserHeaded = browserHeaded,
+            browserArgs = browserArgs,
+            elevated = elevated,
+        )
+        val result = runCatching { withContext(Dispatchers.Default) { runner.run(spec) } }
+            .getOrElse { failure ->
+                logger.log(LogLevel.WARN, "gateway takeover 执行失败：${failure.message}")
+                return
             }
-
-            is EnsureVerdict.Unavailable -> fail(
-                diagnose(parsed.state, parsed.reasonCode),
-                listOfNotNull(parsed.reasonCode?.let { "reason=$it" }, parsed.detail).joinToString(" — ")
-                    .ifBlank { null },
-            )
-
-            is EnsureVerdict.Unparseable -> fail("后端握手失败", parsed.detail)
-        }
+        appendLogs(result.stderr)
+        logger.log(
+            LogLevel.INFO,
+            "gateway takeover 完成（exit=${result.exitCode}，超时属预期）：" +
+                (result.stderrTail() ?: "（无输出）"),
+        )
     }
 
     override suspend fun stop() {

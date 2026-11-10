@@ -96,6 +96,24 @@ class ChatViewModel(
     /** (profile, storedId) → 最近一次收到该会话事件的时间（看门狗据此判断静默）。 */
     private val lastEventAt = mutableMapOf<SessionKey, Long>()
 
+    /**
+     * (profile, storedId) → 该会话的模型。
+     *
+     * 单独按 key 存而不是只放在 `ChatState` 里，是因为 `ChatState` 会被整块替换
+     * （`open()` 置 Loading、`publish()` 重建），单值字段必然丢；按 key 存才能
+     * 切走再切回仍然显示上次读到的模型。
+     */
+    private val sessionModels = mutableMapOf<SessionKey, SessionModel>()
+
+    /** profile → 该 profile 的默认模型（`GET /api/model/info`），作为会话级真值之前的兜底。 */
+    private val profileModels = mutableMapOf<String?, SessionModel>()
+
+    private data class SessionModel(
+        val model: String,
+        val provider: String?,
+        val reasoningEffort: String?,
+    )
+
     /** (profile, storedId) → 会话工作目录，供 composer 的 `@` 补全使用。 */
     private val cwds = mutableMapOf<SessionKey, String?>()
 
@@ -149,23 +167,26 @@ class ChatViewModel(
         viewModelScope.launch {
             var wasConnected = false
             gateway.connection.collect { connection ->
-                when (connection) {
-                    is ConnectionState.Connected -> {
-                        if (wasConnected) return@collect
+                when (reconnectDecision(wasConnected, connection)) {
+                    ReconnectDecision.Ignore -> return@collect
+                    ReconnectDecision.Reset -> wasConnected = false
+                    ReconnectDecision.ReResume -> {
                         wasConnected = true
                         runtimeIds.clear()
                         generations.clear()
                         revisions.clear()
                         lastEventAt.clear()
-                        val key = _state.value.key ?: return@collect
+                        val key = _state.value.key
+                        if (key == null) {
+                            // 还没选会话：连接是新的，但仍要留下明确的 marker，
+                            // 否则排查时无法区分"没恢复"和"没有会话可恢复"。
+                            Log.info("gateway reconnected; no active session to re-resume")
+                            return@collect
+                        }
                         Log.info("gateway reconnected; re-resuming ${key.sessionId}")
                         runCatching { ensureRuntime(key) }
                             .onFailure { Log.warn("re-resume after reconnect failed: ${it.message}") }
                     }
-                    ConnectionState.Idle, ConnectionState.Closed -> wasConnected = false
-                    // 断线（Reconnecting / Disconnected）也要复位：否则"Connected → Reconnecting →
-                    // Connected"会被当成同一次连接，重连后依然用旧的 runtime id。
-                    else -> wasConnected = false
                 }
             }
         }
@@ -232,7 +253,8 @@ class ChatViewModel(
         // 这里给的是 profile 默认值。
         viewModelScope.launch { seedModelInfo(profile) }
         loadJob = viewModelScope.launch {
-            _state.value = ChatState(key = key, load = Loadable.Loading)
+            // 置 Loading 时也带上模型：否则 seed / 之前读到的值会被这次整块替换冲掉（#16）。
+            _state.value = ChatState(key = key, load = Loadable.Loading).withModelOf(key)
             try {
                 val page = repository.loadTranscript(profile, sessionId)
                 val loaded = LoadedTranscript(page.rows, page.hasMore)
@@ -303,7 +325,7 @@ class ChatViewModel(
             key = key,
             load = Loadable.Ready(emptyList()),
             modelCatalog = _state.value.modelCatalog,
-        )
+        ).withModelOf(key)
         viewModelScope.launch { seedModelInfo(profile) }
     }
 
@@ -311,20 +333,73 @@ class ChatViewModel(
      * 用 profile 默认模型填 pill 的初始值。
      *
      * 只在当前还没有模型时生效：`session.info` / `session.resume` 拿到的是**会话级**真值，
-     * 那两条路径优先。接口失败就静默——pill 会停在"选择模型"，点开菜单仍可用。
+     * 那两条路径优先。接口失败就静默——pill 会停在"模型未知"（未读到，不是没有可用），点开菜单仍可用。
      */
     private suspend fun seedModelInfo(profile: String?) {
-        if (_state.value.model != null) return
+        // 已经读到该 profile 的默认值就不再请求；界面可能被整块替换过，补写一次即可。
+        if (profileModels[profile] != null) {
+            applyProfileModelIfMissing(profile)
+            return
+        }
         try {
             val info = models.current(profile) ?: return
-            _state.update { current ->
-                if (current.model != null) current
-                else current.copy(model = info.model, provider = info.provider)
-            }
+            rememberProfileModel(profile, SessionModel(info.model, info.provider, reasoningEffort = null))
+            applyProfileModelIfMissing(profile)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (throwable: Throwable) {
             Log.debug("model.info failed: ${throwable.message}")
+        }
+    }
+
+    private fun rememberProfileModel(profile: String?, model: SessionModel) {
+        profileModels[profile] = model
+    }
+
+    /**
+     * 记录某会话的模型真值（会话级）。
+     *
+     * 所有来源（`session.resume` / `session.info` 事件 / `session.mutate` 回执）都写这里，
+     * `publish()` 与 `open()` 再从 map 取 —— 这样"状态被整块替换"和"协程赛跑"都不会把模型弄丢。
+     * 传 null 的字段保留旧值（回执往往只带改动的那个）。
+     */
+    private fun rememberSessionModel(
+        key: SessionKey,
+        model: String?,
+        provider: String?,
+        reasoningEffort: String?,
+    ) {
+        val previous = sessionModels[key]
+        val resolvedModel = model?.takeIf { it.isNotBlank() } ?: previous?.model ?: return
+        sessionModels[key] = SessionModel(
+            model = resolvedModel,
+            provider = provider?.takeIf { it.isNotBlank() } ?: previous?.provider,
+            reasoningEffort = reasoningEffort?.takeIf { it.isNotBlank() } ?: previous?.reasoningEffort,
+        )
+    }
+
+    /** 某个会话该显示的模型：会话级真值 → profile 默认 → null（真的还没读到）。 */
+    private fun modelFor(key: SessionKey): SessionModel? =
+        sessionModels[key] ?: profileModels[key.profile]
+
+    /** 给一份新建的状态补上该会话已知的模型（不覆盖已带值的那份）。 */
+    private fun ChatState.withModelOf(key: SessionKey): ChatState {
+        if (model != null) return this
+        val known = modelFor(key) ?: return this
+        return copy(model = known.model, provider = known.provider, reasoningEffort = known.reasoningEffort)
+    }
+
+    private fun applyProfileModelIfMissing(profile: String?) {
+        val key = _state.value.key ?: return
+        if (key.profile != profile) return
+        if (sessionModels[key] != null) return
+        val seeded = profileModels[profile] ?: return
+        _state.update { current ->
+            if (current.key != key || current.model != null) {
+                current
+            } else {
+                current.copy(model = seeded.model, provider = seeded.provider)
+            }
         }
     }
 
@@ -992,6 +1067,7 @@ class ChatViewModel(
                 }
                 // 不在这里回读模型：切换成功后后端会推 `session.info`（deferred 时也可能延后），
                 // 那才是显示的唯一真相源。mutate 回执带着新鲜 fence，写回去让下一次编辑不用试错。
+                rememberSessionModel(key, model, provider, reasoningEffort = null)
                 _state.update { it.copy(modelSwitching = false, model = model, provider = provider) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -1079,6 +1155,7 @@ class ChatViewModel(
             return
         }
 
+        rememberSessionModel(key, model = null, provider = null, reasoningEffort = effort)
         _state.update { it.copy(modelSwitching = true, modelError = null, reasoningEffort = effort) }
         viewModelScope.launch {
             try {
@@ -1207,7 +1284,14 @@ class ChatViewModel(
      * best-effort：失败只记日志，发消息时还会再试一次。
      */
     private fun resumeInBackground(key: SessionKey) {
-        if (runtimeIds[key] != null) return
+        if (runtimeIds[key] != null) {
+            // runtime 可复用，但模型可能还没读到（#16）：补一次 profile 默认。
+            // 这里不 force resume —— 那会重新注册 live session，代价远大于收益。
+            if (sessionModels[key] == null) {
+                viewModelScope.launch { seedModelInfo(key.profile) }
+            }
+            return
+        }
         viewModelScope.launch {
             try {
                 ensureRuntime(key)
@@ -1229,16 +1313,12 @@ class ChatViewModel(
         // 两者都随每一轮推进，所以每次 resume 都刷新一遍。
         generations[key] = resumed.executionGeneration
         revisions[key] = resumed.revision
-        // resume 的 info 就带着当前模型/推理强度：拿到就写进 UI，不用等下一次 session.info。
-        // 期间切走了就别写 —— 那是另一个会话的 pill。
+        // resume 的 info 就带着当前模型/推理强度：先记进按 key 的 map（状态被整块替换也不丢），
+        // 再刷新界面。期间切走了就别写 —— 那是另一个会话的 pill。
+        rememberSessionModel(key, resumed.model, resumed.provider, resumed.reasoningEffort)
         _state.update { current ->
             if (current.key != key) return@update current
-            current.copy(
-                cwd = resumed.cwd ?: current.cwd,
-                model = resumed.model ?: current.model,
-                provider = resumed.provider ?: current.provider,
-                reasoningEffort = resumed.reasoningEffort ?: current.reasoningEffort,
-            )
+            current.copy(cwd = resumed.cwd ?: current.cwd).withModelOf(key)
         }
         Log.info("chat.resume stored=${key.sessionId} runtime=${resumed.runtimeId} running=${resumed.running} prompts=${resumed.prompts.size}")
         // 快照里挂着的 clarify 要补成卡片：它只能靠 `clarify.respond` 解开，
@@ -1464,7 +1544,20 @@ class ChatViewModel(
         // 看门狗按"最近一次该会话的事件"判断是否静默。
         event.sessionId
             ?.let { sid -> runtimeIds.entries.firstOrNull { it.value == sid }?.key }
-            ?.let { owner -> lastEventAt[owner] = Clock.System.now().toEpochMilliseconds() }
+            ?.let { owner ->
+                lastEventAt[owner] = Clock.System.now().toEpochMilliseconds()
+                // 事件恢复了就撤掉看门狗留下的"后端仍在执行"提示（#18），
+                // 否则它会把已经重新流动的一轮继续描述成"静默中"。
+                if (owner == _state.value.key) {
+                    _state.update { current ->
+                        if (current.streaming?.stalledSeconds == null) {
+                            current
+                        } else {
+                            current.copy(streaming = current.streaming?.copy(stalledSeconds = null))
+                        }
+                    }
+                }
+            }
         val key = _state.value.key ?: return
         // 别的会话 / 别的 profile：只标记"有新内容"，切回时补拉；绝不写当前 UI。
         val otherKey = event.sessionId
@@ -1555,14 +1648,21 @@ class ChatViewModel(
                 it.copy(sendError = AppError.Server(0, parsed.message))
             }
 
-            is ChatStreamEvent.SessionInfoChanged -> _state.update { current ->
-                current.copy(
-                    model = parsed.model?.takeIf { it.isNotBlank() } ?: current.model,
-                    provider = parsed.provider?.takeIf { it.isNotBlank() } ?: current.provider,
-                    reasoningEffort = parsed.reasoningEffort?.takeIf { it.isNotBlank() }
-                        ?: current.reasoningEffort,
-                    modelSwitching = false,
-                )
+            is ChatStreamEvent.SessionInfoChanged -> {
+                // 后端推的 session.info 是会话级真值（模型 fallback 后也会走这里）：
+                // 先记进 map，再刷新界面。
+                _state.value.key?.let {
+                    rememberSessionModel(it, parsed.model, parsed.provider, parsed.reasoningEffort)
+                }
+                _state.update { current ->
+                    current.copy(
+                        model = parsed.model?.takeIf { it.isNotBlank() } ?: current.model,
+                        provider = parsed.provider?.takeIf { it.isNotBlank() } ?: current.provider,
+                        reasoningEffort = parsed.reasoningEffort?.takeIf { it.isNotBlank() }
+                            ?: current.reasoningEffort,
+                        modelSwitching = false,
+                    )
+                }
             }
 
             is ChatStreamEvent.TitleChanged,
@@ -1622,6 +1722,7 @@ class ChatViewModel(
             result = null,
             failed = false,
             pairedWithCall = true,
+            running = true,
         )
         _state.update { current ->
             val streaming = current.streaming ?: StreamingState(startedAt = Clock.System.now())
@@ -1647,6 +1748,15 @@ class ChatViewModel(
         val streaming = _state.value.streaming
         val timestamp = Clock.System.now()
         val segments = streaming?.segments.orEmpty().withFinalText(completed.text)
+        // 后端跑完却什么都没给（实测 `response=0 chars`：上游断流后被吞掉）：
+        // 不提示的话界面上就是"发了消息、什么都没发生"（#14）。
+        val hasVisible = segments.any { segment ->
+            when (segment) {
+                is StreamSegment.Answer -> segment.text.isNotBlank()
+                is StreamSegment.Reasoning -> segment.text.isNotBlank()
+                is StreamSegment.Tool -> true
+            }
+        }
         val additions = buildList {
             addAll(segments.toChatItems(timestamp) { kind -> nextLocalId(kind) })
             // 失败的一轮要在对话里留痕：只放顶部横幅的话，滚动回来看历史会以为"什么都没发生"。
@@ -1655,6 +1765,14 @@ class ChatViewModel(
                     ?: completed.status?.takeIf { it.isNotBlank() }
                     ?: "这一轮没有正常结束"
                 add(ChatItem.Notice(nextLocalId("notice"), timestamp, "本轮失败：$reason"))
+            } else if (!hasVisible) {
+                add(
+                    ChatItem.Notice(
+                        nextLocalId("notice"),
+                        timestamp,
+                        "本轮没有返回任何内容（上游可能中断），可以重试。",
+                    ),
+                )
             }
         }
         _state.update { current ->
@@ -1804,6 +1922,18 @@ class ChatViewModel(
      * 再发事件，界面就会永远转圈。这里在**长时间静默**时主动对账一次：
      * `running=false` 才收尾（`running=true` 说明真的在跑，长工具调用不该被打断）。
      */
+    /**
+     * 手动重连传输层。
+     *
+     * 重连成功后 `Connected` 会触发 init 里的 re-resume（见 [reconnectDecision]），
+     * 会话订阅与审批通道都会重建，所以这里只要重启 socket。
+     */
+    fun reconnect() {
+        Log.info("manual reconnect requested")
+        gateway.stop()
+        gateway.start()
+    }
+
     private fun startTurnWatchdog(key: SessionKey, runtimeId: String) {
         viewModelScope.launch {
             delay(TURN_SILENCE_TIMEOUT_MS)
@@ -1817,6 +1947,14 @@ class ChatViewModel(
             adoptSnapshotPrompts(key, resumed)
             if (resumed.running) {
                 Log.info("turn watchdog: 后端仍在跑，保持等待")
+                // 让用户看到"后端确实还在跑"而不是一片静默（长工具调用期间没有事件）。
+                _state.update { current ->
+                    if (current.key != key) {
+                        current
+                    } else {
+                        current.copy(streaming = current.streaming?.copy(stalledSeconds = silentFor / 1000))
+                    }
+                }
                 return@launch
             }
             Log.info("turn watchdog: 后端已空闲，收尾并重读历史")
@@ -1913,10 +2051,11 @@ class ChatViewModel(
             olderInserted = inserted,
             olderGeneration = if (inserted > 0) previous.olderGeneration + 1 else previous.olderGeneration,
             olderError = null,
-            // 模型/用量都是会话级状态：同一会话的重新加载要保留，切换会话才清空。
-            model = if (sameSession) previous.model else null,
-            provider = if (sameSession) previous.provider else null,
-            reasoningEffort = if (sameSession) previous.reasoningEffort else null,
+            // 模型/用量都是会话级状态：从 map 取（不是从上一份状态取），
+            // 这样切走再切回、以及状态被整块替换后都还能显示上次读到的模型（#16）。
+            model = modelFor(key)?.model,
+            provider = modelFor(key)?.provider,
+            reasoningEffort = modelFor(key)?.reasoningEffort,
             usage = if (sameSession) previous.usage else null,
             usageDetail = if (sameSession) previous.usageDetail else null,
             // 目录是 profile 级的，切会话不必重新拉。

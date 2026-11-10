@@ -64,6 +64,7 @@ import dev.shinglem.hermes.feature.settings.ModelPageCallbacks
 import dev.shinglem.hermes.feature.settings.MoaPageCallbacks
 import dev.shinglem.hermes.feature.settings.MoaViewModel
 import dev.shinglem.hermes.feature.settings.MaintenanceViewModel
+import dev.shinglem.hermes.feature.settings.BackendAdminViewModel
 import dev.shinglem.hermes.feature.settings.DEFAULT_PROFILE_KEY
 import dev.shinglem.hermes.feature.settings.ProfileChoice
 import dev.shinglem.hermes.feature.settings.ProfileScope
@@ -144,8 +145,10 @@ fun AppShell(
             preferences = container.preferences,
         )
     }
-    val capabilityViewModel: CapabilityViewModel = viewModel {
-        CapabilityViewModel(container.capabilityRepository)
+    val backendAdminViewModel: BackendAdminViewModel = viewModel {
+        BackendAdminViewModel(backend = container.backend, gateway = container.gateway)
+    }
+    val capabilityViewModel: CapabilityViewModel = viewModel {        CapabilityViewModel(container.capabilityRepository)
     }
     val providerKeysViewModel: ProviderKeysViewModel = viewModel {
         ProviderKeysViewModel(container.providerRepository)
@@ -776,6 +779,7 @@ fun AppShell(
                                 dataDir = appDataDir,
                                 logDir = container.config.app.log.dir,
                                 maintenance = maintenanceViewModel,
+                                backendAdmin = backendAdminViewModel,
                                 profileChoices = maintenanceProfileChoices,
                                 onSelectScopeProfile = maintenanceViewModel::setScopeProfile,
                                 onDeleteOrphanTask = { name ->
@@ -922,6 +926,7 @@ fun AppShell(
                                 onKillBackgroundTask = chatViewModel::killBackgroundTask,
                                 onSteerQueued = chatViewModel::steerQueuedPrompt,
                                 onCancelQueued = chatViewModel::cancelQueuedPrompt,
+                                onReconnect = chatViewModel::reconnect,
                                 onDismissBackgroundTask = chatViewModel::dismissBackgroundTask,
                                 modelBar = {
                                     Row(

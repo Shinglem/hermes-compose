@@ -42,7 +42,7 @@ internal fun StreamingState.finishTool(toolId: String, result: String?, failed: 
     copy(
         segments = segments.map { segment ->
             if (segment is StreamSegment.Tool && segment.item.id == toolId) {
-                segment.copy(item = segment.item.copy(result = result, failed = failed))
+                segment.copy(item = segment.item.copy(result = result, failed = failed, running = false))
             } else {
                 segment
             }
@@ -85,7 +85,7 @@ internal fun List<StreamSegment>.withFinalText(finalText: String): List<StreamSe
     }
 }
 
-/** 一轮结束：按段落顺序落地成消息条目（思考段保留，后端不落库，重开历史看不到）。 */
+/** 一轮结束：按段落顺序落地成消息条目（思考段保留，与读历史的分段一一对应）。 */
 internal fun List<StreamSegment>.toChatItems(
     timestamp: Instant,
     nextId: (String) -> String,
@@ -97,6 +97,7 @@ internal fun List<StreamSegment>.toChatItems(
         is StreamSegment.Answer -> segment.text.takeIf { it.isNotBlank() }
             ?.let { ChatItem.AssistantMessage(nextId("assistant"), timestamp, it) }
 
-        is StreamSegment.Tool -> segment.item
+        // 一轮结束后不再有计时意义：没收到 tool.complete 的也不该一直显示"执行中"。
+        is StreamSegment.Tool -> segment.item.copy(running = false)
     }
 }

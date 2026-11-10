@@ -38,6 +38,13 @@ sealed interface StreamSegment {
 data class StreamingState(
     val segments: List<StreamSegment> = emptyList(),
     val startedAt: Instant? = null,
+    /**
+     * 看门狗对账后给用户看的状态：静默了多久（秒）。
+     *
+     * 长工具执行时后端几十分钟不推事件，界面上没有任何变化；不显示这一行，
+     * 用户无法区分"后端在忙"和"连接已死"（#18）。文案由渲染层出。
+     */
+    val stalledSeconds: Long? = null,
 ) {
     val isEmpty: Boolean get() = segments.isEmpty()
 }

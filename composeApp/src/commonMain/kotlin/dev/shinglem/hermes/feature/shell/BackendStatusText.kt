@@ -43,6 +43,12 @@ object BackendStatusText {
         is ProbeState.Fail -> "无响应"
     }
 
+    /**
+     * chip 保持「心跳」而不是端口：状态栏要窄，端口在详情与管理页里看。
+     * （[port] 仍保留给详情 / 管理页 / 状态栏的端口小字用。）
+     */
+    fun portOf(state: BackendBootState): Int? = (state as? BackendBootState.Ready)?.let(::port)
+
     fun isFailure(state: BackendBootState): Boolean = state is BackendBootState.Failed
 
     fun isGatewayFailing(state: BackendBootState, probe: ProbeState): Boolean =

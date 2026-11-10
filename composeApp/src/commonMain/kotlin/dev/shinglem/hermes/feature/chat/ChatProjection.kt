@@ -4,7 +4,8 @@ package dev.shinglem.hermes.feature.chat
  * 落库行 → 可渲染条目。
  *
  * 规则（与后端 `session_history` 的投影语义对齐）：
- * - `assistant` 的文本与它的 `tool_calls` 各自成条；调用的结果取自后续 `tool` 行（按 `tool_call_id` 配对）。
+ * - `assistant` 的思考（`reasoning`）、文本与它的 `tool_calls` 各自成条，顺序是
+ *   **思考 → 正文 → 工具**（与流式观感一致）；调用的结果取自后续 `tool` 行（按 `tool_call_id` 配对）。
  * - 已配对的 `tool` 行不再单独成条，避免工具卡片出现两次。
  * - 找不到调用方的 `tool` 行（历史被截断 / 老数据）单独成卡片，标为"孤立结果"。
  * - `hidden`（`display_kind == "hidden"`）整行跳过。
@@ -30,6 +31,10 @@ fun projectChat(rows: List<ChatRow>): List<ChatItem> {
             }
 
             ROLE_ASSISTANT -> {
+                // 顺序必须与流式一致（思考 → 正文 → 工具），否则重开后观感与实时不同。
+                row.reasoning?.takeIf { it.isNotBlank() }?.let { text ->
+                    items += ChatItem.Reasoning("$REASONING_ITEM_PREFIX${row.id}", row.timestamp, text)
+                }
                 if (row.text.isNotBlank()) {
                     items += ChatItem.AssistantMessage(row.id, row.timestamp, row.text)
                 }
@@ -101,3 +106,4 @@ internal const val ROLE_TOOL = "tool"
 private const val TOOL_ITEM_PREFIX = "call:"
 private const val ROW_ITEM_PREFIX = "tool:"
 private const val NOTICE_ITEM_PREFIX = "notice:"
+private const val REASONING_ITEM_PREFIX = "reason:"

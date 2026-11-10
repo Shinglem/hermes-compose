@@ -30,6 +30,18 @@ interface BackendProvider {
     /** 幂等；已 Ready 立即返回，失败后再次调用等于重试。 */
     suspend fun start()
 
+    /**
+     * 强制重新解析后端地址（即使已经 Ready）。
+     *
+     * 后端可能被**外部**重启并换端口（daemon 的端口是 OS 分配的），而 [start] 在 Ready 时会
+     * 直接返回，于是客户端会一直连旧端口 —— 表现就是"怎么发消息都没反应"。
+     * 传输层连续连接失败时调用它，让 [currentTarget] 跟上新的 `api_origin`。
+     * 默认实现就是 [start]（远端模式没有"换端口"这回事）。
+     */
+    suspend fun revalidate() {
+        start()
+    }
+
     suspend fun stop()
 
     /**

@@ -84,6 +84,8 @@ import dev.shinglem.hermes.resources.chat_rewind_cancel
 import dev.shinglem.hermes.resources.chat_rewind_ok
 import dev.shinglem.hermes.resources.chat_rewind_title
 import dev.shinglem.hermes.resources.chat_streaming
+import dev.shinglem.hermes.resources.chat_backend_still_running
+import dev.shinglem.hermes.resources.chat_reconnect
 import dev.shinglem.hermes.resources.chat_subagents
 import dev.shinglem.hermes.resources.chat_untitled
 import dev.shinglem.hermes.resources.common_close
@@ -149,6 +151,8 @@ fun ChatPane(
     /** 排队区：把这条立刻插进当前轮（`prompt.steer_queued`）/ 取消它（`prompt.cancel`）。 */
     onSteerQueued: (String) -> Unit = {},
     onCancelQueued: (String) -> Unit = {},
+    /** 静默过久时给出的手动重连（断线后 `Connected` 会自动 re-resume）。 */
+    onReconnect: () -> Unit = {},
 ) {
     if (summary == null) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -366,6 +370,7 @@ fun ChatPane(
                                 // 流式期间不包 SelectionContainer：内容每几十毫秒变一次，
                                 // 选择状态反复重建会带来可见的闪烁与跳动。
                                 selectable = false,
+                                onReconnect = onReconnect,
                             )
                         }
                     }
@@ -451,6 +456,7 @@ fun ChatPane(
                 onSteer = onSteerQueued,
                 onCancel = onCancelQueued,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+                busySince = state.streaming?.startedAt,
             )
         }
 
@@ -673,7 +679,7 @@ private fun ChatHeader(
 }
 
 @Composable
-private fun StreamingBlock(state: StreamingState, selectable: Boolean) {
+private fun StreamingBlock(state: StreamingState, selectable: Boolean, onReconnect: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         state.segments.forEach { segment ->
             when (segment) {
@@ -698,6 +704,26 @@ private fun StreamingBlock(state: StreamingState, selectable: Boolean) {
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        }
+        // 静默超过看门狗阈值时给一行状态：让"后端在跑长命令"与"连接已死"可区分（#18）。
+        state.stalledSeconds?.let { seconds ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                Text(
+                    text = stringResource(Res.string.chat_backend_still_running, formatElapsed(seconds)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(onClick = onReconnect) {
+                    Text(
+                        text = stringResource(Res.string.chat_reconnect),
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
             }
         }
     }

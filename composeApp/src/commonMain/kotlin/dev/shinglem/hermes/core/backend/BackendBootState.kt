@@ -15,6 +15,10 @@ sealed interface BackendBootState {
 
     data class Ready(
         val target: GatewayTarget,
+        /** gateway 路线才有：daemon 的 instance id，排障时用来区分"换了后端没有"。 */
+        val instanceId: String? = null,
+        val supervisor: String? = null,
+        val profileId: String? = null,
     ) : BackendBootState
 
     data class Failed(

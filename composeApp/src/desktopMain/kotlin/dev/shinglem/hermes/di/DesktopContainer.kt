@@ -104,7 +104,11 @@ object DesktopContainer {
         val backend = buildBackend(config, paths, logger, scope)
         val targetProvider = { backend.currentTarget() }
 
-        val gateway = GatewayClient(targetProvider, Logging.gateway, scope)
+        val gateway = GatewayClient(targetProvider, Logging.gateway, scope) {
+            // 连续连不上时重新 ensure：daemon 被外部重启会换端口（OS 分配），
+            // 只重试旧 URL 永远连不上，症状是"发消息没反应"（#14）。
+            backend.revalidate()
+        }
         val restClient = RestClient(targetProvider, Logging.gateway)
 
         val terminalViewModel = TerminalViewModel(preferences)

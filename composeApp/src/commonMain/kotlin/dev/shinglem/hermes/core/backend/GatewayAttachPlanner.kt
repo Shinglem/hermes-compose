@@ -78,6 +78,37 @@ object GatewayAttachPlanner {
 
     fun exePath(payloadDir: String): String = LocalBackendPlanner.path(payloadDir, "bin", "hermes.exe")
 
+    /** 接管动作只用来"清场"，不需要它把 daemon 跑起来，所以超时给得短。 */
+    const val TAKEOVER_TIMEOUT_MS = 20_000L
+
+    /**
+     * 接管被半死 gateway 占着的 host（`gateway run --replace`）。
+     *
+     * 上游在检测到 host 已被占用、但 owner 的 control socket 不应答时**故意**以 75 拒绝启动，
+     * 并在提示里给出这条接管路径（`gateway/host_attach.py::_unknown_served_message`）。
+     *
+     * 这条命令是前台常驻的（它就是 daemon 本体），所以**必须**靠 `timeoutMs` 收掉：
+     * 我们只借它把 stale owner 干掉，随后再由 ensure 重新拉起一个干净的。
+     * 因此超时不算失败；只有旧 owner 仍在时才继续报错。
+     */
+    fun takeoverSpec(
+        payloadDir: String,
+        homeDir: String,
+        token: String,
+        local: LocalSection,
+        osEnv: Map<String, String>,
+        browserHeaded: Boolean = false,
+        browserArgs: String = "",
+        elevated: Boolean = false,
+    ): BackendLaunchSpec = BackendLaunchSpec(
+        exe = exePath(payloadDir),
+        args = listOf("gateway", "run", "--replace"),
+        env = baseEnv(homeDir, token, local, osEnv, browserHeaded, browserArgs, elevated),
+        workDir = LocalBackendPlanner.normalize(payloadDir),
+        readyFile = null,
+        timeoutMs = TAKEOVER_TIMEOUT_MS,
+    )
+
     /**
      * 从 `HERMES_HOME/.env` 取上游真正会用的会话令牌。
      *

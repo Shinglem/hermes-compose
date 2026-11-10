@@ -88,6 +88,15 @@ fun StatusBar(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // 端口由后端自己分配（`backend.local.port=0` 时随机），每次重启都可能变。
+            // chip 只放心跳（保持宽度），实际端口放这里 —— 排障时"连的是哪个后端"必须一眼可见。
+            BackendStatusText.portOf(state.backend)?.let { port ->
+                Text(
+                    text = " :$port",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (state.connection is ConnectionState.Disconnected) {
                 Spacer(Modifier.width(6.dp))
                 Icon(

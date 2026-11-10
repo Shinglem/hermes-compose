@@ -154,6 +154,8 @@ fun SettingsDetailPane(
     dataDir: String = "",
     logDir: String = "",
     maintenance: MaintenanceViewModel,
+    /** 后端管理页（#15）：由桌面容器注入，缺省时该页留空。 */
+    backendAdmin: BackendAdminViewModel? = null,
     /**
      * 维护类页面顶部的「应用到」档案清单（纯数据，来自 shell 的档案列表）。
      *
@@ -317,6 +319,12 @@ fun SettingsDetailPane(
                 onArgsChange = onBrowserArgsChange,
                 modifier = modifier,
             )
+            return
+        }
+
+        SettingsPage.Backend -> {
+            // 后端管理页需要真实的 provider / transport：没注入时不画假界面。
+            backendAdmin?.let { BackendPage(viewModel = it, modifier = modifier) }
             return
         }
 

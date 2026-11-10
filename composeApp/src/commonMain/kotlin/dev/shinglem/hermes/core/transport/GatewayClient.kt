@@ -65,6 +65,13 @@ class GatewayClient(
     private val targetProvider: () -> GatewayTarget,
     private val logger: AppLogger,
     private val scope: CoroutineScope,
+    /**
+     * 连续重连失败到阈值时回调：让上层**重新解析**后端地址。
+     *
+     * daemon 被外部重启会换端口，而 [targetProvider] 只是读缓存的目标 ——
+     * 不重新 ensure 就会一直连旧端口，症状是"连接看起来正常但一个事件都没有"（#14）。
+     */
+    private val onReconnectExhausted: (suspend () -> Unit)? = null,
 ) {
     private val http = HttpClient(CIO) {
         install(WebSockets)
@@ -177,11 +184,20 @@ class GatewayClient(
             failAllPending(AppError.NotConnected)
             if (!currentCoroutineContext().isActive) break
             attempt += 1
+            // 到阈值就重新解析一次目标：连续连不上，多半是端口变了而不是网络抖。
+            if (attempt % REVALIDATE_TARGET_EVERY_ATTEMPTS == 0) revalidateTarget(attempt)
             val delayMs = Timeouts.reconnectDelayMs(attempt)
             _connection.value = ConnectionState.Reconnecting(attempt, delayMs)
             delay(delayMs)
         }
         _connection.value = ConnectionState.Closed
+    }
+
+    private suspend fun revalidateTarget(attempt: Int) {
+        val hook = onReconnectExhausted ?: return
+        logger.log(LogLevel.INFO, "gateway reconnect: 连续 $attempt 次失败，重新解析后端地址")
+        runCatching { hook() }
+            .onFailure { logger.log(LogLevel.WARN, "重新解析后端地址失败：${it.message}") }
     }
 
     private suspend fun openSession(target: GatewayTarget) {
@@ -352,6 +368,9 @@ class GatewayClient(
         const val GATEWAY_PING = "gateway.ping"
         const val CLIENT_CAPABILITIES = "client.capabilities"
         const val ANSWER_CACHE_LIMIT = 32
+
+        /** 连续失败这么多次就重新解析后端地址（后端换端口后要靠它跟上）。 */
+        const val REVALIDATE_TARGET_EVERY_ATTEMPTS = 3
     }
 }
 

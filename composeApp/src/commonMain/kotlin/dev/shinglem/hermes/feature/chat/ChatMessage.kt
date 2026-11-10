@@ -29,6 +29,12 @@ sealed interface ChatItem {
         val failed: Boolean,
         /** 结果来自后续 `role=tool` 行；孤立结果（历史被截断）为 false。 */
         val pairedWithCall: Boolean,
+        /**
+         * 这一步**正在执行**（还没收到 `tool.complete`）。
+         *
+         * 只有流式路径会置 true；卡片据此显示已执行时长，让"长命令在跑"与"界面死了"可区分。
+         */
+        val running: Boolean = false,
     ) : ChatItem
 
     data class Notice(
@@ -38,10 +44,11 @@ sealed interface ChatItem {
     ) : ChatItem
 
     /**
-     * 一轮里某一段思考过程（`reasoning.delta` 聚合而成）。
+     * 一段思考过程。
      *
-     * 只有本轮流式结束时才产生 —— 后端不把 reasoning 落进 transcript，
-     * 所以重开历史看不到它，这是数据源的限制而不是渲染丢弃。
+     * 两个来源：流式的 `reasoning.delta` 聚合，以及读历史时每步 assistant 行自带的
+     * `reasoning`。后端**每步一条 assistant 行各自带一份**，所以重开历史是按步分段的，
+     * 与实时看到的分段一一对应。
      */
     data class Reasoning(
         override val id: String,

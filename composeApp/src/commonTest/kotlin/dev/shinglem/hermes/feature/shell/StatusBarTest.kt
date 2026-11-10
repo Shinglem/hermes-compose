@@ -130,11 +130,12 @@ class StatusBarTest {
             }
         }
         onNodeWithText("网关 11ms").assertIsDisplayed()
+        // 端口单独一小段：chip 只放心跳，但"连的是哪个后端"要一眼可见（#15）。
+        onNodeWithText(" :57586").assertIsDisplayed()
     }
 
     @Test
-    fun `后端启动失败时状态栏给出失败文案`() = runComposeUiTest {
-        setContent {
+    fun `后端启动失败时状态栏给出失败文案`() = runComposeUiTest {        setContent {
             HermesTheme {
                 StatusBar(
                     state = state(ConnectionState.Disconnected(AppError.BackendUnreachable)).copy(

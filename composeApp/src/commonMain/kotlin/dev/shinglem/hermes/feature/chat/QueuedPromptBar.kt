@@ -10,10 +10,21 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+import org.jetbrains.compose.resources.stringResource
+import dev.shinglem.hermes.resources.Res
+import dev.shinglem.hermes.resources.chat_queue_after_turn
+import kotlin.time.Clock
+import kotlin.time.Instant
 
 /**
  * 排队区：后端已接受、但这一轮还没轮到执行的消息。
@@ -30,7 +41,18 @@ fun QueuedPromptBar(
     onSteer: (String) -> Unit,
     onCancel: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /** 本轮开始时间：有值时说明"排队是因为上一轮还在跑"，把因果说清楚（#18）。 */
+    busySince: Instant? = null,
 ) {
+    var busySeconds by remember(busySince) { mutableStateOf(0L) }
+    if (busySince != null) {
+        LaunchedEffect(busySince) {
+            while (true) {
+                busySeconds = (Clock.System.now() - busySince).inWholeSeconds.coerceAtLeast(0)
+                delay(1_000)
+            }
+        }
+    }
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.medium,
@@ -45,6 +67,13 @@ fun QueuedPromptBar(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (busySince != null) {
+                Text(
+                    text = stringResource(Res.string.chat_queue_after_turn, formatElapsed(busySeconds)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             items.forEach { item ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(

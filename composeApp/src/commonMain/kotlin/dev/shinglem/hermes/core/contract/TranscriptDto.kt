@@ -44,6 +44,13 @@ data class TranscriptRowDto(
     @SerialName("tool_call_labels") val toolCallLabels: Map<String, List<ToolLabelDto>>? = null,
     /** `stop` / `tool_calls` / `length` / `content_filter` / `incomplete`；异常值要在气泡后提示。 */
     @SerialName("finish_reason") val finishReason: String? = null,
+    /**
+     * 这一步的思考过程。后端每一步各落一条 assistant 行、各自带 reasoning，
+     * 所以重开历史能**按步分段**还原（与官方桌面端一致）。
+     * `reasoning_details` / `codex_reasoning_items` 是加密块或结构化项，不显示、不接。
+     */
+    val reasoning: String? = null,
+    @SerialName("reasoning_content") val reasoningContent: String? = null,
 )
 
 @Serializable

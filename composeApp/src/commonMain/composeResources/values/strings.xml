@@ -69,7 +69,7 @@
     <string name="detail_session_id">会话 ID %1$s</string>
 
     <!-- 模型选择（composer 底部） -->
-    <string name="model_pill_select">选择模型</string>
+    <string name="model_pill_select">模型未知</string>
     <string name="model_loading">正在读取模型列表…</string>
     <string name="model_retry">模型列表不可用，点此重试</string>
     <string name="model_empty">这个 profile 还没有可用的 provider</string>
@@ -174,11 +174,16 @@
     <string name="chat_tool_result">结果</string>
     <string name="chat_tool_status_done">已完成</string>
     <string name="chat_tool_status_failed">失败</string>
+    <string name="chat_tool_running">执行中 %1$s</string>
+    <string name="chat_tool_long_note">命令仍在执行。后端单次工具调用上限 420 秒，超时会中断并重试。</string>
     <string name="chat_tool_orphan">历史被截断，未找到对应的调用</string>
     <string name="chat_tool_truncated">结果过长，仅显示前 %1$d 个字符</string>
     <string name="chat_tool_show_all">显示全部（%1$d 字符）</string>
     <string name="chat_tool_show_less">收起</string>
     <string name="chat_streaming">正在生成…</string>
+    <string name="chat_backend_still_running">后端仍在执行（已等待 %1$s），连接正常</string>
+    <string name="chat_queue_after_turn">上一轮已运行 %1$s，本轮结束后自动执行</string>
+    <string name="chat_reconnect">重连</string>
     <string name="chat_jump_to_latest">回到最新</string>
     <string name="chat_mermaid_fallback">图表语法暂不支持，已按源码显示</string>
 

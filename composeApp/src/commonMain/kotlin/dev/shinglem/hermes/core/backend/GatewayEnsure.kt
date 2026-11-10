@@ -156,6 +156,29 @@ object GatewayEnsure {
             .filter { it.startsWith("{") && it.endsWith("}") }
             .lastOrNull()
 
+    /**
+     * 是不是「host 被一个半死的 gateway 占着」—— 这种只能靠 `gateway run --replace` 接管。
+     *
+     * 判据全部来自实测（2026-11-10，本机曾因此完全不可用）：
+     * - `reason_code == "runtime_exited"`：ensure 内部起的 daemon 自己退了
+     *   （`hermes_cli/gateway_client.py:353` 只对这条带上 detail）；
+     * - detail 是上游 `gateway/host_attach.py::_unknown_served_message()` 那段话，
+     *   特征是「already owns this host」＋「has not published」/「control socket has not answered」
+     *   ＋ 给出 `--replace` 提示；
+     * - 那次 daemon 的退出码是 **75（EX_TEMPFAIL）**，见 `gateway/run.py:4845`。
+     *
+     * **刻意只认这组特征**：`deadline` / `authorization` / `profile_mismatch` 等都不该被"接管"，
+     * 把"正在启动"当"半死"去替换只会更慢，还可能抢走别的 profile 的 owner。
+     */
+    fun isStaleHostOccupancy(verdict: EnsureVerdict.Unavailable): Boolean {
+        if (verdict.reasonCode != "runtime_exited") return false
+        val detail = verdict.detail.orEmpty()
+        if (!detail.contains("already owns this host", ignoreCase = true)) return false
+        return detail.contains("has not published", ignoreCase = true) ||
+            detail.contains("control socket has not answered", ignoreCase = true) ||
+            detail.contains("--replace", ignoreCase = true)
+    }
+
     private fun isAbsolutePath(value: String): Boolean =
         value.startsWith("/") || value.startsWith("\\\\") || Regex("""^[A-Za-z]:[\\/]""").containsMatchIn(value)
 

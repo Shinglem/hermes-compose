@@ -16,21 +16,26 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import kotlinx.coroutines.delay
 import org.jetbrains.compose.resources.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlin.time.Clock
 import dev.shinglem.hermes.resources.Res
 import dev.shinglem.hermes.feature.editors.EditorOpenButton
 import dev.shinglem.hermes.resources.chat_tool_args
+import dev.shinglem.hermes.resources.chat_tool_long_note
 import dev.shinglem.hermes.resources.chat_tool_orphan
 import dev.shinglem.hermes.resources.chat_tool_result
+import dev.shinglem.hermes.resources.chat_tool_running
 import dev.shinglem.hermes.resources.chat_tool_show_all
 import dev.shinglem.hermes.resources.chat_tool_show_less
 import dev.shinglem.hermes.resources.chat_tool_status_done
@@ -63,6 +68,18 @@ fun ToolCallCard(
         MaterialTheme.colorScheme.error
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    // 正在执行的工具要每秒可见地跳动：后端一个 terminal 调用可能跑好几分钟，
+    // 界面上没有变化就无法区分"在跑"和"界面死了"（长工具调用只有 tool.complete 才推事件）。
+    val startedAt = item.timestamp
+    var elapsedSeconds by remember(item.id, startedAt) { mutableStateOf(0L) }
+    if (item.running && startedAt != null) {
+        LaunchedEffect(item.id, startedAt) {
+            while (true) {
+                elapsedSeconds = (Clock.System.now() - startedAt).inWholeSeconds.coerceAtLeast(0)
+                delay(1_000)
+            }
+        }
     }
 
     Surface(
@@ -103,9 +120,17 @@ fun ToolCallCard(
                     }
                 }
                 Text(
-                    text = stringResource(
-                        if (item.failed) Res.string.chat_tool_status_failed else Res.string.chat_tool_status_done,
-                    ),
+                    text = if (item.running) {
+                        stringResource(Res.string.chat_tool_running, formatElapsed(elapsedSeconds))
+                    } else {
+                        stringResource(
+                            if (item.failed) {
+                                Res.string.chat_tool_status_failed
+                            } else {
+                                Res.string.chat_tool_status_done
+                            },
+                        )
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = statusColor,
                 )
@@ -116,6 +141,15 @@ fun ToolCallCard(
                     contentDescription = null,
                     modifier = Modifier.size(16.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            if (item.running && elapsedSeconds >= LONG_TOOL_HINT_SECONDS) {
+                Text(
+                    text = stringResource(Res.string.chat_tool_long_note),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
                 )
             }
 
@@ -198,6 +232,24 @@ private fun CodeSection(title: String, body: String) {
 
 private const val MAX_RESULT_CHARS = 20_000
 private const val MAX_ARGUMENT_CHARS = 4_000
+
+/** 超过这个秒数才提示后端上限：短命令没必要吓人。 */
+internal const val LONG_TOOL_HINT_SECONDS = 60L
+
+/** 执行时长 `m:ss`，超过一小时退化成 `h:mm:ss`。 */
+internal fun formatElapsed(seconds: Long): String {
+    val total = seconds.coerceAtLeast(0)
+    val hours = total / 3600
+    val minutes = (total % 3600) / 60
+    val secs = total % 60
+    return if (hours > 0) {
+        "$hours:${minutes.twoDigits()}:${secs.twoDigits()}"
+    } else {
+        "$minutes:${secs.twoDigits()}"
+    }
+}
+
+private fun Long.twoDigits(): String = toString().padStart(2, '0')
 
 /** 「显示全部」的硬上限：再大就不再往布局里塞（单条消息几十万字符会把滚动拖死）。 */
 private const val HARD_MAX_RESULT_CHARS = 200_000

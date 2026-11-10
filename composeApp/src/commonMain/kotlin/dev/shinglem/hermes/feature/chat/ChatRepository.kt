@@ -677,6 +677,8 @@ data class ChatRow(
     val hidden: Boolean,
     /** `stop` / `tool_calls` / `length` / `content_filter` / `incomplete`（后端 `finish_reason`）。 */
     val finishReason: String? = null,
+    /** 这一步的思考过程（每步一条 assistant 行各带一份，重开历史按步分段还原）。 */
+    val reasoning: String? = null,
 )
 
 data class ChatToolCall(
@@ -685,7 +687,7 @@ data class ChatToolCall(
     val arguments: String,
 )
 
-private fun TranscriptRowDto.toRow(): ChatRow = ChatRow(
+internal fun TranscriptRowDto.toRow(): ChatRow = ChatRow(
     id = id.ifBlank { "row-$timestamp-$role" },
     role = role,
     text = content.toPlainText(),
@@ -704,6 +706,8 @@ private fun TranscriptRowDto.toRow(): ChatRow = ChatRow(
     displayKind = displayKind,
     hidden = displayKind == HIDDEN_DISPLAY_KIND,
     finishReason = finishReason,
+    // 优先级与后端 `acp_adapter/server.py::_history_reasoning_text` 一致。
+    reasoning = reasoningContent?.takeIf { it.isNotBlank() } ?: reasoning?.takeIf { it.isNotBlank() },
 )
 
 private const val HIDDEN_DISPLAY_KIND = "hidden"

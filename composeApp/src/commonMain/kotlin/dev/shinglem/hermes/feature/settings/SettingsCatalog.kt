@@ -94,6 +94,9 @@ sealed interface SettingsPage {
     /** 内置后端的浏览器行为（`app.browser.headed`）。 */
     data object Browser : SettingsPage
 
+    /** 后端管理：启停 / 重启 / 端口 / 日志尾 / 诊断（#15）。 */
+    data object Backend : SettingsPage
+
     /** 外部编辑器（点工具卡片旁的「打开」用哪个程序）。 */
     data object Editors : SettingsPage
 
@@ -360,6 +363,7 @@ object SettingsCatalog {
                 title = "桌面",
                 pages = listOf(
                     "通知" to SettingsPage.Notifications,
+                    "后端" to SettingsPage.Backend,
                     "浏览器" to SettingsPage.Browser,
                     "外部编辑器" to SettingsPage.Editors,
                     "快捷键" to SettingsPage.Shortcuts,

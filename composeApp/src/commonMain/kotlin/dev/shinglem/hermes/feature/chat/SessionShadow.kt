@@ -45,6 +45,7 @@ internal fun ChatState.applyShadowEvent(
                     result = null,
                     failed = false,
                     pairedWithCall = true,
+                    running = true,
                 ),
             ),
         )

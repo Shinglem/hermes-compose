@@ -17,6 +17,7 @@ class ChatProjectionTest {
         labels: Map<String, List<dev.shinglem.hermes.core.contract.ToolLabelDto>> = emptyMap(),
         displayKind: String? = null,
         finishReason: String? = null,
+        reasoning: String? = null,
     ) = ChatRow(
         id = id,
         role = role,
@@ -29,6 +30,7 @@ class ChatProjectionTest {
         displayKind = displayKind,
         hidden = displayKind == "hidden",
         finishReason = finishReason,
+        reasoning = reasoning,
     )
 
     @Test
@@ -185,5 +187,72 @@ class ChatProjectionTest {
 
         assertEquals(1, items.size)
         assertIs<ChatItem.Notice>(items.single())
+    }
+
+    @Test
+    fun `reasoning 按步分段且顺序为 思考 正文 工具`() {
+        val rows = listOf(
+            row("u1", "user", "很多 VPN 订阅，给个方案"),
+            row(
+                id = "a1",
+                role = "assistant",
+                text = "我先查看既有约定。",
+                reasoning = "用户问 VPN 订阅，需要给方案推荐。先理解需求。",
+                toolCalls = listOf(ChatToolCall("call-1", "skill_view", "{}")),
+            ),
+            row("t1", "tool", "约定内容", toolName = "skill_view", toolCallId = "call-1"),
+            // 这一步只有思考 + 工具，没有正文（实测 rid=8218 就是这个形状）
+            row(
+                id = "a2",
+                role = "assistant",
+                text = "",
+                reasoning = "再确认端口占用。",
+                toolCalls = listOf(ChatToolCall("call-2", "terminal", "{}")),
+            ),
+            row("t2", "tool", "ok", toolName = "terminal", toolCallId = "call-2"),
+            row("a3", "assistant", "结论如下。", reasoning = "汇总。"),
+        )
+
+        val items = projectChat(rows)
+
+        assertEquals(
+            listOf(
+                "u1",
+                "reason:a1", "a1", "call:call-1",
+                "reason:a2", "call:call-2",
+                "reason:a3", "a3",
+            ),
+            items.map { it.id },
+        )
+        assertEquals(
+            "用户问 VPN 订阅，需要给方案推荐。先理解需求。",
+            assertIs<ChatItem.Reasoning>(items[1]).text,
+        )
+    }
+
+    @Test
+    fun `没有 reasoning 的 assistant 行不产出思考块`() {
+        val rows = listOf(
+            row("a1", "assistant", "正文", reasoning = null),
+            row("a2", "assistant", "正文2", reasoning = ""),
+            row("a3", "assistant", "正文3", reasoning = "   "),
+        )
+        assertTrue(projectChat(rows).none { it is ChatItem.Reasoning })
+    }
+
+    @Test
+    fun `content 为空的 assistant 行不产出空正文气泡`() {
+        val rows = listOf(
+            row(
+                id = "a1",
+                role = "assistant",
+                text = "",
+                reasoning = "只有思考",
+                toolCalls = listOf(ChatToolCall("call-1", "terminal", "{}")),
+            ),
+        )
+        val items = projectChat(rows)
+        assertEquals(listOf("reason:a1", "call:call-1"), items.map { it.id })
+        assertTrue(items.none { it is ChatItem.AssistantMessage })
     }
 }
