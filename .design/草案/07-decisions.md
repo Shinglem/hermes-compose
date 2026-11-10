@@ -1307,3 +1307,57 @@ skill 说明这些「一眼扫过去」的文字。暗色版同理（`#8D8378` �
   显式选 `paper` 的 Markdown 也用加深版（不再是 markdown-one 的原始色）。
 
 ---
+
+## ADR-056 · 本地后端仍由计划任务 + 客户端托管，不改用 Windows 服务（SCM）
+
+**决策**：**不**把本地后端改成 Windows 服务。保持现状：`gateway ensure` 拉起机器级 daemon、
+客户端作为附着者；自启仍走计划任务（或后续可选 `HKCU\...\Run`）。
+后端管理能力（手动启停 / 状态 / 端口跟随）按
+[`../待修复问题.md`](../待修复问题.md) #15 做在 UI 层，不动进程形态。
+
+**背景**：2026-11-10 曾提案「写 daemon 注册成 Windows 服务托管后端，新装时索要 UAC 建服务，
+后端由 SCM 自启、前端普通自启」。逐条核实后收益不足以支撑成本。
+
+**否决理由**：
+
+| 提案想达到的目的 | 核实结论 |
+|---|---|
+| 后端独立于前端 | **已达成**：`gateway` 路线的 daemon 用 `CREATE_BREAKAWAY_FROM_JOB` 脱离我们的 Job Object，客户端退出/崩溃不影响它 |
+| 登录自启不弹 UAC | **已达成**：计划任务 `RunLevel=HighestAvailable`（本机任务 XML 实测） |
+| 日常不提权 | 是真需求，但**不需要服务**：`app.elevate=never` + 普通自启即可，零系统对象 |
+| 开机即启动（不登录） | SCM 唯一独有能力，**但对我们无价值** —— 见下 |
+
+**致命冲突：Session 0 无交互桌面。** 后端必须跑在用户的交互会话里才能：
+
+- `computer_use` 模拟键鼠操作真实窗口 —— 上游 `hermes_cli/tools_config_cua.py:200` 自己写着
+  「needed when driving Windows over SSH (**Session 0 has no interactive desktop**)」；
+- `browser.headed` 弹出可见浏览器窗口（本机 `config_custom.json` 为 `headed: true`）。
+
+即「登录后才启动」是**需要的性质**，不是待消除的限制。本文 §
+[`07-提权与自启动.md`](../详细设计/工程与代码/07-提权与自启动.md) §2.1 早已论证并否掉过服务路线
+（原文：「把后端注册成服务（session 0，无 UI），代价远大于收益」）。
+
+**另有两条事实性理由**：
+
+- 上游**没有** Windows SCM 服务安装入口：`hermes gateway install` 在 Windows 上装的是**计划任务**
+  （`hermes_cli/gateway.py:5542`）。`WindowsGatewayService` / `hermes_owns_windows_service` 只用于
+  **检测归属**（更新器判定「这是不是我自己的服务」，`gateway_windows.py:136` 注释即为此），
+  `<home>/gateway-service/` 里放的是 `.vbs` / `.cmd` 启动器，不是 SCM 服务。做服务化 = 与上游分叉。
+- #13（残留 daemon 占 host、`exit 75`）与 #14（端口漂移后不回连）的根因都不在后端形态：
+  #13 是上游优雅关闭超时被取消后半死；#14 是客户端换端口后没重建会话订阅。服务化修不了这两条，
+  还会把 `gateway.lock` 语义与 SCM 进程身份叠在一起，排障更难。
+
+**替代方向**（已采纳）：
+
+1. `app.elevate` 默认 `never`，客户端全程普通权限；
+2. `app.autostart` 增加 `run` 选项（`HKCU\...\Run`，无需 UAC、零系统对象），`task` 保留；
+3. 需要操作管理员窗口时，按需 `runas` 拉起**一次性**提权动作，主进程不动；
+4. 后端管理（手动启停 / 状态 / 端口跟随）做在 UI 层，见 #15。
+
+**关于「通知不再依赖开始菜单快捷方式」**：与后端形态无关，是 Windows Shell 层限制 ——
+toast 归属只认开始菜单 `.lnk`
+（[`../详细设计/工程与代码/12-通知窗.md`](../详细设计/工程与代码/12-通知窗.md) §1 的四组实测已排除
+桌面 `.lnk`、注册表 `AppUserModelId`、`App Paths`、COM activator 等替代）。
+真要摆脱，只能放弃原生 toast 只用自绘通知窗 —— 属产品决策，可单独重开。
+
+---
