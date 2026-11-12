@@ -55,9 +55,9 @@ class LocalBackendPlannerTest {
     }
 
     @Test
-    fun `提权运行时自动补 Chromium 沙箱绕过参数`() {
+    fun `提权运行时自动补 Chromium 去提权与沙箱绕过参数`() {
         assertEquals(
-            "--no-sandbox,--disable-dev-shm-usage",
+            "--do-not-de-elevate,--no-sandbox,--disable-dev-shm-usage",
             spec(elevated = true).env["AGENT_BROWSER_ARGS"],
         )
         assertNull(spec(elevated = false).env["AGENT_BROWSER_ARGS"], "非提权时不该降低隔离")
@@ -66,7 +66,7 @@ class LocalBackendPlannerTest {
     @Test
     fun `用户填写的启动参数追加而不是替换自动部分`() {
         assertEquals(
-            "--no-sandbox,--disable-dev-shm-usage,--remote-debugging-port=9333",
+            "--do-not-de-elevate,--no-sandbox,--disable-dev-shm-usage,--remote-debugging-port=9333",
             spec(
                 elevated = true,
                 browserArgs = "--remote-debugging-port=9333",
@@ -81,10 +81,53 @@ class LocalBackendPlannerTest {
     @Test
     fun `参数拆分容忍换行、空白与重复项`() {
         assertEquals(
-            "--no-sandbox,--disable-dev-shm-usage,--foo",
+            "--do-not-de-elevate,--no-sandbox,--disable-dev-shm-usage,--foo",
             LocalBackendPlanner.chromiumArgs(elevated = true, extra = " --no-sandbox ,\n  --foo ,, "),
         )
         assertNull(LocalBackendPlanner.chromiumArgs(elevated = false, extra = "  "), "全空时不设变量")
+    }
+
+    @Test
+    fun `后端配置的合并保留用户已有参数且幂等`() {
+        // 后端 PUT /api/config 对数组是整体替换，所以必须发完整数组。
+        assertEquals(
+            listOf("--no-sandbox", "--disable-dev-shm-usage", "--do-not-de-elevate"),
+            LocalBackendPlanner.withDeElevateBypass(listOf("--no-sandbox", "--disable-dev-shm-usage")),
+        )
+        // 已经带上时不应产生重复项（幂等）。
+        val already = listOf("--do-not-de-elevate", "--no-sandbox")
+        assertEquals(already, LocalBackendPlanner.withDeElevateBypass(already))
+        assertTrue(LocalBackendPlanner.hasDeElevateBypass(already))
+        assertFalse(LocalBackendPlanner.hasDeElevateBypass(listOf("--no-sandbox")))
+        // 空白项被丢掉，不会写出空参数。
+        assertEquals(listOf("--do-not-de-elevate"), LocalBackendPlanner.withDeElevateBypass(listOf("", "  ")))
+    }
+
+    @Test
+    fun `只有指向本机且无人监听的 cdp_url 才判为死地址`() {
+        val hostOf: (String) -> String? = { url ->
+            url.substringAfter("://", "").substringBefore('/').substringAfter('@')
+                .let { if (it.startsWith("[")) it.substringAfter('[').substringBefore(']') else it.substringBefore(':') }
+                .takeIf { it.isNotBlank() }
+        }
+        val dead: (String) -> Boolean = { false }
+        val alive: (String) -> Boolean = { true }
+
+        // 本机 + 没人监听 → 死地址（应当清空）
+        assertTrue(LocalBackendPlanner.isDeadLoopbackCdp("http://127.0.0.1:9222", hostOf, dead))
+        assertTrue(LocalBackendPlanner.isDeadLoopbackCdp("ws://localhost:9333/devtools/browser/x", hostOf, dead))
+        assertTrue(LocalBackendPlanner.isDeadLoopbackCdp("http://[::1]:9222/json/version", hostOf, dead))
+
+        // 本机但活的 → 保留（用户有意接的调试浏览器）
+        assertFalse(LocalBackendPlanner.isDeadLoopbackCdp("http://127.0.0.1:9222", hostOf, alive))
+
+        // 非本机 → 一律不动，哪怕是死的
+        assertFalse(LocalBackendPlanner.isDeadLoopbackCdp("http://10.0.0.5:9222", hostOf, dead))
+        assertFalse(LocalBackendPlanner.isDeadLoopbackCdp("ws://browser.example.com:443/devtools/browser/x", hostOf, dead))
+
+        // 空值 / 解析不出主机 → 不动
+        assertFalse(LocalBackendPlanner.isDeadLoopbackCdp("", hostOf, dead))
+        assertFalse(LocalBackendPlanner.isDeadLoopbackCdp("not-a-url", { null }, dead))
     }
 
     @Test

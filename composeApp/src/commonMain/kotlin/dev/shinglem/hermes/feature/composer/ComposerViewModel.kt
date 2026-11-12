@@ -4,10 +4,12 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.shinglem.hermes.core.contract.AttachedImageDto
 import dev.shinglem.hermes.core.prefs.AppPreferences
 import dev.shinglem.hermes.core.log.Log
 import dev.shinglem.hermes.platform.Clipboard
 import dev.shinglem.hermes.platform.isImagePath
+import dev.shinglem.hermes.platform.isSubmittableImagePath
 import dev.shinglem.hermes.platform.pickFiles
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -279,13 +281,24 @@ class ComposerViewModel(
         return attachImagePath(runtime, path)
     }
 
-    private suspend fun attachImagePath(runtime: RuntimeHandle, path: String): Boolean = try {
-        val result = repository.attachImage(sessions.profile, runtime.runtimeId, path)
-        if (!result.attached) notice(result.message ?: "图片附加失败") else addAttachment(result)
-    } catch (cancelled: CancellationException) {
-        throw cancelled
-    } catch (throwable: Throwable) {
-        notice("图片附加失败：${throwable.message ?: "未知错误"}")
+    private suspend fun attachImagePath(runtime: RuntimeHandle, path: String): Boolean {
+        // 附加阶段就拦住不支持的格式：`attach_bytes` 会把它落盘，但 admission 只收
+        // png/jpeg/gif/webp，拖到发送时才 `invalid_params` 等于静默丢图（#19）。
+        if (!isSubmittableImagePath(path)) {
+            notice(
+                "不支持的图片格式：${path.substringAfterLast('\\').substringAfterLast('/')}" +
+                    "（只支持 png / jpeg / gif / webp）",
+            )
+            return false
+        }
+        return try {
+            val result = repository.attachImage(sessions.profile, runtime.runtimeId, path)
+            if (!result.attached) notice(result.message ?: "图片附加失败") else addAttachment(result)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (throwable: Throwable) {
+            notice("图片附加失败：${throwable.message ?: "未知错误"}")
+        }
     }
 
     /** 普通文件：后端把它收进会话工作区，回到 composer 的是一段 `@file:` 引用。 */
@@ -303,16 +316,32 @@ class ComposerViewModel(
         notice("文件附加失败：${throwable.message ?: "未知错误"}")
     }
 
-    private fun addAttachment(result: dev.shinglem.hermes.core.contract.AttachedImageDto): Boolean {
-        val id = result.path ?: result.filename ?: "image"
+    private fun addAttachment(result: AttachedImageDto): Boolean {
+        val path = result.path?.takeIf { it.isNotBlank() }
+        val id = path ?: result.filename ?: "image"
         val label = result.filename?.takeIf { it.isNotBlank() }
             ?: id.substringAfterLast('\\').substringAfterLast('/')
+        // mime 优先用后端回执（`gateway/session_images.py` 有 `mime`），
+        // 拿不到就按扩展名推断；都不成立时留空，随提交时会被过滤掉。
+        val mime = result.mime?.takeIf { it.isNotBlank() } ?: mimeOfPath(path.orEmpty())
+        if (path == null) {
+            // 没有真实路径就没法随 `prompt.submit` 提交 —— 与其"看着附加成功、发出去丢了"，
+            // 不如当场说清楚（#19 的失败可见性要求）。
+            notice("图片已处理但没拿到可提交的路径，无法随本轮发送")
+            return false
+        }
+        if (mime.isBlank()) {
+            notice("不支持的图片格式：$label（只支持 png / jpeg / gif / webp）")
+            return false
+        }
         _state.update {
             it.copy(
                 attachments = it.attachments + ComposerAttachment(
                     id = id,
                     label = label,
                     detail = result.text.orEmpty(),
+                    path = path,
+                    mime = mime,
                 ),
             )
         }

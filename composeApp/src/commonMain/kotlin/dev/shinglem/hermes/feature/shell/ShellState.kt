@@ -14,6 +14,7 @@ import dev.shinglem.hermes.core.transport.BackendHealth
 import dev.shinglem.hermes.core.transport.ConnectionState
 import dev.shinglem.hermes.core.transport.GatewayClient
 import dev.shinglem.hermes.core.transport.RestClient
+import dev.shinglem.hermes.feature.settings.BrowserArgsReconciler
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -60,6 +61,8 @@ class ShellViewModel(
     private val restClient: RestClient,
     private val preferences: AppPreferences,
     private val backend: BackendProvider,
+    /** 管理员运行时把 `--do-not-de-elevate` 钉进后端 `browser.chromium_args`；非提权时传入 null。 */
+    private val browserArgsReconciler: BrowserArgsReconciler? = null,
 ) : ViewModel() {
     private val _state = MutableStateFlow(
         ShellState(
@@ -75,6 +78,9 @@ class ShellViewModel(
     private var profilesLoaded = false
     private var gatewayRestartedForBackend = false
 
+    /** 对账只做一次：它改的是持久配置，重连（端口漂移、心跳恢复）不该反复写盘。 */
+    private var browserArgsReconciled = false
+
     init {
         gateway.start()
         viewModelScope.launch {
@@ -83,6 +89,7 @@ class ShellViewModel(
                 if (connection is ConnectionState.Connected) {
                     if (!profilesLoaded) loadProfiles()
                     refreshHealth()
+                    reconcileBrowserArgsOnce()
                 }
             }
         }
@@ -163,6 +170,35 @@ class ShellViewModel(
     fun retryConnection() {
         gateway.stop()
         gateway.start()
+    }
+
+    /**
+     * 管理员运行时把 `--do-not-de-elevate` 钉进后端 `browser.chromium_args`（只做一次）。
+     *
+     * 以管理员运行时 Chromium 会「自动去提权」：主进程拉起中完整性副本后自己 `exit 0`，
+     * 而后端先读 `DevToolsActivePort`、再 `poll()` 判生死，于是误报
+     * `Chrome exited early (exit code: 0)`。详见 `07-提权与自启动.md` §5 坑 17。
+     *
+     * 非提权时 [browserArgsReconciler] 为 null，什么都不做 —— 不去动用户的配置。
+     * 写配置走 `PUT /api/config`（深合并），不重启后端，下一次 `browser_exec` 即生效。
+     */
+    private fun reconcileBrowserArgsOnce() {
+        val reconciler = browserArgsReconciler ?: return
+        if (browserArgsReconciled) return
+        browserArgsReconciled = true
+        viewModelScope.launch {
+            runCatching { reconciler.reconcile() }
+                .onSuccess { result ->
+                    if (result.written.isNotEmpty()) {
+                        Log.info("已在 ${result.written.size} 个 profile 启用 --do-not-de-elevate")
+                    }
+                    for (failure in result.failures) Log.warn("浏览器参数对账未完成：$failure")
+                }
+                .onFailure { error ->
+                    // 对账失败不该影响主流程：会话/聊天照常可用，只是管理员模式下浏览器仍可能起不来。
+                    Log.warn("浏览器参数对账异常：${error.message}")
+                }
+        }
     }
 
     private fun loadProfiles() {

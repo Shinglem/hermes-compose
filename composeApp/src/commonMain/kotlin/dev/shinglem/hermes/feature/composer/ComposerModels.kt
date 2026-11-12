@@ -101,12 +101,50 @@ data class ComposerUiState(
     val canSend: Boolean get() = text.isNotBlank()
 }
 
-/** 已附加的图片：`image.attach` / `clipboard.paste` 的产物。 */
+/**
+ * 随 `prompt.submit` 一起提交的图片附件。
+ *
+ * 只有 `engine=gateway` 需要它：那条路线下 `image.attach_bytes` **只把字节落进**
+ * `<profile>/cache/images/`，不建会话队列，必须由客户端回传引用
+ * （`gateway/session_images.py` + `gateway/session_ingress_media.admit_attachments`）。
+ * `isolated` 路线有自己的 `attached_images` 队列，传了也无害（闭集允许，只是白传）。
+ *
+ * `path` 必须是后端 `get_image_cache_dir()` 下的绝对路径；`mime` 只能是
+ * `image/{png,jpeg,gif,webp}` —— admission 会逐项校验，不合格整条 `invalid_params`。
+ */
+data class PromptAttachment(
+    val path: String,
+    val mime: String,
+)
+
+/**
+ * 已附加的图片：`image.attach` / `clipboard.paste` 的产物。
+ *
+ * [path] 与 [mime] 是**提交时要用的**真实引用，[label] / [detail] 只用于界面显示 ——
+ * 之前只有后两者，导致"界面上看着附加成功、发出去时什么都没带"。
+ */
 data class ComposerAttachment(
     val id: String,
     val label: String,
     val detail: String = "",
-)
+    /** 后端的 `upload_*` 绝对路径；为空表示拿不到（此时不随提交发送）。 */
+    val path: String = "",
+    /** `image/png` 之类；为空时按扩展名推断。 */
+    val mime: String = "",
+) {
+    /** 能随 `prompt.submit` 提交的形态；缺 `path` 时返回 null。 */
+    fun toPromptAttachment(): PromptAttachment? =
+        path.takeIf { it.isNotBlank() }?.let { PromptAttachment(it, mime.ifBlank { mimeOfPath(it) }) }
+}
+
+/** 按扩展名推断 mime；admission 只收这四种。 */
+fun mimeOfPath(path: String): String = when (path.substringAfterLast('.', "").lowercase()) {
+    "png" -> "image/png"
+    "jpg", "jpeg" -> "image/jpeg"
+    "gif" -> "image/gif"
+    "webp" -> "image/webp"
+    else -> ""
+}
 
 /**
  * ChatPane 与 composer 之间的绑定：状态 + 五个回调。

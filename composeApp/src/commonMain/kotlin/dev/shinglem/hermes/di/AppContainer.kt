@@ -15,6 +15,7 @@ import dev.shinglem.hermes.feature.capabilities.CapabilityRepository
 import dev.shinglem.hermes.feature.chat.ChatRepository
 import dev.shinglem.hermes.feature.composer.ComposerRepository
 import dev.shinglem.hermes.feature.model.ModelRepository
+import dev.shinglem.hermes.feature.settings.BrowserArgsReconciler
 import dev.shinglem.hermes.feature.settings.ConfigRepository
 import dev.shinglem.hermes.feature.settings.MaintenanceRepository
 import dev.shinglem.hermes.feature.settings.CustomEndpointRepository
@@ -55,6 +56,13 @@ class AppContainer(
     val modelAdminRepository: ModelAdminRepository,
     /** 后端 config.yaml 的读改（`/api/config`）：模型上下文覆盖与「安全」三页共用。 */
     val configRepository: ConfigRepository,
+    /**
+     * 把 `--do-not-de-elevate` 钉进后端 `browser.chromium_args`（仅管理员运行时有效）。
+     *
+     * 以管理员运行时 Chromium 会「自动去提权」，导致后端误判 `Chrome exited early`；
+     * 详见 [dev.shinglem.hermes.feature.settings.BrowserArgsReconciler]。
+     */
+    val browserArgsReconciler: BrowserArgsReconciler,
     /** 设置中心「维护」页组：记忆、后台动作、凭据池、用量、会话统计（`/api/{memory,ops,analytics,sessions}`）。 */
     val maintenanceRepository: MaintenanceRepository,
     /** 官方桌面端（debug-only，v1.0.0 移除）：检测到才让设置页出现「调试」入口。 */

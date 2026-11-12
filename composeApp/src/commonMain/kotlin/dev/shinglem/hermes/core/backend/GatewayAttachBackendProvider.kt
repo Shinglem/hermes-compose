@@ -5,12 +5,15 @@ import dev.shinglem.hermes.core.log.AppLogger
 import dev.shinglem.hermes.core.log.Log
 import dev.shinglem.hermes.core.log.LogLevel
 import dev.shinglem.hermes.core.transport.GatewayTarget
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -68,6 +71,17 @@ class GatewayAttachBackendProvider(
 
     private var attached: GatewayEndpointInfo? = null
 
+    /**
+     * 串行化 [start] 与 [revalidate] 的 ensure。
+     *
+     * 两者会**并发**到达：启动时 `backend.start()` 正在跑 ensure，而 `GatewayClient` 的
+     * 第 N 次重连失败会回调 `revalidate()`；随后就绪事件又会让 `ShellState` 重启 gateway。
+     * 并发时后一次 ensure 会因前面的协程被取消而抛 `CancellationException`，
+     * 被 [runEnsure] 当成启动失败 —— 结果是**已经 Ready 的后端被覆盖成 Failed**，
+     * 界面上弹出"后端启动失败 gateway ensure"（实测复现）。
+     */
+    private val ensureMutex = Mutex()
+
     override fun currentTarget(): GatewayTarget =
         (state.value as? BackendBootState.Ready)?.target
             // 未就绪不给回退地址：连到机器上别的 Hermes 会把会话串到别人的数据上。
@@ -83,55 +97,57 @@ class GatewayAttachBackendProvider(
      *
      * daemon 的端口由 OS 分配，被外部重启后必然变化；不重新解析就会一直连旧端口，
      * 症状是"连接看起来正常但没有任何事件"（#14）。
+     *
+     * 已 Ready 时**仍然重跑**：调用它的前提就是"连不上当前地址"，必须重新解析端口。
      */
     override suspend fun revalidate() {
         ensureAndAttach()
     }
 
-    private suspend fun ensureAndAttach() {
+    private suspend fun ensureAndAttach() = ensureMutex.withLock {
         if (!LocalBackendPlanner.isSealedPayload(payloadDir, fs::exists)) {
             fail(
                 "未找到内嵌 Hermes payload",
                 "需要 $payloadDir 下有 manifest.json 与 bin/hermes.exe（sealed payload 判据）",
             )
-            return
+            return@withLock
         }
         if (!fs.exists(GatewayAttachPlanner.exePath(payloadDir))) {
             fail(
                 "payload 不支持 gateway 路线",
                 "缺少 ${GatewayAttachPlanner.exePath(payloadDir)}；这不是 hermes 0.23+ 的 payload",
             )
-            return
+            return@withLock
         }
         when (val verdict = LocalBackendPlanner.classifyHome(homeDir, payloadDir, foreignHomes)) {
             HomeVerdict.OK -> Unit
             HomeVerdict.RELATIVE -> {
                 fail("本地数据目录必须是绝对路径", "当前 HERMES_HOME=$homeDir")
-                return
+                return@withLock
             }
             HomeVerdict.IS_FOREIGN_HOME -> {
                 fail(
                     "本地数据目录与其他 Hermes 安装重合",
                     "HERMES_HOME=$homeDir 指向既有安装；为免互相污染，拒绝用它启动",
                 )
-                return
+                return@withLock
             }
             HomeVerdict.INSIDE_PAYLOAD -> {
                 fail("本地数据目录不能放在 payload 内", "HERMES_HOME=$homeDir 位于 $payloadDir 之下")
-                return
+                return@withLock
             }
         }
         fs.mkdirs(homeDir)
         effectiveToken = resolveToken()
 
         step("连接后端（gateway ensure）")
-        var parsed = runEnsure() ?: return
+        var parsed = runEnsure() ?: return@withLock
         if (parsed is EnsureVerdict.Unavailable && GatewayEnsure.isStaleHostOccupancy(parsed)) {
             // 上一轮 gateway 半死（优雅关闭超时被取消）却还占着 host：新 ensure 会以 75 拒绝。
             // 上游给的接管路径就是 `gateway run --replace`，清完场再 ensure 一次（#13）。
             step("接管被占用的后端（host 上有个未发布 served set 的 gateway）")
             takeoverStaleHost()
-            parsed = runEnsure() ?: return
+            parsed = runEnsure() ?: return@withLock
         }
 
         when (parsed) {
@@ -176,6 +192,11 @@ class GatewayAttachBackendProvider(
         )
         val result = try {
             withContext(Dispatchers.Default) { runner.run(spec) }
+        } catch (cancelled: CancellationException) {
+            // 调用方被取消（例如就绪后 `ShellState` 重启 gateway）：这是**正常收尾**，不是启动失败。
+            // 若在这里 fail()，会把已经置好的 Ready 覆盖成 Failed，界面上弹"后端启动失败 gateway ensure"。
+            // 必须原样重抛，让取消语义继续传播。
+            throw cancelled
         } catch (failure: Throwable) {
             fail("无法执行 gateway ensure", failure.message ?: failure::class.java.name)
             return null

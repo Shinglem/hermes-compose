@@ -83,6 +83,9 @@ object ClientPrompt {
         numbers and line highlighting, LaTeX via ${'$'}...${'$'} inline and ${'$'}${'$'}...${'$'}${'$'} blocks, and images with
         click-to-zoom. Prefer these over flat plain-text layouts — do not avoid tables, math or
         code fences just because this is not a GUI chat surface.
+        The user CAN attach images to a message: attachments arrive as image input in the same
+        turn as the prompt text, so you can see and describe them directly. Do not claim there is
+        no attachment channel when the current message already carries an image.
         MEDIA: tags and ::preview{} widgets are NOT intercepted: they would appear as literal
         text. Never emit them. To hand a file over, state its absolute path — the tool card
         shows an open button that launches the user's configured editor.

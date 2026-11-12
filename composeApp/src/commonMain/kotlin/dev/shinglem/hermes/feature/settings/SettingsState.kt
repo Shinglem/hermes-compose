@@ -180,8 +180,11 @@ class SettingsViewModel(
     /**
      * 追加的 Chromium 启动参数（`app.browser.args`）。
      *
-     * 留空走自动判断（提权运行时补 `--no-sandbox`）；填了会与自动部分合并。
-     * 同样是环境变量注入，**必须重启后端才生效**。
+     * 留空走自动判断（管理员运行时补 `--do-not-de-elevate` 等）；填了会与自动部分合并。
+     *
+     * 这条路径已**不是**修复管理员模式浏览器的主通道：后端在 config 版本 52 之后不再读
+     * `AGENT_BROWSER_ARGS`，运行期真正生效的是 `browser.chromium_args`（由
+     * [BrowserArgsReconciler] 写入，**不需要重启后端**）。这里仍保留写盘，是为了兼容更老的后端。
      */
     fun setBrowserArgs(args: String) {
         val value = args.trim()
@@ -194,7 +197,7 @@ class SettingsViewModel(
             _state.update { it.copy(error = "保存失败：${error.message}") }
             return
         }
-        _state.update { it.copy(browserArgs = value, saved = SettingsSaved(restartRequired = true), error = null) }
+        _state.update { it.copy(browserArgs = value, saved = SettingsSaved(restartRequired = false), error = null) }
     }
 
     /**

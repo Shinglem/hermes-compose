@@ -125,6 +125,8 @@ fun AppShell(
             restClient = container.restClient,
             preferences = container.preferences,
             backend = container.backend,
+            // 只有管理员运行才需要那条开关；非提权时传 null，对账完全不做（不动用户配置）。
+            browserArgsReconciler = container.browserArgsReconciler.takeIf { container.elevated },
         )
     }
     val sessionViewModel: SessionListViewModel = viewModel {
@@ -891,7 +893,12 @@ fun AppShell(
                                     }
                                 },
                                 onSend = { text ->
-                                    chatViewModel.send(text)
+                                    // 附件必须随这一轮提交：`image.attach_bytes` 在 gateway 路线下
+                                    // 只把字节落进 <profile>/cache/images，不建队列，
+                                    // 不回传就永远到不了模型（待修复问题 #19）。
+                                    val attachments = composerViewModel.state.value.attachments
+                                        .mapNotNull { it.toPromptAttachment() }
+                                    chatViewModel.send(text, attachments)
                                     composerViewModel.markSent(text)
                                 },
                                 onStop = chatViewModel::stop,

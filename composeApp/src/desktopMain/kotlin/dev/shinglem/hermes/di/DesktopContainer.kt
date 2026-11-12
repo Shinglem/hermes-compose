@@ -38,6 +38,8 @@ import dev.shinglem.hermes.feature.chat.ChatRepository
 import dev.shinglem.hermes.feature.composer.ComposerRepository
 import dev.shinglem.hermes.feature.model.ModelRepository
 import dev.shinglem.hermes.feature.session.SessionRepository
+import dev.shinglem.hermes.core.backend.CdpProbe
+import dev.shinglem.hermes.feature.settings.BrowserArgsReconciler
 import dev.shinglem.hermes.feature.settings.ConfigRepository
 import dev.shinglem.hermes.feature.settings.CustomEndpointRepository
 import dev.shinglem.hermes.feature.settings.MaintenanceRepository
@@ -148,6 +150,11 @@ object DesktopContainer {
             profilesAdminRepository = ProfilesAdminRepository(restClient),
             modelAdminRepository = ModelAdminRepository(restClient),
             configRepository = ConfigRepository(restClient),
+            browserArgsReconciler = BrowserArgsReconciler(
+                config = ConfigRepository(restClient),
+                profiles = ProfilesAdminRepository(restClient),
+                cdpAlive = { url -> CdpProbe.isReachable(url) },
+            ),
             maintenanceRepository = MaintenanceRepository(restClient),
             officialDesktop = OfficialDesktopLauncherImpl.detect(
                 config = config,

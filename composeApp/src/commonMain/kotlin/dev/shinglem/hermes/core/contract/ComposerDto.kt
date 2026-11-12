@@ -48,7 +48,7 @@ data class FileAttachDto(
     val uploaded: Boolean = false,
 )
 
-/** `image.attach` / `clipboard.paste` / `pdf.attach` 共用的附件结果。 */
+/** `image.attach_bytes` 的附件结果（gateway 侧 `gateway/session_images.py`）。 */
 @Serializable
 data class AttachedImageDto(
     val attached: Boolean = false,
@@ -58,6 +58,9 @@ data class AttachedImageDto(
     val bytes: Long? = null,
     val message: String? = null,
     val filename: String? = null,
+    val name: String? = null,
+    /** `image/png` 之类；缺了就按扩展名推断（admission 只认 png/jpeg/gif/webp）。 */
+    val mime: String? = null,
     @SerialName("pages_attached") val pagesAttached: Int? = null,
 )
 

@@ -34,4 +34,15 @@ val IMAGE_EXTENSIONS: Set<String> = setOf(
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "heic",
 )
 
+/**
+ * 后端 `prompt.submit` 的 admission **只收这四种** mime
+ * （`gateway/session_ingress_media.admit_attachments`）；其余扩展名即使 `attach_bytes`
+ * 能落盘，也一定会在提交时 `invalid_params`。所以附加阶段就要拒绝，别让用户等到发送才失败。
+ */
+val SUBMITTABLE_IMAGE_EXTENSIONS: Set<String> = setOf("png", "jpg", "jpeg", "gif", "webp")
+
+/** 这个路径的图片能否随本轮 `prompt.submit` 提交。 */
+fun isSubmittableImagePath(path: String): Boolean =
+    path.substringAfterLast('.', "").lowercase() in SUBMITTABLE_IMAGE_EXTENSIONS
+
 fun isImagePath(path: String): Boolean = path.substringAfterLast('.', "").lowercase() in IMAGE_EXTENSIONS

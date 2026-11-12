@@ -12,6 +12,7 @@ import dev.shinglem.hermes.core.contract.toPlainText
 import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.error.ErrorMapper
 import dev.shinglem.hermes.core.time.TimeFormat
+import dev.shinglem.hermes.feature.composer.PromptAttachment
 import dev.shinglem.hermes.core.transport.GatewayClient
 import dev.shinglem.hermes.core.transport.RestClient
 import dev.shinglem.hermes.core.transport.RpcJson
@@ -157,13 +158,16 @@ class ChatRepository(
         profile: String?,
         runtimeSessionId: String,
         text: String,
+        /** 随本轮提交的图片；空列表时**不出现该键**（闭集保持最小）。 */
+        attachments: List<PromptAttachment> = emptyList(),
     ): PromptAck {
-        val params = buildJsonObject {
-            put("session_id", runtimeSessionId)
-            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
-            put("text", text)
-            put("submission_id", newRequestId())
-        }
+        val params = submitPromptParams(
+            profile = profile,
+            runtimeSessionId = runtimeSessionId,
+            text = text,
+            attachments = attachments,
+            submissionId = newRequestId(),
+        )
         val result = try {
             // 硬约束 3：ack 超时按 1800s，不能退化成 30s。
             gateway.call(RpcMethods.PROMPT_SUBMIT, params, Timeouts.PROMPT_SUBMIT_MS)
@@ -525,6 +529,38 @@ class ChatRepository(
         /** `session.mutate` 的幂等 id（后端按它去重 receipt）；本地唯一即可。 */
         private fun newRequestId(): String =
             "hdc-m-${Clock.System.now().toEpochMilliseconds()}-${Random.nextInt(100_000, 999_999)}"
+
+        /**
+         * `prompt.submit` 的入参拼装（抽成纯函数便于单测出精确的 wire 形状）。
+         *
+         * `attachments` 的形状必须是 `[{path, mime}]`（`gateway/session_ingress_media.admit_attachments`），
+         * 且**为空时不出现该键** —— 闭集里多一个空数组没有意义，还会让日志噪音变大。
+         */
+        fun submitPromptParams(
+            profile: String?,
+            runtimeSessionId: String,
+            text: String,
+            attachments: List<PromptAttachment>,
+            submissionId: String,
+        ): JsonObject = buildJsonObject {
+            put("session_id", runtimeSessionId)
+            profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
+            put("text", text)
+            put("submission_id", submissionId)
+            if (attachments.isNotEmpty()) {
+                put(
+                    "attachments",
+                    JsonArray(
+                        attachments.map { item ->
+                            buildJsonObject {
+                                put("path", item.path)
+                                put("mime", item.mime)
+                            }
+                        },
+                    ),
+                )
+            }
+        }
     }
 }
 

@@ -123,10 +123,10 @@ fun NotificationsPage(
 /**
  * 「桌面 → 浏览器」：让 agent 操作的浏览器可见。
  *
- * 开关最终变成后端子进程的 `AGENT_BROWSER_HEADED` 环境变量，所以**改完要重启后端**。
+ * `headed` 最终变成后端子进程的 `AGENT_BROWSER_HEADED` 环境变量，所以**改完要重启后端**。
+ * `args` 走的是后端 `browser.chromium_args`（`PUT /api/config` 深合并），**改完即时生效**。
  * 后端的浏览器可执行文件不用配：payload 里已随包带 PM 管理的 Chromium
- * （`hermes/tools/chromium-1208/`），后端每次调 agent-browser 都显式传
- * `AGENT_BROWSER_EXECUTABLE_PATH`。
+ * （`hermes/tools/chromium-1208/`）。
  */
 @Composable
 fun BrowserPage(
@@ -166,14 +166,15 @@ fun BrowserPage(
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Text(
             text = buildString {
-                append("改动需要**重启后端**才生效（走环境变量注入）。")
+                append("「显示浏览器窗口」需要**重启后端**才生效（走环境变量注入）；")
+                append("下面的启动参数是写进后端配置的，**即时生效**。")
                 append("\n\n")
                 append("浏览器用的是随包附带的 Chromium，不需要单独安装，也不会往用户目录写文件。")
                 append("空闲超过两分钟后浏览器仍会被自动回收。")
                 append("\n\n")
-                append("已知问题：以管理员运行本程序时，agent 启动 Chromium 可能失败")
-                append("（Chrome exited early (exit code: 0) without writing DevToolsActivePort），")
-                append("上游尚未修复，与上面的开关无关。")
+                append("以管理员运行时会自动追加 --do-not-de-elevate 与 --no-sandbox：")
+                append("Chromium 在管理员令牌下会「自动去提权」（拉起一个普通权限副本后自己退出），")
+                append("后端等不到 DevToolsActivePort 就报 Chrome exited early；加上这个开关即可避免。")
             },
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -184,7 +185,7 @@ fun BrowserPage(
 /**
  * Chromium 启动参数编辑框。
  *
- * 留空 = 只走自动判断（提权运行时补 `--no-sandbox,--disable-dev-shm-usage`）。
+ * 留空 = 只走自动判断（管理员运行时补 `--do-not-de-elevate,--no-sandbox,--disable-dev-shm-usage`）。
  * 逐字落盘会把半个参数写进配置，所以用「保存」提交，失焦不提交。
  */
 @Composable
@@ -208,11 +209,10 @@ private fun ChromiumArgsEditor(args: String, onArgsChange: (String) -> Unit) {
             text = buildString {
                 append("逗号分隔，会追加到自动参数之后（不是替换）。")
                 append("\n\n")
-                append("以管理员运行时自动加 ")
-                append("--no-sandbox,--disable-dev-shm-usage")
-                append("：Chromium 在管理员令牌下拒绝启用自身沙箱，不加就")
-                append("「Chrome exited early (exit code: 0) without writing DevToolsActivePort」。")
-                append("非提权运行时不加，保持默认隔离。")
+                append("以管理员运行时会自动加 --do-not-de-elevate：Chromium 在管理员令牌下会")
+                append("「自动去提权」（拉起普通权限副本后自己退出），backend 等不到 DevToolsActivePort")
+                append("就报「Chrome exited early (exit code: 0)」。该开关同时补 --no-sandbox")
+                append("（管理员令牌下它拒绝启用自身沙箱）。非提权运行时不加，保持默认隔离。")
             },
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

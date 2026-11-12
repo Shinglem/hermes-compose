@@ -15,6 +15,7 @@ import dev.shinglem.hermes.core.transport.GatewayClient
 import dev.shinglem.hermes.core.transport.GatewayEvent
 import dev.shinglem.hermes.core.transport.GatewayEventTypes
 import dev.shinglem.hermes.feature.composer.ComposerSessionContext
+import dev.shinglem.hermes.feature.composer.PromptAttachment
 import dev.shinglem.hermes.feature.composer.RuntimeHandle
 import dev.shinglem.hermes.feature.model.ModelCatalog
 import dev.shinglem.hermes.feature.model.ModelRepository
@@ -406,9 +407,10 @@ class ChatViewModel(
     fun reload(profile: String?, sessionId: String?) = open(profile, sessionId, force = true)
 
     /** 发送一条用户消息（Markdown 源码原样提交，不做任何改写）。 */
-    fun send(text: String) {
+    fun send(text: String, attachments: List<PromptAttachment> = emptyList()) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty()) return
+        // 只有附件没有文字也要能发：后端接受空 text + attachments。
+        if (trimmed.isEmpty() && attachments.isEmpty()) return
         val current = _state.value
         val key = current.key ?: return
         if (current.sending) return
@@ -420,7 +422,15 @@ class ChatViewModel(
                 // 归属由"发送时是否正在生成"决定，而不是 ack 的 status：
                 // 后端对新会话的首条消息也回 `queued`（agent 还没起来），那条显然属于这一轮。
                 val wasBusy = current.isBusy
-                val ack = repository.submitPrompt(key.profile, runtimeId, trimmed)
+                if (attachments.isNotEmpty()) {
+                    // 附件路径与 mime 是 admission 的硬约束；先记一条，失败时能和后端的
+                    // invalid_params 对上号（见 `.design/待修复问题.md` #19）。
+                    Log.info(
+                        "prompt.submit 带附件 ${attachments.size} 个：" +
+                            attachments.joinToString(", ") { "${it.path}(${it.mime})" },
+                    )
+                }
+                val ack = repository.submitPrompt(key.profile, runtimeId, trimmed, attachments)
                 Log.info(
                     "prompt.submit ack status=${ack.status} admission=${ack.admissionId} " +
                         "userRowId=${ack.userRowId} wasBusy=$wasBusy",

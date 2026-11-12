@@ -194,12 +194,21 @@ data class BrowserSection(
     /**
      * 追加的 Chromium 启动参数（`AGENT_BROWSER_ARGS`，逗号分隔）。
      *
-     * 留空即只走自动判断：**以管理员运行时**自动补 `--no-sandbox,--disable-dev-shm-usage`。
-     * 需要这一条的原因是 Chromium 在管理员令牌下拒绝启用自身沙箱，不加就
-     * `Chrome exited early (exit code: 0) without writing DevToolsActivePort`；
-     * 而后端的 `_needs_chromium_sandbox_bypass()` 只判 Linux root / Docker / AppArmor，**Windows 恒 false**。
+     * 留空即只走自动判断：**以管理员运行时**自动补
+     * `--do-not-de-elevate,--no-sandbox,--disable-dev-shm-usage`。
      *
-     * 这个字段与自动部分**合并**（去重），所以填 `--remote-debugging-port=9333` 不会丢掉 `--no-sandbox`。
+     * `--do-not-de-elevate` 是关键那一条：管理员令牌下 Chromium 会「自动去提权」——
+     * 主进程取 `explorer.exe` 的令牌拉起一个中完整性副本后自己 `exit 0`，而后端
+     * `_wait_for_devtools()` 先读端口文件再 `poll()` 判生死，父进程先死就误报
+     * `Chrome exited early (exit code: 0) without writing DevToolsActivePort`。
+     * 实测只加 `--no-sandbox` 仍然 `exit 0`，加了这个开关才稳。
+     * 后端 `_needs_chromium_sandbox_bypass()` 只判 Linux root / Docker / AppArmor，Windows 恒 false。
+     *
+     * ⚠️ 后端 config 版本 52 之后不再读这个环境变量（只在 51→52 迁移里用过一次）。
+     * 管理员模式的真正修复由 `BrowserArgsReconciler` 写进后端 `browser.chromium_args` 完成；
+     * 这里保留是为了兼容更老的后端。
+     *
+     * 这个字段与自动部分**合并**（去重），所以填 `--remote-debugging-port=9333` 不会丢掉自动段。
      */
     val args: String = "",
 )
