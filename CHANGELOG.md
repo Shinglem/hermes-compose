@@ -5,6 +5,62 @@
 
 ---
 
+## [0.5.7] · 2026-11-13（hermes 0.23.0）
+
+> **完整包版本**：tag `v0.5.7-0.23.0`，由 CI `desktop-release` 构建。
+> 纯桌面外壳（不含 payload）；payload 与工具链不变：hermes 0.23.0 / `toolchain-v1`。
+
+### 修复
+
+- **管理员运行时 agent 的浏览器起不来**（`Chrome exited early (exit code: 0) without writing
+  DevToolsActivePort`）。根因不是权限不足，也不是沙箱 —— 是 Chromium 在管理员令牌下
+  **自动去提权**：主进程取 `explorer.exe` 的令牌拉起一个中完整性副本后**自己 `exit 0`**
+  （`base/win/elevation_util.cc::RunDeElevated`），而后端 `_wait_for_devtools()` 是
+  「先读端口文件、再 `poll()` 判生死」，父进程先死就判失败（浏览器其实已经起来了）。
+  只加 `--no-sandbox` 解决不了，实测仍然 `exit 0`。
+
+  现在以管理员运行时自动把 **`--do-not-de-elevate`** 合并进各 profile 的
+  `browser.chromium_args`（走 `PUT /api/config` 深合并，不重启后端、下一次调用即生效）。
+  实测：`launch_chromium()` 1–6 秒返回 `cdp_url`。
+
+- **`browser.cdp_url` 旁路掉上面的修复**。CDP 端点优先级是
+  `live /browser connect` > `BROWSER_CDP_URL` > `browser.cdp_url` > 自动拉起；只要 `cdp_url`
+  有值，agent 就**不会**自己启动浏览器，而是去连那个地址。历史遗留配置把本机钉在
+  `cdp_url: http://127.0.0.1:9222` + 一个要手工 `start/stop` 的常驻 Chromium 上，
+  忘了启动就是 `WinError 10061`，而且报错完全看不出是配置问题。
+
+  现在对账会清理**指向 loopback 且端口无人监听**的 `cdp_url`（清成 `""` 并记 WARN）。
+  指向别的机器 / 云浏览器的地址一律不动；本机活着的调试浏览器也保留 —— 判定用裸 TCP connect，
+  不看 HTTP 状态码（`/json/version` 对 `HEAD` 返 405、对默认 profile 返 404，按状态码会误清活配置）。
+
+- **「后端启动失败 / StandaloneCoroutine was cancelled」弹窗**。`backend.start()` 正在跑
+  `gateway ensure` 时，`GatewayClient` 第 3 次重连失败会回调 `revalidate()` 再跑一次；
+  先完成的那个成功置 `Ready`，随后 `ShellState` 重启 gateway 取消了后一个协程，
+  `CancellationException` 被 `catch (Throwable)` 吞掉当成启动失败，**把已就绪的状态覆盖成失败**。
+  现在 `ensureMutex` 串行化两次 ensure，并让取消原样传播（取消是正常收尾，不是故障）。
+
+- **附件发不出去，agent 回「这是 TUI / 没有附件通道」**（#19）。`image.attach_bytes` 在
+  gateway 路线下只把字节落进 `<profile>/cache/images/`，**不建会话队列**，必须由客户端把引用
+  随下一条 `prompt.submit` 回传；而客户端此前从不发 `attachments`，图片永远到不了模型
+  （界面却显示附加成功，属于静默丢图）。
+
+  现在：`prompt.submit` 带 `attachments: [{path, mime}]`（为空时不发该键）；
+  `ComposerAttachment` 记真实 `path`/`mime`；`AttachedImageDto` 补 `mime`/`name`；
+  `.bmp` / `.heic` 在**附加阶段**就拒绝（admission 只收 png/jpeg/gif/webp，拖到发送才失败等于丢图）；
+  `ClientPrompt.RENDERING` 补一句「用户可以附加图片，会作为本轮输入一并送达」。
+  **后端一行未改。**
+
+### 升级
+
+- 覆盖 `bin/App.jar` 即可（`lib/` 与 payload 无变化）。
+- **不需要手工改后端配置**：以管理员启动时，客户端会自愈
+  `browser.chromium_args`（补 `--do-not-de-elevate`）与失效的 `browser.cdp_url`。
+- `C:\ai\hermes-desktop-compose\cdp-chrome.ps1` 这类**手工启动 CDP 浏览器的脚本可以停用**。
+- 首次启动时 `data/logs/desktop.log` 会出现一行
+  `浏览器参数对账：已为 … 追加 --do-not-de-elevate`，属正常。
+
+---
+
 ## [0.5.6] · 2026-11-10（hermes 0.23.0）
 
 > **完整包版本**：tag `v0.5.6-0.23.0`，由 CI `desktop-release` 构建。
@@ -851,10 +907,10 @@ jlink 裁剪运行时、原生启动器打包、单实例与自启任务清理�
 
 | 数字 | 在哪 | 谁生成 | 谁消费 |
 |---|---|---|---|
-| `appVersion = "0.4.2"` | `composeApp/build.gradle.kts` | 手工 | jpackage 的 `packageVersion` / `-Djpackage.app-version`、启动器 cfg、发布资产文件名 |
+| `appVersion = "0.5.7"` | `composeApp/build.gradle.kts` | 手工 | jpackage 的 `packageVersion` / `-Djpackage.app-version`、启动器 cfg、发布资产文件名 |
 | `v<桌面版本>-<hermes版本>` | GitHub Release tag | `desktop-release` 按输入拼 | 发布资产入口、`gh release download` |
 
-**tag 就是唯一版本号**，形如 `v0.4.0-0.22.5`：前半是桌面端版本（对应 `appVersion`），
+**tag 就是唯一版本号**，形如 `v0.5.7-0.23.0`：前半是桌面端版本（对应 `appVersion`），
 后半是配套的 Hermes payload 版本（`Shinglem/hermes-bundle` 的 tag）。
 `appVersion` 只影响 exe 的属性与 cfg，不回写 tag。
 
@@ -863,7 +919,7 @@ jlink 裁剪运行时、原生启动器打包、单实例与自启任务清理�
 
 | Release | tag 形式 | 资产 |
 |---|---|---|
-| 桌面端 | `v0.5.5-0.23.0` | `hermes-desktop-compose-0.5.5-0.23.0-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
+| 桌面端 | `v0.5.7-0.23.0` | `hermes-desktop-compose-0.5.7-0.23.0-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
 | 工具链 | `toolchain-v1` | `launcher-windows-x64.zip` / `runtime-windows-x64.zip` / `SHA256SUMS.txt` |
 | payload | 另一个仓库 `Shinglem/hermes-bundle` 的 `v0.23.0` | payload 压缩分卷 |
 

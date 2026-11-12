@@ -94,6 +94,14 @@
 | `session.history` | REST `GET /api/sessions/{id}/messages` |
 | `image.attach`（路径）/ `clipboard.paste` / `input.detect_drop` | `image.attach_bytes`（base64）；剪贴板与拖放由客户端自己做 |
 
+> ⚠️ **`image.attach_bytes` 在 `gateway` 路线下只落盘、不入队**：它把字节写到
+> `<profile>/cache/images/upload_*` 并返回 `{attached, path, mime, name, text}`，
+> 客户端**必须**在下一条 `prompt.submit` 里回传 `attachments: [{path, mime}]`，
+> 由 `session_ingress_media.admit_attachments()` 收成不可变媒体引用才会进模型
+> （上限 10 个、mime ∈ `image/{png,jpeg,gif,webp}`、父目录必须等于 `get_image_cache_dir()`）。
+> 只有 `isolated` 路线（stdio sidecar）才有会话级 `attached_images` 队列、下一次提交自动消费。
+> 客户端自 **v0.5.7** 起已回传（`待修复问题.md` #19 已修）。
+
 **分支 / 复制 / 纠偏 / 会话控制**（v0.3.0 起用）
 
 | 方法 | 入参要点 | 返回 / 语义 |
