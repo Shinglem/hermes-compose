@@ -1,6 +1,7 @@
 package dev.shinglem.hermes
 
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -15,14 +16,25 @@ import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.rememberWindowState
 import dev.nucleusframework.application.DecoratedWindow
 import dev.nucleusframework.application.nucleusApplication
+import dev.nucleusframework.core.runtime.SingleInstanceManager
+import dev.nucleusframework.window.TitleBar
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.material3.Text
+import androidx.compose.material3.MaterialTheme
 import dev.shinglem.hermes.core.app.AutostartInfo
+import dev.shinglem.hermes.core.config.AppOptionsHolder
+import dev.shinglem.hermes.shell.window.rememberHermesTitleBarStyle
 import dev.shinglem.hermes.ui.notification.NotificationOverlay
+import dev.shinglem.hermes.ui.theme.HermesTheme
 import dev.shinglem.hermes.core.app.Elevation
 import dev.shinglem.hermes.core.app.ElevationRelaunch
 import dev.shinglem.hermes.core.app.ProductInfo
 import dev.shinglem.hermes.core.app.RestartHandover
 import dev.shinglem.hermes.core.app.ScheduledAutostart
 import dev.shinglem.hermes.shell.entry.SingleInstanceConfig
+import dev.shinglem.hermes.shell.entry.SingleInstanceProbe
 import dev.shinglem.hermes.shell.tray.NucleusTray
 import dev.shinglem.hermes.core.backend.BackendBootState
 import dev.shinglem.hermes.core.config.AutostartMode
@@ -84,18 +96,6 @@ private fun startupHome(): File = runCatching {
 }.getOrElse { File(System.getProperty("user.dir") ?: ".") }
 
 /**
- * **已废弃（ADR-066）**：单实例改由 Nucleus 判定，第二实例在 `nucleusApplication` 内部
- * 写完 restore 请求后自行 `exitProcess(0)`，永不回到我们的代码。
- *
- * 保留这个函数只为说明一件事：**"唤醒失败给反馈"这条能力已被放弃**（用户确认）。
- * 若将来要恢复，需要在 Nucleus 之外另建一条 IPC 探针，而不是加回这里的对话框。
- */
-@Suppress("unused")
-private fun exitAsSecondInstanceLegacy(): Nothing {
-    exitProcess(EXIT_ALREADY_RUNNING)
-}
-
-/**
  * 计划任务要启动的是**启动器 exe**（`hermes-desktop-compose.exe`），不是 `javaw.exe` ——
  * 后者需要完整 JVM 参数，而参数只在 `app\hermes-desktop-compose.cfg` 里。
  *
@@ -113,10 +113,6 @@ private fun launcherExe(home: File): File? {
 /** 与 `composeApp/build.gradle.kts` 里的 `appName` 保持一致（jpackage 产物文件名）。 */
 private const val APP_NAME = "hermes-desktop-compose"
 
-/** 第二个实例：不算错误，但退出码要能与"正常退出"区分（便于脚本判断）。 */
-private const val EXIT_ALREADY_RUNNING = 0
-
-
 fun main(args: Array<String>) {
     // BossTerm 的默认存储是 `~/.bossterm`（settings / 字体缓存 / 会话快照）。统一改到我们的数据目录，
     // 别在用户家目录留下第二个配置文件夹；终端设置本身由 state.json 注入，不走这个文件。
@@ -131,6 +127,48 @@ fun main(args: Array<String>) {
     startup.info("args", args.joinToString(" ").ifBlank { "(none)" })
     startup.info("cwd", System.getProperty("user.dir").orEmpty())
     startup.info("home", startup.homePath)
+
+    // ── 第二实例提前退出：必须在「解析配置 / 起后端」之前（S6 实测优化）──────────────
+    // 原来要等 `nucleusApplication` 才判定，第二实例因此把解析配置 → 起后端 → 自启对账
+    // 整套跑完才退出（实测到 autostart 日志就 ~2s，用户感知是「点了要等好几秒，然后什么都没发生」）。
+    //
+    // 这里**只读探测**，不占锁：真正的锁仍由 Nucleus 在 `nucleusApplication` 里占，
+    // 它的两个回调（`DeepLinkHandler.writeUriTo` / `SingleInstanceRestoreBus.fire`）才能正确装配。
+    // 详见 `shell/entry/SingleInstanceProbe.kt` 的类注释（S6 实测踩过：自己提前占锁会让唤醒失效）。
+    val home = startupHome()
+    when (val lock = SingleInstanceConfig.prepare(home)) {
+        is SingleInstanceConfig.Outcome.Ready -> {
+            // **必须在这里就设进 Nucleus**（setter 只允许在第一次 `isSingleInstance()` 之前改）：
+            // 不设的话 `nucleusApplication` 会用默认配置 —— 锁文件落在 `java.io.tmpdir` 下、
+            // 名字按主类派生（实测 `dev.shinglem.hermes.MainKt.lock`），提权/非提权会话的 TEMP
+            // 不同就会互相看不见（这正是 `LockDir` 要自定义目录的原因）。
+            // 探测与真正的判定也必须是**同一个**文件，否则探测永远读不到首实例的锁。
+            SingleInstanceManager.configuration = lock.configuration
+            startup.info(
+                "instance",
+                "lock=${lock.configuration.lockFilePath} id=${lock.configuration.lockIdentifier}",
+            )
+            when (SingleInstanceProbe.probe(lock.configuration)) {
+                SingleInstanceProbe.Verdict.SECOND -> {
+                    val woke = SingleInstanceProbe.requestRestore(lock.configuration)
+                    startup.info("instance", "already running; exited early（未解析配置）wake=$woke")
+                    exitProcess(0)
+                }
+
+                SingleInstanceProbe.Verdict.FIRST ->
+                    startup.info("instance", "first instance（锁目录 ${lock.configuration.lockFilesDir}）")
+
+                // 探测出错不阻断：交给 Nucleus 按原逻辑判定（它自己的兜底是 fail-open 允许双开）。
+                SingleInstanceProbe.Verdict.UNKNOWN ->
+                    startup.warn("instance", "单实例探测失败，交由 Nucleus 判定")
+            }
+        }
+
+        is SingleInstanceConfig.Outcome.Unavailable -> {
+            // Nucleus 在拿不到锁时会 fail-open 返回 true（允许双开）。明确记错误但不阻断。
+            startup.error("instance", "单实例不可用：${lock.reason}（可能允许双开）")
+        }
+    }
 
     // 配置解析在 application{} 之外：失败时只该弹一个原生对话框然后退出，
     // 不要先起一个空窗口再报错。
@@ -152,20 +190,6 @@ fun main(args: Array<String>) {
     NativeNotifications.attachHome(File(startup.homePath))
     NativeNotifications.sync(container.preferences.nativeNotifications)
 
-    val home = startupHome()
-    when (val lock = SingleInstanceConfig.prepare(home)) {
-        is SingleInstanceConfig.Outcome.Ready -> {
-            dev.nucleusframework.core.runtime.SingleInstanceManager.configuration = lock.configuration
-            startup.info("instance", "lock dir=${lock.configuration.lockFilesDir} id=${lock.configuration.lockIdentifier}")
-        }
-
-        is SingleInstanceConfig.Outcome.Unavailable -> {
-            // 不能静默继续：Nucleus 在拿不到锁时会 fail-open 返回 true（允许双开）。
-            // 明确记一条错误，但**不阻断启动** —— 用户宁可双开也不愿打不开。
-            startup.error("instance", "单实例不可用：${lock.reason}（可能允许双开）")
-        }
-    }
-
     // 「重启客户端」拉起的新进程此刻被旧进程的锁挡着，先等它把锁交出来（见 RestartHandover）。
     RestartHandover.parse(args.toList())?.let { predecessor ->
         startup.info("instance", "handover: waiting for predecessor pid=$predecessor")
@@ -174,7 +198,7 @@ fun main(args: Array<String>) {
         }
     }
 
-    // 提权：此刻**尚未持有**互斥量，可以安全地 runas 重启自己。
+    // 提权：第二实例已在上面退出，走到这里的必然是首实例。
     // 交接参数要剥掉：新旧进程之间已经交过一次，提权后的进程不该再等那个（已死的）PID，
     // 万一 PID 被复用还会白等一轮。
     if (container.config.app.elevate == ElevateMode.ASK && !Elevation.isElevated()) {
@@ -196,9 +220,9 @@ fun main(args: Array<String>) {
         }
     }
 
-    // Nucleus 在建窗口时完成单实例判定（`acquireSingleInstanceLock`），第二实例在那里 `exitProcess(0)`
-    // 并写 restore 请求，第一实例自动把窗口拉出。所以这里不再自己占锁。
-    startup.info("instance", "home=${home.absolutePath}（单实例由 Nucleus 判定）")
+    // 单实例锁已在上面（配置解析之前）由 `acquireSingleInstanceLock` 取得；
+    // `nucleusApplication` 内部会再调一次并走 `fileLock != null` 的提前返回分支。
+    startup.info("instance", "home=${home.absolutePath}（单实例已提前判定）")
     // 公式引擎的 native dll 由 ratex 自己解压到 `%LOCALAPPDATA%\RaTeX\…`，解压是「先删后拷」：
     // 目标被别的进程占用时整条公式渲染会**静默**退化成源码。这里提前触发一次并把结果写进日志，
     // 否则「公式显示成源码」只能靠猜（实测踩过：上一个实例没退干净，新实例全篇公式都是源码）。
@@ -301,26 +325,48 @@ fun main(args: Array<String>) {
             icon = appIcon,
             minimumSize = DpSize(windowConfig.minWidth.dp, windowConfig.minHeight.dp),
         ) {
-            App(
-                container = container,
-                onExitRequest = { quit() },
-                terminalContent = { _, modifier ->
-                    TerminalContent(
-                        viewModel = container.terminalViewModel,
-                        modifier = modifier,
+            // 窗口内容整体包在应用主题里 —— 标题栏也必须跟着主题走。
+            // Tao 的 `TitleBar` 不读 `MaterialTheme`，靠 `LocalTitleBarStyle` 取色；把主题开在
+            // 它的外层，再显式传 `style`（见 `shell/window/TitleBarTheme.kt`）。
+            val options by AppOptionsHolder.state.collectAsState()
+            HermesTheme(darkTheme = options.darkTheme(), style = options.ui.style) {
+                // 标题栏（S6）：Tao 的 `DecoratedWindow` **不自带原生标题栏** —— 它在 Windows
+                // 上是无边框窗口，标题/图标/最小化/最大化/关闭全靠 `TitleBar` 这个 Composable
+                // 画（`dev.nucleusframework.window.TitleBar`，由 `DecoratedWindowScope` 提供）。
+                // 它自己处理：拖动整窗、双击最大化、Windows 控制按钮注入、macOS 红绿灯留白。
+                // 不调它 → 窗口就是一个没有标题栏、也没法拖动的方块（S6 首次实跑的实际情况）。
+                TitleBar(style = rememberHermesTitleBarStyle()) {
+                    // Center 区放标题文字；图标与按钮由 Nucleus 处理。
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.align(Alignment.CenterHorizontally),
                     )
-                },
-                onQuoteTerminalSelection = {
-                    val tabId = container.terminalViewModel.state.value.activeTab?.id
-                    val selected = tabId?.let { terminalSelectedText(it) }
-                    if (!selected.isNullOrBlank()) {
-                        TerminalQuoteBridge.publish(selected)
-                    } else if (tabId != null) {
-                        // 没有选中就退一步：取最近 40 行（"把刚才的输出带进对话"是最常见诉求）。
-                        TerminalQuoteBridge.publish(terminalTailText(tabId, 40))
-                    }
-                },
-            )
+                }
+                AppContent(
+                    container = container,
+                    onExitRequest = { quit() },
+                    terminalContent = { _, modifier ->
+                        TerminalContent(
+                            viewModel = container.terminalViewModel,
+                            modifier = modifier,
+                        )
+                    },
+                    onQuoteTerminalSelection = {
+                        val tabId = container.terminalViewModel.state.value.activeTab?.id
+                        val selected = tabId?.let { terminalSelectedText(it) }
+                        if (!selected.isNullOrBlank()) {
+                            TerminalQuoteBridge.publish(selected)
+                        } else if (tabId != null) {
+                            // 没有选中就退一步：取最近 40 行（"把刚才的输出带进对话"是最常见诉求）。
+                            TerminalQuoteBridge.publish(terminalTailText(tabId, 40))
+                        }
+                    },
+                )
+            }
         }
     }
 }

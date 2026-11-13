@@ -1530,7 +1530,8 @@ Decompose `ChildPanels`（`Main` / `Details`，`mode = SINGLE | DUAL | TRIPLE`�
 结果是 AWT 依赖文件从 **10 个降到 3 个**，且 **`java.desktop` 仍需保留在运行时镜像里**
 —— 不要指望靠迁 Tao 裁掉它。
 
-> **单实例与 `--silent` 采用 Nucleus 的机制** —— 见 ADR-066：`enableSingleInstance = true`（静默也占锁），`DecoratedWindow(visible = !silent)`，删掉自研 250 行 + 83 行测试。
+> **单实例与 `--silent` 采用 Nucleus 的机制** —— 见 ADR-066：`enableSingleInstance = true`（静默也占锁），`DecoratedWindow(visible = !silent)`，删掉自研 250 行 + 83 行测试。第二实例在配置解析**之前**只读探测锁并提前退出（73ms，原 ~2s）。
+> **标题栏必须自绘** —— 见 ADR-068：Tao 的 `DecoratedWindow` 在 Windows 上无边框，不调 `TitleBar` 就没有标题栏也不能拖动；它不读 `MaterialTheme`，配色要显式传 `TitleBarStyle`。
 
 **必须保住的能力（不许回归）**：
 
@@ -1739,17 +1740,42 @@ fun runHermesApplication(container: AppContainer, flags: LaunchFlags) =
 4. 强杀后重启：能正常占锁（Nucleus 靠 OS 释放 `FileLock` + `retryLock` 兜底）
 5. 提权实例与非提权实例：**能看到彼此**（锁文件路径相同）—— 需实测，若不成立再退回自研
 
+**验收结果（2026-11-13 真机）**：
+
+| # | 结论 |
+|---|---|
+| 1 | ✅ 静默启动驻留托盘、无可见窗口（用户确认） |
+| 2 | ✅ 第二实例退出、首实例窗口被拉出（用户确认；详见下方"提前退出"） |
+| 3 | 未单独验（本机只有一份包；`LockDir` 按 `<home>` 派生，逻辑等价于旧实现） |
+| 4 | 未单独验（强杀后锁由 OS 释放，`retryLock` 兜底） |
+| 5 | ✅ **不成立的风险已排除**：`ConfigPaths.resolveHome()` 用 `jarDerivedHome()` 从 jar 位置反推，**与进程权限无关**，提权/非提权算出同一 `<home>` → 同一锁文件 |
+
+### 补充：第二实例提前退出（S6 实测优化）
+
+`acquireSingleInstanceLock` 要等 Compose 起来才执行，而它前面已有「解析配置 → 起后端 → 自启对账」，
+第二实例实测要 ~2s 才被判定（用户反馈"第二次启动时 hermes 后端启动有点慢"就是这个）。
+
+改为在配置解析之前**只读探测**一次锁（`shell/entry/SingleInstanceProbe.kt`）：判为第二实例就写唤醒请求后立即退出。
+实测 `start` → `exited early` **73ms**，配置一次都没解析。三条硬约束（都是踩出来的）：
+
+1. **必须先把 `configuration` 设进 Nucleus 再探测**。否则探测读的是默认配置（锁文件在 `java.io.tmpdir`，
+   名字按主类派生：实测 `dev.shinglem.hermes.MainKt.lock`），与 Nucleus 实际用的目录对不上 →
+   探测恒为 FIRST、优化静默失效，但功能看起来仍正常（Nucleus 兜底）。
+2. **探测成功后必须立刻 `release()`**。占住不放会让 Nucleus 把本进程判成第二实例，表现是"永远开不起来"。
+3. **不能自己调 `isSingleInstance()` 提前判定**。首实例拿到锁时 `onLockAcquired` 会用
+   `onRestoreRequest` 去 `watchForRestoreRequests()` —— 那是**唯一**能让"第二实例请求 → 拉出窗口"
+   生效的地方；而配套的 `SingleInstanceRestoreBus.fire()` / `ObserveSingleInstanceRestore` 都是 `internal`，
+   外部抄不全。实测踩过：传空 Lambda 提前判定，第二实例正常退出，但最小化的窗口再也不动了。
+
 **风险与退路**：
 
-- **第 5 条是新增的未知**：自研用 `Local\` 命名对象绕过 `Global\` 特权限定；Nucleus 用用户目录下的锁文件，
-  提权实例读非提权用户的 `AppData` 通常可读，但**用户目录不同**（`C:\Users\A` vs `C:\Windows\System32\config\systemprofile`）
-  会导致路径不同 → **看不到彼此 → 允许双开**。这一条必须先验，不过就退回自研（代码在 git 历史里）。
+- 第 5 条原判为"新增的未知"，实测**不成立**（锁文件路径与权限无关），不需要退回自研。
 - Nucleus 3.0 仍是 dev 版，单实例语义押在它身上；但接触面只在 `shell/entry/` 一处。
 
 **代价与收益**：
 
 - 收益：**-333 行**（250 + 83）、少一套 FFM 命名对象维护、托盘/窗口/单实例三件事用同一套 API。
-- 代价：`--silent` 二次触发会抢前台（不可达）、唤醒失败无反馈（已放弃）、提权/非提权共存待验。
+- 代价：`--silent` 二次触发会抢前台（不可达）、唤醒失败无反馈（已放弃）。
 
 ---
 ## ADR-067 · 通知浮窗保留 AWT 屏幕几何，改用 Tao `SatelliteWindow`
@@ -1785,3 +1811,52 @@ fun runHermesApplication(container: AppContainer, flags: LaunchFlags) =
 **后果**：`NotificationOverlay.kt` 的 `overlayGeometry()` / `stackOffsets()` / `workArea()` /
 `screenScale()` **全部保留不动**，只换渲染宿主（`Window` → `SatelliteWindow`）。
 `stackOffsets` 的纯函数测试（`NotificationStackTest`）不受影响。
+---
+## ADR-068 · 标题栏自绘（Nucleus `TitleBar` + 主题化配色）
+
+**决策**：主窗口标题栏用 Nucleus 的 `TitleBar`（`dev.nucleusframework.window`，`DecoratedWindowScope`
+扩展）自绘，配色由 `rememberHermesTitleBarStyle()`（`shell/window/TitleBarTheme.kt`）从 M3
+`colorScheme` 映射；`TitleBarStyle.metrics` 一律用 Nucleus 默认值，**不覆盖任何尺寸**。
+
+**为什么必须自绘**：Tao 的 `DecoratedWindow` 在 Windows 上是**无边框窗口** —— 它不像
+Compose Desktop 的 `Window` 会带系统标题栏。不调 `TitleBar` 就得到一个"没有标题栏、也没法拖动"
+的方块（v0.6.0 S6 首次真机实跑的实际情况，用户反馈"窗口没有标题栏"）。
+`TitleBar` 自带：拖动整窗、双击最大化、Windows 控制按钮注入、macOS 红绿灯留白。
+
+**为什么必须传 `style`**：`TitleBar` **不读 `MaterialTheme`**，取色走
+`LocalTitleBarStyle`（默认一套固定深灰）。在带主题的窗口里裸调 `TitleBar {}` 得到的是
+「深灰底 + 主题深色字」—— 标题几乎看不见（首次实跑截图确认）。
+
+配色映射（只映射看得见的角色；M3 语义 → `TitleBarColors`）：
+
+| `TitleBarColors` | 取值 | 理由 |
+|---|---|---|
+| `background` / `inactiveBackground` | `surfaceContainer` | 与主界面同族，靠边框和内容区区分，不用纯白/纯黑 |
+| `content` / `controlButtonIconColor` | `onSurfaceVariant` | 标题是次要信息，本就该弱于正文 |
+| `controlButtonIconHoverColor` | `onSurface` | 悬停提亮 |
+| `border` | `outlineVariant` | 与内容区之间的一条细线 |
+| `iconButtonHoveredBackground` | `onSurface` @ 8% | 与 M3 state layer 观感一致 |
+| `iconButtonPressedBackground` | `onSurface` @ 14% | 同上 |
+
+**关闭按钮不染红**：Windows 11 的普通窗口也不做红色关闭按钮，红色只留给对话框。
+
+**配套改动**：`commonMain/App.kt` 拆成 `App()`（主题 + 内容）与 `AppContent()`（只有内容）。
+理由：`Main.kt` 要把「标题栏 + 内容」放进**同一个** `HermesTheme`，否则标题栏落在主题外层，
+拿不到 `colorScheme`。`AppContent` 不允许自己再套主题（套了就是双层，标题栏仍在外层）。
+
+**实测（2026-11-13 真机）**：
+
+| 项 | 结果 |
+|---|---|
+| 标题栏可见，最小化 / 最大化 / 关闭按钮齐全 | ✅ |
+| 双击标题栏（普通 ↔ 最大化） | ✅ `60,60-1556,989` ↔ `-8,30-2568,1400` |
+| 拖动标题栏 | ✅ 横拖 180px 后 `240,60-1736,989` |
+| 亮色（paper）标题文字对比度 | ✅ |
+| 暗色主题（临时改 `options.json` 验，已还原） | ✅ 标题栏同步变暗，无需重启 |
+
+**踩坑**：`TitleBarStyle.metrics` **没有默认值**，必须显式传 `TitleBarMetrics()`（用它的默认值），
+否则编译报 `NO_VALUE_FOR_PARAMETER`。
+
+**代价**：自绘标题栏意味着少了一点"系统原生"（比如 Windows 的吸附布局浮层、Aero Snap 拖到边缘
+仍由 OS 处理，但标题栏高度/按钮外观不跟系统主题档位走）。换来的是标题栏与 M3 配色一致、
+换风格时整窗统一。

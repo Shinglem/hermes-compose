@@ -609,7 +609,7 @@ Windows 实现 = `SetParent` 转 `WS_CHILD` + `SetWindowPos` 定尺寸 + `SetWin
 | **S3** | 传输与契约收敛 | ⏳ 未开始 | 回归绿；`4001` 家族有单测钉住 | v0.6.0 |
 | **S4** | Chat 域重写 | ⏳ 未开始 | `ChatViewModel.kt` 删除；最长文件 ≤ 400 行；`SessionShadow`/`SessionSwitchPlan` 删除 | v0.6.0 |
 | **S5** | Shell 与导航重写 | ⏳ 未开始 | `AppShell.kt` 删除；`SettingsDetailPane` 参数 ≤ 3；`viewModel {` 全仓库为 0 | v0.6.0 |
-| **S6** | 桌面壳迁 Tao | 🟡 **主体完成**（托盘待人工确认） | 六项回归（单实例/提权/自启/托盘/触摸/IME）全过 | v0.6.0 |
+| **S6** | 桌面壳迁 Tao | ✅ **完成**（触摸无法验证，IME 粗测通过） | 六项回归（单实例/提权/自启/托盘/触摸/IME）全过 | v0.6.0 |
 | **S8** | 收尾 | ⏳ 未开始 | §6 验收口径 1–19 全过 | v0.6.0 |
 | **S7** | 内嵌槽位（浏览器面板 + 插件宿主骨架）+ 编辑器槽位与选型 | ⏳ 未开始 | 浏览器面板可用；宿主页面能加载且桥通；编辑器选定并留槽 | **v0.6.1** |
 
@@ -743,6 +743,25 @@ component/chat/
 
 ### S6 · 桌面壳迁 Tao
 
+> **实施状态（2026-11-13）**：✅ 主体完成 + 两项实测修正。实际做法与下面原计划有差异，逐条标注。
+>
+> | 步骤 | 状态 |
+> |---|---|
+> | 1. Main.kt 拆 `shell/` | 🟡 部分（`shell/entry` + `shell/tray` + `shell/window` 已建，`Main.kt` 仍偏大，S8 再拆） |
+> | 2. `application{}` → `nucleusApplication{}` / `Window` → `DecoratedWindow` | ✅ |
+> | 3. 关掉核内单实例锁、保留自研 | ❌ **改为采用 Nucleus 单实例**（ADR-066 初版被推翻） |
+> | 4. Swing 托盘 → `composenativetray` | ✅（用户确认托盘正常） |
+> | 5. `JOptionPane` → 自绘对话框 | ⬜ 仍用 `JOptionPane`（只在致命错误时弹，可留） |
+> | 6. `NotificationOverlay` → Tao | ✅ `DecoratedWindow(transparent)`（ADR-067；`SatelliteWindow` 无 `transparent` 参数） |
+> | 7. `AppFocus` 窗口焦点 | ⬜ 未动 |
+> | 8. 六项回归 | 🟡 单实例/提权自启/托盘 ✅、IME 粗测 ✅、触摸 ❌ 无设备 |
+>
+> **两项实测修正（原计划没有）**：
+> - **标题栏必须自绘**（ADR-068）：Tao 的 `DecoratedWindow` 在 Windows 上无边框，不调 `TitleBar`
+>   就没有标题栏也不能拖动；且 `TitleBar` 不读 `MaterialTheme`，配色要显式传 `TitleBarStyle`。
+> - **第二实例在配置解析前就退出**（ADR-066 补充）：只读探测锁（`shell/entry/SingleInstanceProbe.kt`）
+>   → 判为第二实例写唤醒请求后立即退出。实测 73ms（原 ~2s）。三条硬约束见 ADR-066 补充节。
+
 1. `Main.kt` 拆成 `shell/` 包：`DesktopEntry`（参数/单实例/提权自启）+ `HermesApplication`（窗口与组合）
 2. `application {}` → `nucleusApplication(backend = Tao)`；`Window` → `DecoratedWindow`
 3. **关掉核内单实例锁**（§2.10 判定法），保留自研 `CreateMutexW` + `--silent` 语义
@@ -825,7 +844,7 @@ component/chat/
 | **Y 方案的立论基础未实测**：「back stack 里 Component 不销毁、继续跑」 | S0 第 3 步专门验证；不成立则整个 Y 的前提塌了，退回 X |
 | **Nucleus 3.0 无稳定版 + 单人主力** | ① 版本在 `libs.versions.toml` 钉死 dev 号；② 全部接触面收在 `shell/`，必要时 vendor / fork 自己打补丁；③ S0 第 4 步不过就整段推后 |
 | ~~`nucleusApplication` 的核内单实例锁与自研锁冲突~~ | **已消除**：改用 Nucleus 单实例（ADR-066），自研 333 行删除 |
-| **提权/非提权实例可能互相看不见**（新增） | Nucleus 用用户目录锁文件，提权进程的 `AppData` 可能是 `systemprofile` → 路径不同 → 允许双开。**S6 第 5 条验，不过退回自研** |
+| **提权/非提权实例可能互相看不见**（新增） | ~~Nucleus 用用户目录锁文件，提权进程的 `AppData` 可能是 `systemprofile` → 路径不同 → 允许双开~~ **已排除**：`ConfigPaths.resolveHome()` 用 `jarDerivedHome()` 从 jar 位置反推，与进程权限无关，两者算出同一 `<home>` → 同一锁文件 |
 | **Tao 触摸/IME 回归** | S0 第 4 步 + S6 第 8 步各验一次；保留 `Modifier.touchDragScroll` 退路 |
 | **Nucleus 许可证待核**（GitHub 识别 `NOASSERTION`） | 引入前读 LICENSE 原文；不合规则不引入（`composenativetray` 同批） |
 | **`NativeView` 子窗口在 resize/DPI 切换下裂** | **v0.6.1** 的验点；不通过则浏览器面板退 L0（CDP 像素流） |
@@ -879,6 +898,7 @@ component/chat/
 | 2026-11-13 | **ADR-066：单实例与 `--silent` 保留自研实现**。读双方源码后确认 Nucleus 缺三条已定论语义（`--silent` 不唤醒 / `--silent` 不建主窗口 / 按 home 隔离便携包），且 `ObserveSingleInstanceRestore` 是 internal 无法从外部拦。因此 `enableSingleInstance = false`，S6 的单实例部分是**纯搬家**（工作量反而变小） | 用户提问「单实例和 silent 能否靠 Nucleus 实现」，逐条对比后否决 |
 | 2026-11-13 | **ADR-066 修正（推翻初版）**：改为**采用** Nucleus 单实例。复核发现初版两条判断是错的（`DecoratedWindow(visible=)` 与 `SingleInstanceManager.configuration` 都是公开 API）；属实的"二次触发抢前台"场景不可达（任务只有 LogonTrigger 无重复），"唤醒失败无反馈"用户已接受。代价：删自研 250 行 + 83 行测试；新增待验项：提权/非提权实例可能互相看不见 | 用户追问"静默实例能否按 Nucleus 方式占锁"，重新核查后推翻 |
 | 2026-11-13 | **S6 主体完成**：`application{}`→`nucleusApplication{}`、`Window`→`DecoratedWindow`、Swing 托盘→`NucleusTray`、通知窗→`DecoratedWindow(transparent)`；删除自研 `SingleInstance.kt`(250)+`SingleInstanceTest.kt`(83)。真机验证：锁文件 `HermesCompose-28ee0fc6.lock` 已建、第二实例立即退出只剩 1 进程、主窗口正常（gateway 已连、sessions count=1）。新增 ADR-067（通知窗保留 AWT 屏幕几何，`taoAwtProbe` 实测可用但 `MouseInfo` 返回垃圾值）。**遗留**：托盘图标需人工看系统托盘确认；`DeepLinkHandler` 偶发 restore_request 读取 ERROR（Nucleus 内部，无深链时是噪音） | S6 实施 |
+| 2026-11-13 | **S6 两项用户反馈修正**（用户确认托盘与 `--silent` 均正常）：① **标题栏自绘**（ADR-068）—— Tao 的 `DecoratedWindow` 在 Windows 上无边框，不调 `TitleBar` 就没有标题栏也不能拖动；且它不读 `MaterialTheme`，必须显式传 `TitleBarStyle`（否则深灰底 + 深色字看不清）。`App.kt` 拆出 `AppContent` 让标题栏与内容共享同一主题。实测：双击最大化 / 拖动 / 亮暗主题切换均正常。② **第二实例提前退出**（ADR-066 补充）—— 在配置解析前只读探测锁（`shell/entry/SingleInstanceProbe.kt`），判为第二实例写唤醒请求后立即退出，实测 **73ms**（原 ~2s，用户反馈"第二次启动后端启动有点慢"）。三条硬约束：必须先把 `configuration` 设进 Nucleus 再探测、探测成功必须立刻 `release()`、不能自己调 `isSingleInstance()`（会丢掉 `watchForRestoreRequests` → 唤醒失效）。591 测试全绿（+8 个 `SingleInstanceProbeTest`） | 用户反馈"窗口没有标题栏" + "第二次启动后端启动有点慢" |
 
 ---
 
