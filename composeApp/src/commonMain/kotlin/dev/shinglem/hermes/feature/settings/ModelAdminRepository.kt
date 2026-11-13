@@ -6,10 +6,10 @@ import dev.shinglem.hermes.core.contract.ModelSetResultDto
 import dev.shinglem.hermes.core.contract.MoaConfigDto
 import dev.shinglem.hermes.core.contract.MoaConfigUpdateDto
 import dev.shinglem.hermes.core.transport.RestClient
+import dev.shinglem.hermes.core.transport.RestRepository
 import dev.shinglem.hermes.core.transport.RestMethod
 import dev.shinglem.hermes.core.transport.RpcJson
 import dev.shinglem.hermes.core.transport.Timeouts
-import dev.shinglem.hermes.core.transport.withProfileQuery
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -26,11 +26,10 @@ import kotlinx.serialization.json.put
  * 对**新会话**生效）。两者不能混用 —— 页面上写的值要能在下一次开新会话时体现。
  */
 class ModelAdminRepository(
-    private val rest: RestClient,
-) {
+    rest: RestClient,
+) : RestRepository(rest) {
     suspend fun info(profile: String?): ModelInfoAdminDto {
-        val element = rest.get(withProfileQuery("/api/model/info", profile), Timeouts.WRITE_MS)
-        return RpcJson.json.decodeFromJsonElement(ModelInfoAdminDto.serializer(), element)
+        return rest.getAs(withProfile("/api/model/info", profile), ModelInfoAdminDto.serializer(), Timeouts.WRITE_MS)
     }
 
     /**
@@ -55,13 +54,13 @@ class ModelAdminRepository(
             if (confirmExpensive) put("confirm_expensive_model", true)
             profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
         }
-        val element = rest.send(
+        return rest.sendAs(
             RestMethod.POST,
-            withProfileQuery("/api/model/set", profile),
+            withProfile("/api/model/set", profile),
+            ModelSetResultDto.serializer(),
             body,
             Timeouts.CATALOG_MS,
         )
-        return RpcJson.json.decodeFromJsonElement(ModelSetResultDto.serializer(), element)
     }
 
     /** 重置全部辅助模型槽位（后端约定的哨兵 `task="__reset__"`）。 */
@@ -74,25 +73,22 @@ class ModelAdminRepository(
     )
 
     suspend fun auxiliary(profile: String?): AuxModelsDto {
-        val element = rest.get(withProfileQuery("/api/model/auxiliary", profile), Timeouts.CATALOG_MS)
-        return RpcJson.json.decodeFromJsonElement(AuxModelsDto.serializer(), element)
+        return rest.getAs(withProfile("/api/model/auxiliary", profile), AuxModelsDto.serializer(), Timeouts.CATALOG_MS)
     }
 
     suspend fun moa(profile: String?): MoaConfigDto {
-        val element = rest.get(withProfileQuery("/api/model/moa", profile), Timeouts.CATALOG_MS)
-        return RpcJson.json.decodeFromJsonElement(MoaConfigDto.serializer(), element)
+        return rest.getAs(withProfile("/api/model/moa", profile), MoaConfigDto.serializer(), Timeouts.CATALOG_MS)
     }
 
     /** 保存 MoA 配置；`422` 表示提交里有半填/非法预设（客户端应当先自检）。 */
-    suspend fun saveMoa(profile: String?, update: MoaConfigUpdateDto): MoaConfigDto {
-        val element = rest.send(
+    suspend fun saveMoa(profile: String?, update: MoaConfigUpdateDto): MoaConfigDto =
+        rest.sendAs(
             RestMethod.PUT,
-            withProfileQuery("/api/model/moa", profile),
+            withProfile("/api/model/moa", profile),
+            MoaConfigDto.serializer(),
             RpcJson.json.encodeToJsonElement(MoaConfigUpdateDto.serializer(), update).jsonObject,
             Timeouts.WRITE_MS,
         )
-        return RpcJson.json.decodeFromJsonElement(MoaConfigDto.serializer(), element)
-    }
 }
 
 /** 后端约定的"重置全部辅助槽位"哨兵。 */

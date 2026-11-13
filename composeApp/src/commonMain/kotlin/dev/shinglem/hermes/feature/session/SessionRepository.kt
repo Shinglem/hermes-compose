@@ -16,12 +16,12 @@ import dev.shinglem.hermes.core.log.Log
 import dev.shinglem.hermes.core.time.TimeFormat
 import dev.shinglem.hermes.core.transport.GatewayClient
 import dev.shinglem.hermes.core.transport.RestClient
+import dev.shinglem.hermes.core.transport.RestRepository
 import dev.shinglem.hermes.core.transport.RestMethod
 import dev.shinglem.hermes.core.transport.RpcJson
 import dev.shinglem.hermes.core.transport.SessionFence
 import dev.shinglem.hermes.core.transport.mutateSession
 import dev.shinglem.hermes.core.transport.Timeouts
-import dev.shinglem.hermes.core.transport.withProfileQuery
 import io.ktor.http.encodeURLParameter
 import kotlin.random.Random
 import kotlin.time.Clock
@@ -39,8 +39,8 @@ import kotlinx.serialization.json.put
 /** `session` 域的数据入口：只碰传输层，不 import 任何 Compose 类型。 */
 class SessionRepository(
     private val gateway: GatewayClient,
-    private val rest: RestClient,
-) {
+    rest: RestClient,
+) : RestRepository(rest) {
     suspend fun listSessions(profile: String?, limit: Int = DEFAULT_LIMIT): List<SessionSummary> {
         // 走 REST 而不是 RPC `session.list`：0.23.0 的 RPC 默认 `scope=live`（只给运行中的会话），
         // 历史会话要 `scope=stored`；官方 Desktop 也是直接读 `/api/sessions`（见 RestClient 注释）。
@@ -187,7 +187,7 @@ class SessionRepository(
     /** 后端 `/api/sessions/search` 的原始结果（内容检索，命中带 snippet）。 */
     suspend fun searchSessions(profile: String?, query: String): List<SessionSearchResultDto> {
         if (query.isBlank()) return emptyList()
-        val path = withProfileQuery("/api/sessions/search?q=${query.encodeURLParameter()}", profile)
+        val path = withProfile("/api/sessions/search?q=${query.encodeURLParameter()}", profile)
         val element = try {
             rest.get(path, Timeouts.DEFAULT_MS)
         } catch (throwable: Throwable) {
@@ -227,7 +227,7 @@ class SessionRepository(
      * 409（别人改过、revision 变了）时重取一次 revision 再试一遍，仍失败才算失败。
      */
     private suspend fun mutateSidebar(profile: String?, sessionId: String, fields: JsonObject) {
-        val path = withProfileQuery("/api/sessions/$sessionId", profile)
+        val path = withProfile("/api/sessions/$sessionId", profile)
         var attempt = 0
         while (true) {
             val snapshot = mutationSnapshot(profile, sessionId)
@@ -251,7 +251,7 @@ class SessionRepository(
 
     /** `GET /api/sessions/{id}/mutation-snapshot`：fence 的版本号（`runtime_revision` / `runtime_generation`）。 */
     private suspend fun mutationSnapshot(profile: String?, sessionId: String): MutationSnapshot? = runCatching {
-        val element = rest.get(withProfileQuery("/api/sessions/$sessionId/mutation-snapshot", profile))
+        val element = rest.get(withProfile("/api/sessions/$sessionId/mutation-snapshot", profile))
         val obj = element as? JsonObject ?: return@runCatching null
         val revision = obj["runtime_revision"]?.jsonPrimitive?.intOrNull ?: return@runCatching null
         MutationSnapshot(revision, obj["runtime_generation"]?.jsonPrimitive?.intOrNull)

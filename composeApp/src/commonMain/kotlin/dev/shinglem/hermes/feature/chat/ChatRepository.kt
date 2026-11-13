@@ -15,6 +15,7 @@ import dev.shinglem.hermes.core.time.TimeFormat
 import dev.shinglem.hermes.feature.composer.PromptAttachment
 import dev.shinglem.hermes.core.transport.GatewayClient
 import dev.shinglem.hermes.core.transport.RestClient
+import dev.shinglem.hermes.core.transport.RestRepository
 import dev.shinglem.hermes.core.transport.RpcJson
 import dev.shinglem.hermes.core.transport.SessionFence
 import dev.shinglem.hermes.core.transport.Timeouts
@@ -39,8 +40,8 @@ import kotlin.random.Random
 /** 会话历史读取（REST 分页，只读）+ 发送侧（WebSocket RPC）。 */
 class ChatRepository(
     private val gateway: GatewayClient,
-    private val rest: RestClient,
-) {
+    rest: RestClient,
+) : RestRepository(rest) {
     /**
      * 读一页历史。`limit` 上限 500（后端钳制）。
      *

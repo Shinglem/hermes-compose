@@ -5,6 +5,7 @@ import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.error.ErrorMapper
 import dev.shinglem.hermes.core.transport.GatewayClient
 import dev.shinglem.hermes.core.transport.RestClient
+import dev.shinglem.hermes.core.transport.RestRepository
 import dev.shinglem.hermes.core.transport.RpcJson
 import dev.shinglem.hermes.core.transport.SessionFence
 import dev.shinglem.hermes.core.transport.Timeouts
@@ -51,8 +52,8 @@ data class ModelInfo(
 /** 模型域的数据入口：RPC 走目录与切换，REST 走轻量的 `model/info`。 */
 class ModelRepository(
     private val gateway: GatewayClient,
-    private val rest: RestClient,
-) {
+    rest: RestClient,
+) : RestRepository(rest) {
 
     /**
      * 当前 profile 配置的模型（REST `/api/model/info`，不需要超时补偿：后端自己 bounded）。

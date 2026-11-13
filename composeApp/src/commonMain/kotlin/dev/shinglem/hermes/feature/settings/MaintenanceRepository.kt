@@ -17,10 +17,10 @@ import dev.shinglem.hermes.core.contract.SessionStatsDto
 import dev.shinglem.hermes.core.contract.UsageAnalyticsDto
 import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.transport.RestClient
+import dev.shinglem.hermes.core.transport.RestRepository
 import dev.shinglem.hermes.core.transport.RestMethod
 import dev.shinglem.hermes.core.transport.RpcJson
 import dev.shinglem.hermes.core.transport.Timeouts
-import dev.shinglem.hermes.core.transport.withProfileQuery
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
@@ -39,20 +39,19 @@ import kotlinx.serialization.json.put
  * 这些端点在 `hermes_cli/web_routers/{ops,analytics,sessions}.py` 里，与大模型/会话主链路
  * 无耦合，所以集中在一个 Repository —— 它们共享同一套「带 profile 直连 REST」的调用形状。
  */
-class MaintenanceRepository(private val rest: RestClient) {
+class MaintenanceRepository(rest: RestClient) : RestRepository(rest) {
 
     // ---- 记忆 ----------------------------------------------------------
 
     suspend fun memoryStatus(profile: String?): MemoryStatusDto {
-        val element = rest.get(withProfileQuery("/api/memory", profile), Timeouts.CATALOG_MS)
-        return RpcJson.json.decodeFromJsonElement(MemoryStatusDto.serializer(), element)
+        return rest.getAs(withProfile("/api/memory", profile), MemoryStatusDto.serializer(), Timeouts.CATALOG_MS)
     }
 
     /** [target] 取 `all` / `memory` / `user`；删除内置记忆文件，不可撤销。 */
     suspend fun resetMemory(target: String, profile: String?): MemoryResetResultDto {
         val element = rest.send(
             RestMethod.POST,
-            withProfileQuery("/api/memory/reset", profile),
+            withProfile("/api/memory/reset", profile),
             buildJsonObject { put("target", target) },
             Timeouts.WRITE_MS,
         )
@@ -69,7 +68,7 @@ class MaintenanceRepository(private val rest: RestClient) {
     private suspend fun startAction(path: String, profile: String?): BackupStartedDto {
         val element = rest.send(
             RestMethod.POST,
-            withProfileQuery(path, profile),
+            withProfile(path, profile),
             null,
             Timeouts.WRITE_MS,
         )
@@ -89,8 +88,7 @@ class MaintenanceRepository(private val rest: RestClient) {
     suspend fun runCurator(profile: String?): BackupStartedDto = startAction("/api/curator/run", profile)
 
     suspend fun actionStatus(name: String, lines: Int = 200): ActionStatusDto {
-        val element = rest.get("/api/actions/$name/status?lines=$lines", Timeouts.CATALOG_MS)
-        return RpcJson.json.decodeFromJsonElement(ActionStatusDto.serializer(), element)
+        return rest.getAs("/api/actions/$name/status?lines=$lines", ActionStatusDto.serializer(), Timeouts.CATALOG_MS)
     }
 
     /** 轮询到动作结束（`running=false`），返回最后一次状态；超时也返回最后状态。 */
@@ -105,19 +103,17 @@ class MaintenanceRepository(private val rest: RestClient) {
         } ?: actionStatus(name)
 
     suspend fun checkpoints(profile: String?): OpsCheckpointsDto {
-        val element = rest.get(withProfileQuery("/api/ops/checkpoints", profile), Timeouts.CATALOG_MS)
-        return RpcJson.json.decodeFromJsonElement(OpsCheckpointsDto.serializer(), element)
+        return rest.getAs(withProfile("/api/ops/checkpoints", profile), OpsCheckpointsDto.serializer(), Timeouts.CATALOG_MS)
     }
 
     suspend fun curator(profile: String?): CuratorStatusDto {
-        val element = rest.get(withProfileQuery("/api/curator", profile), Timeouts.CATALOG_MS)
-        return RpcJson.json.decodeFromJsonElement(CuratorStatusDto.serializer(), element)
+        return rest.getAs(withProfile("/api/curator", profile), CuratorStatusDto.serializer(), Timeouts.CATALOG_MS)
     }
 
     suspend fun setCuratorPaused(paused: Boolean, profile: String?): Boolean {
         val element = rest.send(
             RestMethod.PUT,
-            withProfileQuery("/api/curator/paused", profile),
+            withProfile("/api/curator/paused", profile),
             buildJsonObject { put("paused", paused) },
             Timeouts.WRITE_MS,
         )
@@ -127,8 +123,7 @@ class MaintenanceRepository(private val rest: RestClient) {
     // ---- 凭据池 --------------------------------------------------------
 
     suspend fun credentialPool(profile: String?): CredentialPoolDto {
-        val element = rest.get(withProfileQuery("/api/credentials/pool", profile), Timeouts.CATALOG_MS)
-        return RpcJson.json.decodeFromJsonElement(CredentialPoolDto.serializer(), element)
+        return rest.getAs(withProfile("/api/credentials/pool", profile), CredentialPoolDto.serializer(), Timeouts.CATALOG_MS)
     }
 
     suspend fun addCredential(
@@ -139,7 +134,7 @@ class MaintenanceRepository(private val rest: RestClient) {
     ): CredentialPoolAddResultDto {
         val element = rest.send(
             RestMethod.POST,
-            withProfileQuery("/api/credentials/pool", profile),
+            withProfile("/api/credentials/pool", profile),
             buildJsonObject {
                 put("provider", provider)
                 put("api_key", apiKey)
@@ -153,7 +148,7 @@ class MaintenanceRepository(private val rest: RestClient) {
     suspend fun deleteCredential(provider: String, index: Int, profile: String?) {
         rest.send(
             RestMethod.DELETE,
-            withProfileQuery("/api/credentials/pool/$provider/$index", profile),
+            withProfile("/api/credentials/pool/$provider/$index", profile),
             null,
             Timeouts.WRITE_MS,
         )
@@ -162,30 +157,32 @@ class MaintenanceRepository(private val rest: RestClient) {
     // ---- 用量 ----------------------------------------------------------
 
     suspend fun usage(days: Int, profile: String?): UsageAnalyticsDto {
-        val element = rest.get(
-            withProfileQuery("/api/analytics/usage", profile, "days" to days.toString()),
+        return rest.getAs(
+            withProfile("/api/analytics/usage", profile, "days" to days.toString()),
+            UsageAnalyticsDto.serializer(),
             Timeouts.CATALOG_MS,
         )
-        return RpcJson.json.decodeFromJsonElement(UsageAnalyticsDto.serializer(), element)
     }
 
     // ---- 会话维护 ------------------------------------------------------
 
     suspend fun sessionStats(profile: String?): SessionStatsDto {
-        val element = rest.get(withProfileQuery("/api/sessions/stats", profile), Timeouts.CATALOG_MS)
-        return RpcJson.json.decodeFromJsonElement(SessionStatsDto.serializer(), element)
+        return rest.getAs(withProfile("/api/sessions/stats", profile), SessionStatsDto.serializer(), Timeouts.CATALOG_MS)
     }
 
     suspend fun emptySessionCount(profile: String?): Long {
-        val element = rest.get(withProfileQuery("/api/sessions/empty/count", profile), Timeouts.CATALOG_MS)
-        return RpcJson.json.decodeFromJsonElement(SessionEmptyCountDto.serializer(), element).count
+        return rest.getAs(
+            withProfile("/api/sessions/empty/count", profile),
+            SessionEmptyCountDto.serializer(),
+            Timeouts.CATALOG_MS,
+        ).count
     }
 
     /** 删除空会话；返回实际删除条数（后端回执里是 `deleted`）。 */
     suspend fun deleteEmptySessions(profile: String?): Int {
         val element: JsonElement = rest.send(
             RestMethod.DELETE,
-            withProfileQuery("/api/sessions/empty", profile),
+            withProfile("/api/sessions/empty", profile),
             null,
             Timeouts.WRITE_MS,
         )
@@ -195,17 +192,17 @@ class MaintenanceRepository(private val rest: RestClient) {
     // ---- 记忆文件内容（`/api/fs/read-text` / `write-text`，绝对路径）------
 
     suspend fun readTextFile(path: String, profile: String?): FsTextDto {
-        val element = rest.get(
-            withProfileQuery("/api/fs/read-text", profile, "path" to path),
+        return rest.getAs(
+            withProfile("/api/fs/read-text", profile, "path" to path),
+            FsTextDto.serializer(),
             Timeouts.CATALOG_MS,
         )
-        return RpcJson.json.decodeFromJsonElement(FsTextDto.serializer(), element)
     }
 
     suspend fun writeTextFile(path: String, content: String, profile: String?) {
         rest.send(
             RestMethod.POST,
-            withProfileQuery("/api/fs/write-text", profile),
+            withProfile("/api/fs/write-text", profile),
             buildJsonObject {
                 put("path", path)
                 put("content", content)
@@ -218,13 +215,13 @@ class MaintenanceRepository(private val rest: RestClient) {
 
     /** 下载服务端生成的备份 zip（`archive` 取备份动作回执里的路径）。 */
     suspend fun downloadBackup(archive: String, profile: String?): ByteArray =
-        rest.download(withProfileQuery("/api/ops/backup/download", profile, "archive" to archive))
+        rest.download(withProfile("/api/ops/backup/download", profile, "archive" to archive))
 
     /** 从备份恢复（`force=true`：后端以非交互方式跑 `hermes import`）。 */
     suspend fun importBackup(archive: String, force: Boolean, profile: String?): BackupStartedDto {
         val element = rest.send(
             RestMethod.POST,
-            withProfileQuery("/api/ops/import", profile),
+            withProfile("/api/ops/import", profile),
             buildJsonObject {
                 put("archive", archive)
                 put("force", force)
@@ -242,7 +239,7 @@ class MaintenanceRepository(private val rest: RestClient) {
     suspend fun debugShare(lines: Int, redact: Boolean, profile: String?): JsonObject {
         val element = rest.send(
             RestMethod.POST,
-            withProfileQuery("/api/ops/debug-share", profile),
+            withProfile("/api/ops/debug-share", profile),
             buildJsonObject {
                 put("lines", lines)
                 put("redact", redact)
@@ -255,8 +252,7 @@ class MaintenanceRepository(private val rest: RestClient) {
     // ---- shell hooks ----------------------------------------------------
 
     suspend fun hooks(profile: String?): HooksDto {
-        val element = rest.get(withProfileQuery("/api/ops/hooks", profile), Timeouts.CATALOG_MS)
-        return RpcJson.json.decodeFromJsonElement(HooksDto.serializer(), element)
+        return rest.getAs(withProfile("/api/ops/hooks", profile), HooksDto.serializer(), Timeouts.CATALOG_MS)
     }
 
     /** 新增一个钩子；`approve=true` 同时写入同意白名单（否则不会触发）。 */
@@ -269,7 +265,7 @@ class MaintenanceRepository(private val rest: RestClient) {
     ) {
         rest.send(
             RestMethod.POST,
-            withProfileQuery("/api/ops/hooks", profile),
+            withProfile("/api/ops/hooks", profile),
             buildJsonObject {
                 put("event", event)
                 put("command", command)
@@ -284,7 +280,7 @@ class MaintenanceRepository(private val rest: RestClient) {
     suspend fun deleteHook(event: String, command: String, profile: String?) {
         rest.send(
             RestMethod.DELETE,
-            withProfileQuery("/api/ops/hooks", profile),
+            withProfile("/api/ops/hooks", profile),
             buildJsonObject {
                 put("event", event)
                 put("command", command)
@@ -296,14 +292,13 @@ class MaintenanceRepository(private val rest: RestClient) {
     // ---- 配对（远程管理端）----------------------------------------------
 
     suspend fun pairing(profile: String?): PairingDto {
-        val element = rest.get(withProfileQuery("/api/pairing", profile), Timeouts.CATALOG_MS)
-        return RpcJson.json.decodeFromJsonElement(PairingDto.serializer(), element)
+        return rest.getAs(withProfile("/api/pairing", profile), PairingDto.serializer(), Timeouts.CATALOG_MS)
     }
 
     suspend fun approvePairing(platform: String, requestId: String, profile: String?) {
         rest.send(
             RestMethod.POST,
-            withProfileQuery("/api/pairing/approve", profile),
+            withProfile("/api/pairing/approve", profile),
             buildJsonObject {
                 put("platform", platform)
                 put("request_id", requestId)
@@ -315,7 +310,7 @@ class MaintenanceRepository(private val rest: RestClient) {
     suspend fun revokePairing(platform: String, userId: String, profile: String?) {
         rest.send(
             RestMethod.POST,
-            withProfileQuery("/api/pairing/revoke", profile),
+            withProfile("/api/pairing/revoke", profile),
             buildJsonObject {
                 put("platform", platform)
                 put("user_id", userId)
@@ -327,11 +322,11 @@ class MaintenanceRepository(private val rest: RestClient) {
     // ---- 用量：按模型卡片 -----------------------------------------------
 
     suspend fun modelAnalytics(days: Int, profile: String?): ModelAnalyticsDto {
-        val element = rest.get(
-            withProfileQuery("/api/analytics/models", profile, "days" to days.toString()),
+        return rest.getAs(
+            withProfile("/api/analytics/models", profile, "days" to days.toString()),
+            ModelAnalyticsDto.serializer(),
             Timeouts.CATALOG_MS,
         )
-        return RpcJson.json.decodeFromJsonElement(ModelAnalyticsDto.serializer(), element)
     }
 
     // ---- 会话：按条件清理 / 导入 ----------------------------------------
@@ -340,7 +335,7 @@ class MaintenanceRepository(private val rest: RestClient) {
     suspend fun pruneSessions(olderThanDays: Int, dryRun: Boolean, profile: String?): JsonObject {
         val element = rest.send(
             RestMethod.POST,
-            withProfileQuery("/api/sessions/prune", profile),
+            withProfile("/api/sessions/prune", profile),
             buildJsonObject {
                 put("older_than_days", olderThanDays)
                 put("dry_run", dryRun)
@@ -364,7 +359,7 @@ class MaintenanceRepository(private val rest: RestClient) {
         }
         val element = rest.send(
             RestMethod.POST,
-            withProfileQuery("/api/sessions/import", profile),
+            withProfile("/api/sessions/import", profile),
             body,
             Timeouts.CATALOG_MS,
         )

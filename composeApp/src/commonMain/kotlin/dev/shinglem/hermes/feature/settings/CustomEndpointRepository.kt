@@ -6,10 +6,10 @@ import dev.shinglem.hermes.core.contract.CustomEndpointSavedDto
 import dev.shinglem.hermes.core.contract.CustomEndpointUpdateDto
 import dev.shinglem.hermes.core.contract.CustomEndpointsDto
 import dev.shinglem.hermes.core.transport.RestClient
+import dev.shinglem.hermes.core.transport.RestRepository
 import dev.shinglem.hermes.core.transport.RestMethod
 import dev.shinglem.hermes.core.transport.RpcJson
 import dev.shinglem.hermes.core.transport.Timeouts
-import dev.shinglem.hermes.core.transport.withProfileQuery
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 
@@ -20,22 +20,24 @@ import kotlinx.serialization.json.jsonObject
  * 桌面端只按 `id` 操作。**明文 key 只在保存的这一次请求里出现**，列表接口只回预览。
  */
 class CustomEndpointRepository(
-    private val rest: RestClient,
-) {
+    rest: RestClient,
+) : RestRepository(rest) {
     suspend fun list(profile: String?): CustomEndpointsDto {
-        val element = rest.get(withProfileQuery("/api/providers/custom-endpoints", profile), Timeouts.CATALOG_MS)
-        return RpcJson.json.decodeFromJsonElement(CustomEndpointsDto.serializer(), element)
+        return rest.getAs(
+            withProfile("/api/providers/custom-endpoints", profile),
+            CustomEndpointsDto.serializer(),
+            Timeouts.CATALOG_MS,
+        )
     }
 
-    suspend fun upsert(profile: String?, update: CustomEndpointUpdateDto): CustomEndpointSavedDto {
-        val element = rest.send(
+    suspend fun upsert(profile: String?, update: CustomEndpointUpdateDto): CustomEndpointSavedDto =
+        rest.sendAs(
             RestMethod.POST,
-            withProfileQuery("/api/providers/custom-endpoints", profile),
+            withProfile("/api/providers/custom-endpoints", profile),
+            CustomEndpointSavedDto.serializer(),
             RpcJson.json.encodeToJsonElement(CustomEndpointUpdateDto.serializer(), update).jsonObject,
             Timeouts.WRITE_MS,
         )
-        return RpcJson.json.decodeFromJsonElement(CustomEndpointSavedDto.serializer(), element)
-    }
 
     /**
      * 探测端点：后端会请求 `{base}/models`，再按保存的模式（或自动探测）打一次真实传输路由。
@@ -43,30 +45,28 @@ class CustomEndpointRepository(
      * 只有 HTTP 200 且能解析出模型列表才算 `ok`；`reachable=false` 表示连不上，
      * `reachable=true, ok=false` 是警告（可以照存，例如端点不暴露模型列表）。
      */
-    suspend fun validate(profile: String?, update: CustomEndpointUpdateDto): CustomEndpointProbeDto {
-        val element = rest.send(
+    suspend fun validate(profile: String?, update: CustomEndpointUpdateDto): CustomEndpointProbeDto =
+        rest.sendAs(
             RestMethod.POST,
-            withProfileQuery("/api/providers/custom-endpoints/validate", profile),
+            withProfile("/api/providers/custom-endpoints/validate", profile),
+            CustomEndpointProbeDto.serializer(),
             RpcJson.json.encodeToJsonElement(CustomEndpointUpdateDto.serializer(), update).jsonObject,
             PROBE_TIMEOUT_MS,
         )
-        return RpcJson.json.decodeFromJsonElement(CustomEndpointProbeDto.serializer(), element)
-    }
 
-    suspend fun activate(profile: String?, endpointId: String): CustomEndpointActivatedDto {
-        val element = rest.send(
+    suspend fun activate(profile: String?, endpointId: String): CustomEndpointActivatedDto =
+        rest.sendAs(
             RestMethod.POST,
-            withProfileQuery("/api/providers/custom-endpoints/$endpointId/activate", profile),
+            withProfile("/api/providers/custom-endpoints/$endpointId/activate", profile),
+            CustomEndpointActivatedDto.serializer(),
             null,
             Timeouts.WRITE_MS,
         )
-        return RpcJson.json.decodeFromJsonElement(CustomEndpointActivatedDto.serializer(), element)
-    }
 
     suspend fun delete(profile: String?, endpointId: String) {
         rest.send(
             RestMethod.DELETE,
-            withProfileQuery("/api/providers/custom-endpoints/$endpointId", profile),
+            withProfile("/api/providers/custom-endpoints/$endpointId", profile),
             null,
             Timeouts.WRITE_MS,
         )

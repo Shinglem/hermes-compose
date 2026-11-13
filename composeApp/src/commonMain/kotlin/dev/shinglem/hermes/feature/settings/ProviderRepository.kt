@@ -2,10 +2,10 @@ package dev.shinglem.hermes.feature.settings
 
 import dev.shinglem.hermes.core.contract.EnvVarDto
 import dev.shinglem.hermes.core.transport.RestClient
+import dev.shinglem.hermes.core.transport.RestRepository
 import dev.shinglem.hermes.core.transport.RestMethod
 import dev.shinglem.hermes.core.transport.RpcJson
 import dev.shinglem.hermes.core.transport.Timeouts
-import dev.shinglem.hermes.core.transport.withProfileQuery
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.JsonObject
@@ -20,11 +20,10 @@ import kotlinx.serialization.json.put
  * 客户端不落盘、不缓存明文。
  */
 class ProviderRepository(
-    private val rest: RestClient,
-) {
+    rest: RestClient,
+) : RestRepository(rest) {
     suspend fun envVars(profile: String?): Map<String, EnvVarDto> {
-        val element = rest.get(withProfileQuery("/api/env", profile), Timeouts.CATALOG_MS)
-        return RpcJson.json.decodeFromJsonElement(EnvVarSerializer, element)
+        return rest.getAs(withProfile("/api/env", profile), EnvVarSerializer, Timeouts.CATALOG_MS)
     }
 
     /**
@@ -41,7 +40,7 @@ class ProviderRepository(
     ) {
         rest.send(
             RestMethod.PUT,
-            withProfileQuery("/api/env", profile),
+            withProfile("/api/env", profile),
             buildJsonObject {
                 put("key", key)
                 put("value", value)

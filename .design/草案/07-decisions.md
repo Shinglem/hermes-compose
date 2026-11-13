@@ -1962,3 +1962,61 @@ local 后端 ready 之前一定失败」），Component 接管生命周期后**�
 
 **代价**：每域多 4 个文件（Contract / Reducer / Executor / StoreFactory）+ 1 个 Component。
 换来的是：一个域的状态机可以被纯函数测试穷举、IO 只有一处、UI 只剩渲染。
+---
+## ADR-070 · `RestRepository` 基类 + `ProfileScope` 值类型（S3）
+
+**决策**：所有 REST Repository 继承 `core/transport/RestRepository`；新增
+`core/contract/ProfileScope`（`@JvmInline value class`）承载"这份数据属于哪个档案"。
+
+### `RestRepository` 收掉的是四件重复
+
+| 方法 | 收掉的重复 | 关键纪律 |
+|---|---|---|
+| `withProfile(path, scope, …)` | 14 处 `?profile=` 拼装 | `None` 不拼、`All` 拼 `all` |
+| `decodeList` | 8 处 `runCatching{}.getOrDefault(emptyList())` | **不吞异常** |
+| `sendAck` | 12 处"POST + 解 AckDto + 兜底" | 解不出来**当作成功** |
+| `buildJson` | 30+ 处 `buildJsonObject` 全限定名 | — |
+
+**`decodeList` 为什么不吞异常**：曾经用 `getOrDefault(emptyList())`，后端字段一变就**静默**
+显示"0 个技能"——排查时完全看不出是解析失败还是真没数据。现在一律冒泡成
+`AppError.Protocol` → `Loadable.Failed`，界面上看得见。
+
+**`sendAck` 为什么吞异常**：恰恰相反。ack 只是"后端收到了"，HTTP 状态码已经表达成功；
+后端有些写接口直接返回 204 或空对象。列表是**数据**（错了要让人看见），ack 是**信号**
+（解不出来不影响判断）。这两条不是不一致，是**语义不同**。
+
+### `ProfileScope`：消灭"同一个 null 有两种含义"
+
+以前所有 Repository 都是 `fun xxx(profile: String?)`，于是：
+- **`None`**（与档案无关，不该带 `?profile=`）写成 `null`；
+- **`All`**（要发 `?profile=all`）写成 `"all"`。
+
+两者混在一起读代码分不清，而且是 0.5.4 那个 `4001 not_found` 家族的温床：档案名与
+其它 String 参数写反、忘了传、或传了 `"default"` 而接口要求 `null` —— 编译器一声不响。
+
+`ProfileScope` 用 `@JvmInline value class`（运行时零开销）把它们变成**两个不同的值**，
+并提供一个归一化入口：
+
+| 输入 | 结果 | 理由 |
+|---|---|---|
+| `null` / `""` / `"   "` | `None` | 没有作用域 |
+| `"default"` | `None` | 后端把"不传"和"传 default"当同一件事；`default` 是后端派生的名字 |
+| `"all"` | `All` | 确实要发出去的跨档案语义 |
+| 其它 | 原样（trim 后） | — |
+
+`query` 属性是"要不要拼进 URL"的唯一依据：`None` 返回 `null`。
+
+**过渡方式**：`RestRepository.withProfile` 同时保留 `String?` 与 `ProfileScope` 两个重载，
+**行为完全一致**。新代码用后者；旧调用点不动 —— 203 处 `profile: String?` 一次性改完
+是纯机械劳动，风险（漏改一处就编译不过，但改错一处语义就变）与收益不成比例。
+**Agent 纪律：新写的 Repository 方法一律用 `ProfileScope`。**
+
+### 第 4 项（审批/澄清收敛）为什么移到 S4
+
+`PendingRequests` 的目标是把 Chat 的 6 个待决表合成 `Map<RequestId, PendingRequest>`。
+但实测它散在 `ChatViewModel` 的 **60+ 处**，且与流式状态机（`SessionShadow` /
+`SessionSwitchPlan` / runtimeId 反向索引）深度交织——S4 本来就要把这三份实现合成一份
+`ChatReducer`，那时一并做只需一遍；现在单独抽等于改两次、验两次。
+
+`09-refactor.md` 原文也留了退路（"若此处仍难维护，才是 KStateMachine 的评估时机"），
+本轮连退路都不需要，直接顺延。

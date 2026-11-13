@@ -22,6 +22,7 @@ import dev.shinglem.hermes.core.contract.SkillDto
 import dev.shinglem.hermes.core.contract.ToolsetDto
 import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.transport.RestClient
+import dev.shinglem.hermes.core.transport.RestRepository
 import dev.shinglem.hermes.core.transport.RestMethod
 import dev.shinglem.hermes.core.transport.RpcJson
 import dev.shinglem.hermes.core.transport.Timeouts
@@ -44,15 +45,18 @@ import kotlinx.serialization.json.put
  * - 平台配置只提交用户填过的键（后端 `env` 是增量语义，空串视作清空）。
  */
 class CapabilityRepository(
-    private val rest: RestClient,
-) {
+    rest: RestClient,
+) : RestRepository(rest) {
     suspend fun skills(profile: String?): List<SkillDto> =
         decodeList(SkillDto.serializer(), rest.get(withProfile("/api/skills", profile)))
 
     suspend fun skillContent(profile: String?, name: String): String {
-        val element = rest.get(withProfile("/api/skills/content", profile, "name" to name))
+        // 解析失败返回空串（而不是抛）：技能详情读不到时页面显示"（无内容）"比红线更合适。
         return runCatching {
-            RpcJson.json.decodeFromJsonElement(SkillContentDto.serializer(), element).content
+            rest.getAs(
+                withProfile("/api/skills/content", profile, "name" to name),
+                SkillContentDto.serializer(),
+            ).content
         }.getOrDefault("")
     }
 
@@ -72,10 +76,12 @@ class CapabilityRepository(
      * 后端本地扫描 payload 里的 optional skills，**不联网**，所以离线也能看；
      * 每项带 `identifier`（安装用）与 `installed`（按 profile 判定）。
      */
-    suspend fun skillCatalog(profile: String?): List<SkillCatalogEntryDto> {
-        val element = rest.get(withProfile("/api/skills/hub/official", profile), Timeouts.CATALOG_MS)
-        return RpcJson.json.decodeFromJsonElement(SkillCatalogDto.serializer(), element).skills
-    }
+    suspend fun skillCatalog(profile: String?): List<SkillCatalogEntryDto> =
+        rest.getAs(
+            withProfile("/api/skills/hub/official", profile),
+            SkillCatalogDto.serializer(),
+            Timeouts.CATALOG_MS,
+        ).skills
 
     /**
      * 安装 / 卸载官方技能。
@@ -108,10 +114,8 @@ class CapabilityRepository(
             buildJson { put("enabled", enabled) },
         )
 
-    suspend fun platforms(profile: String?): MessagingPlatformsDto {
-        val element = rest.get(withProfile("/api/messaging/platforms", profile))
-        return RpcJson.json.decodeFromJsonElement(MessagingPlatformsDto.serializer(), element)
-    }
+    suspend fun platforms(profile: String?): MessagingPlatformsDto =
+        rest.getAs(withProfile("/api/messaging/platforms", profile), MessagingPlatformsDto.serializer())
 
     /**
      * 保存平台配置。`enabled` 为 null 表示不动开关；`env` 只含用户实际填写的键。
@@ -207,48 +211,14 @@ class CapabilityRepository(
         }
     }
 
-    suspend fun blueprints(profile: String?): List<BlueprintDto> {
-        val element = rest.get(withProfile("/api/cron/blueprints", profile))
-        return RpcJson.json.decodeFromJsonElement(BlueprintsDto.serializer(), element).blueprints
-    }
+    suspend fun blueprints(profile: String?): List<BlueprintDto> =
+        rest.getAs(withProfile("/api/cron/blueprints", profile), BlueprintsDto.serializer()).blueprints
 
     suspend fun deliveryTargets(profile: String?): List<DeliveryTargetDto> {
-        val element = rest.get(withProfile("/api/cron/delivery-targets", profile))
-        return RpcJson.json.decodeFromJsonElement(DeliveryTargetsDto.serializer(), element).targets
+        return rest.getAs(withProfile("/api/cron/delivery-targets", profile), DeliveryTargetsDto.serializer()).targets
     }
 
-    private suspend fun sendAck(
-        method: RestMethod,
-        path: String,
-        body: JsonObject? = null,
-        timeoutMs: Long = Timeouts.WRITE_MS,
-    ): AckDto {
-        val element = rest.send(method, path, body, timeoutMs)
-        return runCatching {
-            RpcJson.json.decodeFromJsonElement(AckDto.serializer(), element)
-        }.getOrElse { AckDto(ok = true) }
-    }
 
-    /**
-     * 列表解码：**不吞异常**。
-     *
-     * 这里曾经用 `runCatching {}.getOrDefault(emptyList())`，结果后端字段一变就静默显示"0 个技能"，
-     * 排查时完全看不出是解析失败还是真的没有数据。解析问题必须冒泡成 `Loadable.Failed`。
-     */
-    private fun <T> decodeList(serializer: KSerializer<T>, element: JsonElement): List<T> {
-        val array = element as? JsonArray
-            ?: throw AppError.Protocol("/api/... 期望数组，收到 ${element::class.simpleName}")
-        return array.map { item ->
-            runCatching { RpcJson.json.decodeFromJsonElement(serializer, item) }
-                .getOrElse { error ->
-                    throw AppError.Protocol("列表项解析失败：${error.message?.take(160)}")
-                }
-        }
-    }
 
-    private fun withProfile(path: String, profile: String?, vararg extra: Pair<String, String>): String =
-        withProfileQuery(path, profile, *extra)
 
-    private fun buildJson(block: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit): JsonObject =
-        kotlinx.serialization.json.buildJsonObject(block)
 }

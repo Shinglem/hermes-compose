@@ -6,6 +6,7 @@ import dev.shinglem.hermes.core.contract.ProfileExportResultDto
 import dev.shinglem.hermes.core.contract.ProfileSoulDto
 import dev.shinglem.hermes.core.contract.ProfilesAdminDto
 import dev.shinglem.hermes.core.transport.RestClient
+import dev.shinglem.hermes.core.transport.RestRepository
 import dev.shinglem.hermes.core.transport.RestMethod
 import dev.shinglem.hermes.core.transport.RpcJson
 import dev.shinglem.hermes.core.transport.Timeouts
@@ -27,16 +28,18 @@ import kotlinx.serialization.json.put
  * - 每个写操作都由调用方回读列表，不信任回执。
  */
 class ProfilesAdminRepository(
-    private val rest: RestClient,
-) {
+    rest: RestClient,
+) : RestRepository(rest) {
     suspend fun list(): List<ProfileAdminDto> {
-        val element = rest.get("/api/profiles", Timeouts.CATALOG_MS)
-        return RpcJson.json.decodeFromJsonElement(ProfilesAdminDto.serializer(), element).profiles
+        return rest.getAs("/api/profiles", ProfilesAdminDto.serializer(), Timeouts.CATALOG_MS).profiles
     }
 
     suspend fun soul(name: String): ProfileSoulDto {
-        val element = rest.get("/api/profiles/${encodeSegment(name)}/soul", Timeouts.CATALOG_MS)
-        return RpcJson.json.decodeFromJsonElement(ProfileSoulDto.serializer(), element)
+        return rest.getAs(
+            "/api/profiles/${encodeSegment(name)}/soul",
+            ProfileSoulDto.serializer(),
+            Timeouts.CATALOG_MS,
+        )
     }
 
     suspend fun saveSoul(name: String, content: String) {

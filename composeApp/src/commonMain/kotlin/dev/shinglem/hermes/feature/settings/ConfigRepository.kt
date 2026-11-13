@@ -2,9 +2,9 @@ package dev.shinglem.hermes.feature.settings
 
 import dev.shinglem.hermes.core.config.setJsonAt
 import dev.shinglem.hermes.core.transport.RestClient
+import dev.shinglem.hermes.core.transport.RestRepository
 import dev.shinglem.hermes.core.transport.RestMethod
 import dev.shinglem.hermes.core.transport.Timeouts
-import dev.shinglem.hermes.core.transport.withProfileQuery
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -22,10 +22,12 @@ import kotlinx.serialization.json.put
  * 写操作只发稀疏 diff —— 后端做 deep-merge，整份回写会把别的页面刚改的键覆盖回旧值。
  */
 class ConfigRepository(
-    private val rest: RestClient,
-) {
+    rest: RestClient,
+) : RestRepository(rest) {
     suspend fun read(profile: String?): JsonObject {
-        val element = rest.get(withProfileQuery("/api/config", profile), Timeouts.CATALOG_MS)
+        // `/api/config` 的顶层就是一个 JsonObject（配置树本身），没有 envelope 可解，
+        // 所以这里保留 `get` 而不是 `getAs`（S3 的"手写 JsonElement < 10 处"留给它）。
+        val element = rest.get(withProfile("/api/config", profile), Timeouts.CATALOG_MS)
         return element as? JsonObject ?: JsonObject(emptyMap())
     }
 
@@ -35,7 +37,7 @@ class ConfigRepository(
             put("config", patch)
             profile?.takeIf { it.isNotBlank() }?.let { put("profile", it) }
         }
-        rest.send(RestMethod.PUT, withProfileQuery("/api/config", profile), body, Timeouts.CATALOG_MS)
+        rest.send(RestMethod.PUT, withProfile("/api/config", profile), body, Timeouts.CATALOG_MS)
     }
 }
 
