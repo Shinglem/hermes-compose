@@ -1,6 +1,10 @@
-package dev.shinglem.hermes.feature.settings
+package dev.shinglem.hermes.component.settings
 
 import dev.shinglem.hermes.core.contract.CustomEndpointProbeDto
+import dev.shinglem.hermes.feature.settings.API_MODES
+import dev.shinglem.hermes.feature.settings.EndpointDraft
+import dev.shinglem.hermes.feature.settings.apiModeLabel
+import dev.shinglem.hermes.feature.settings.probeMessage
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

@@ -1,4 +1,4 @@
-package dev.shinglem.hermes.feature.settings
+package dev.shinglem.hermes.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -28,6 +28,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,10 +40,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.shinglem.hermes.component.settings.ProfilesComponent
+import dev.shinglem.hermes.component.settings.ProfilesIntent
+import dev.shinglem.hermes.component.settings.ProfilesState
 import dev.shinglem.hermes.core.contract.ProfileAdminDto
 import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.error.toNotice
 import dev.shinglem.hermes.core.result.Loadable
+import dev.shinglem.hermes.feature.settings.CLONE_NONE
+import dev.shinglem.hermes.feature.settings.DEFAULT_PROFILE
+import dev.shinglem.hermes.feature.settings.isProfileNameValid
+import dev.shinglem.hermes.feature.settings.slugifyProfileName
 import dev.shinglem.hermes.platform.pickFile
 import dev.shinglem.hermes.platform.pickSaveFile
 import dev.shinglem.hermes.ui.component.NavRow
@@ -50,11 +59,38 @@ import kotlinx.coroutines.launch
 /**
  * 配置档案页（master-detail）：左侧档案列表 + 右侧详情与 SOUL.md 编辑。
  *
- * 文件选择器（导入 / 导出）放在页面里用协程调，ViewModel 只收最终路径 —— 这样逻辑层
+ * 文件选择器（导入 / 导出）放在页面里用协程调，Component 只收最终路径 —— 这样逻辑层
  * 可以单测，也不用把 AWT 的阻塞对话框塞进业务代码。
  */
 @Composable
-fun ProfilesPage(
+fun ProfilesContent(
+    component: ProfilesComponent,
+    modifier: Modifier = Modifier,
+) {
+    val state by component.state.collectAsState()
+    ProfilesPage(
+        state = state,
+        onSelect = { component.onIntent(ProfilesIntent.Select(it)) },
+        onRefresh = { component.onIntent(ProfilesIntent.Reload) },
+        onSoulChange = { component.onIntent(ProfilesIntent.EditSoul(it)) },
+        onSaveSoul = { component.onIntent(ProfilesIntent.SaveSoul) },
+        onStartCreate = { component.onIntent(ProfilesIntent.StartCreate) },
+        onCancelCreate = { component.onIntent(ProfilesIntent.CancelCreate) },
+        onDraftName = { component.onIntent(ProfilesIntent.EditDraftName(it)) },
+        onDraftClone = { component.onIntent(ProfilesIntent.EditDraftClone(it)) },
+        onDraftSoul = { component.onIntent(ProfilesIntent.EditDraftSoul(it)) },
+        onSubmitCreate = { component.onIntent(ProfilesIntent.SubmitCreate) },
+        onDelete = { component.onIntent(ProfilesIntent.Delete(it)) },
+        onRename = { name, newName -> component.onIntent(ProfilesIntent.Rename(name, newName)) },
+        onImport = { component.onIntent(ProfilesIntent.Import(it)) },
+        onExport = { name, output -> component.onIntent(ProfilesIntent.Export(name, output)) },
+        onDismissNotice = { component.onIntent(ProfilesIntent.DismissBanner) },
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun ProfilesPage(
     state: ProfilesState,
     onSelect: (String) -> Unit,
     onRefresh: () -> Unit,
@@ -160,7 +196,7 @@ fun ProfilesPage(
 
 @Composable
 private fun ProfileListPane(
-    state: ProfilesState,
+    state: dev.shinglem.hermes.component.settings.ProfilesState,
     onSelect: (String) -> Unit,
     onRefresh: () -> Unit,
     onCreate: () -> Unit,
@@ -215,7 +251,7 @@ private fun ProfileListPane(
 
 @Composable
 private fun ProfileDetailPane(
-    state: ProfilesState,
+    state: dev.shinglem.hermes.component.settings.ProfilesState,
     onSoulChange: (String) -> Unit,
     onSaveSoul: () -> Unit,
     onRename: (String, String) -> Unit,
@@ -343,7 +379,7 @@ private fun ProfileDetailPane(
 
 @Composable
 private fun CreateProfileDialog(
-    draft: ProfileCreateDraft,
+    draft: dev.shinglem.hermes.component.settings.ProfileCreateDraft,
     candidates: List<ProfileAdminDto>,
     busy: Boolean,
     onName: (String) -> Unit,

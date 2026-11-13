@@ -31,7 +31,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.shinglem.hermes.core.config.EditorsOptions
+import dev.shinglem.hermes.component.settings.CustomEndpointComponent
+import dev.shinglem.hermes.component.settings.ProfilesComponent
+import dev.shinglem.hermes.ui.settings.ProfilesContent
+import dev.shinglem.hermes.component.settings.ModelSettingsComponent
+import dev.shinglem.hermes.component.settings.ModelSettingsIntent
+import dev.shinglem.hermes.component.settings.MoaComponent
+import dev.shinglem.hermes.component.settings.ProviderKeysComponent
 import dev.shinglem.hermes.component.settings.SecurityComponent
+import dev.shinglem.hermes.ui.settings.CustomEndpointContent
+import dev.shinglem.hermes.ui.settings.MoaContent
+import dev.shinglem.hermes.ui.settings.ProviderKeysContent
 import dev.shinglem.hermes.ui.settings.SecurityContent
 import dev.shinglem.hermes.core.app.AutostartInfo
 import dev.shinglem.hermes.core.app.OrphanTaskInfo
@@ -103,34 +113,16 @@ fun SettingsDetailPane(
     onDismissSaved: () -> Unit,
     terminalSettings: TerminalSettings = TerminalSettings(),
     onTerminalSettingsChange: ((TerminalSettings) -> TerminalSettings) -> Unit = {},
-    providerState: ProviderKeysState = ProviderKeysState(),
-    onProviderEdit: (String, String) -> Unit = { _, _ -> },
-    onProviderSave: (String) -> Unit = {},
-    onProviderRefresh: () -> Unit = {},
-    onProviderDismissSaved: () -> Unit = {},
-    onProviderQueryChange: (String) -> Unit = {},
-    endpointsState: CustomEndpointState = CustomEndpointState(),
-    endpointActions: EndpointPageCallbacks = EndpointPageCallbacks(),
-    profilesState: ProfilesState = ProfilesState(),
-    onProfileSelect: (String) -> Unit = {},
-    onProfilesRefresh: () -> Unit = {},
-    onProfileSoulChange: (String) -> Unit = {},
-    onProfileSaveSoul: () -> Unit = {},
-    onProfileStartCreate: () -> Unit = {},
-    onProfileCancelCreate: () -> Unit = {},
-    onProfileDraftName: (String) -> Unit = {},
-    onProfileDraftClone: (String?) -> Unit = {},
-    onProfileDraftSoul: (String) -> Unit = {},
-    onProfileSubmitCreate: () -> Unit = {},
-    onProfileDelete: (String) -> Unit = {},
-    onProfileRename: (String, String) -> Unit = { _, _ -> },
-    onProfileImport: (String) -> Unit = {},
-    onProfileExport: (String, String) -> Unit = { _, _ -> },
-    onProfileDismissNotice: () -> Unit = {},
-    modelState: ModelSettingsState = ModelSettingsState(),
-    modelActions: ModelPageCallbacks = ModelPageCallbacks(),
-    moaState: MoaSettingsState = MoaSettingsState(),
-    moaActions: MoaPageCallbacks = MoaPageCallbacks(),
+    /** 提供方密钥页：S2 起整页由 Component 驱动。 */
+    providerKeys: ProviderKeysComponent? = null,
+    /** 自定义端点页：S2 起整页由 Component 驱动。 */
+    customEndpoints: CustomEndpointComponent? = null,
+    /** 配置档案页：S2 起整页由 Component 驱动。 */
+    profiles: ProfilesComponent? = null,
+    /** 模型三页（主 / 辅助 / 备用）：S2 起共用一份 Component。 */
+    modelSettings: ModelSettingsComponent? = null,
+    /** MoA 页：S2 起整页由 Component 驱动（模型目录仍是旧 state，见 `MoaContent` 注释）。 */
+    moa: MoaComponent? = null,
     /** 安全三页：S2 起整页由 Component 驱动，不再收 state + 三个回调。 */
     security: SecurityComponent? = null,
     officialDesktop: dev.shinglem.hermes.core.app.OfficialDesktopLauncher? = null,
@@ -377,111 +369,114 @@ fun SettingsDetailPane(
         }
         return
     }
-    if (state.selected == SettingsPage.MainModel) {
-        MainModelPage(
-            state = modelState,
-            onProvider = modelActions.onProvider,
-            onModel = modelActions.onModel,
-            onContextChange = modelActions.onContextChange,
-            onSaveContext = modelActions.onSaveContext,
-            onApply = modelActions.onApply,
-            onConfirmPending = modelActions.onConfirmPending,
-            onDismissPending = modelActions.onDismissPending,
-            onReloadCatalog = modelActions.onReloadCatalog,
-            modifier = modifier,
-        )
-        return
-    }
-    if (state.selected == SettingsPage.AuxModels) {
-        AuxModelPage(
-            state = modelState,
-            onAssign = modelActions.onAssignAux,
-            onReset = modelActions.onResetAux,
-            onRefresh = modelActions.onRefreshAux,
-            modifier = modifier,
-        )
-        return
-    }
-    if (state.selected == SettingsPage.FallbackModels) {
-        FallbackModelPage(
-            state = modelState,
-            onAdd = modelActions.onAddFallback,
-            onRemove = modelActions.onRemoveFallback,
-            onSave = modelActions.onSaveFallback,
-            onRefresh = modelActions.onRefreshFallback,
-            modifier = modifier,
-        )
+    // 模型三页（主 / 辅助 / 备用）共用一份 Component 状态：它们的"钉一个"动作
+    // 都取同一个"当前选择"，拆开就得跨 Store 同步。
+    if (state.selected == SettingsPage.MainModel || state.selected == SettingsPage.AuxModels ||
+        state.selected == SettingsPage.FallbackModels
+    ) {
+        val subject = modelSettings
+        if (subject == null) {
+            Text(
+                "模型设置暂不可用（缺少组件）",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = modifier.padding(20.dp),
+            )
+            return
+        }
+        val ms by subject.state.collectAsState()
+        when (state.selected) {
+            SettingsPage.MainModel -> MainModelPage(
+                state = ms,
+                onProvider = { subject.onIntent(ModelSettingsIntent.SelectProvider(it)) },
+                onModel = { subject.onIntent(ModelSettingsIntent.SelectModel(it)) },
+                onContextChange = { subject.onIntent(ModelSettingsIntent.EditContext(it)) },
+                onSaveContext = { subject.onIntent(ModelSettingsIntent.SaveContextLength) },
+                onApply = { subject.onIntent(ModelSettingsIntent.ApplyMain) },
+                onConfirmPending = { subject.onIntent(ModelSettingsIntent.ConfirmPending) },
+                onDismissPending = { subject.onIntent(ModelSettingsIntent.DismissPending) },
+                onReloadCatalog = { subject.onIntent(ModelSettingsIntent.ReloadCatalog) },
+                modifier = modifier,
+            )
+
+            SettingsPage.AuxModels -> AuxModelPage(
+                state = ms,
+                onAssign = { subject.onIntent(ModelSettingsIntent.AssignAuxTask(it)) },
+                onReset = { subject.onIntent(ModelSettingsIntent.ResetAux) },
+                onRefresh = { subject.onIntent(ModelSettingsIntent.ReloadAux) },
+                modifier = modifier,
+            )
+
+            else -> FallbackModelPage(
+                state = ms,
+                onAdd = { subject.onIntent(ModelSettingsIntent.AddFallback) },
+                onRemove = { subject.onIntent(ModelSettingsIntent.RemoveFallback(it)) },
+                onSave = { subject.onIntent(ModelSettingsIntent.SaveFallback) },
+                onRefresh = { subject.onIntent(ModelSettingsIntent.ReloadFallback) },
+                modifier = modifier,
+            )
+        }
         return
     }
     if (state.selected == SettingsPage.MoaModels) {
-        MoaModelsPage(
-            state = moaState,
-            modelState = modelState,
-            onSelectPreset = moaActions.onSelectPreset,
-            onAddPreset = moaActions.onAddPreset,
-            onDeletePreset = moaActions.onDeletePreset,
-            onSetDefault = moaActions.onSetDefault,
-            onSetActive = moaActions.onSetActive,
-            onPresetChange = moaActions.onPresetChange,
-            onAddReference = moaActions.onAddReference,
-            onRemoveReference = moaActions.onRemoveReference,
-            onReferenceChange = moaActions.onReferenceChange,
-            onSave = moaActions.onSave,
-            onRefresh = moaActions.onRefresh,
+        val subject = moa
+        if (subject == null) {
+            Text(
+                "MoA 设置暂不可用（缺少组件）",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = modifier.padding(20.dp),
+            )
+        } else {
+            val catalog = modelSettings
+        MoaContent(
+            component = subject,
+            modelState = catalog?.state?.value ?: dev.shinglem.hermes.component.settings.ModelSettingsState(),
             modifier = modifier,
         )
+        }
         return
     }
     if (state.selected == SettingsPage.Profiles) {
-        ProfilesPage(
-            state = profilesState,
-            onSelect = onProfileSelect,
-            onRefresh = onProfilesRefresh,
-            onSoulChange = onProfileSoulChange,
-            onSaveSoul = onProfileSaveSoul,
-            onStartCreate = onProfileStartCreate,
-            onCancelCreate = onProfileCancelCreate,
-            onDraftName = onProfileDraftName,
-            onDraftClone = onProfileDraftClone,
-            onDraftSoul = onProfileDraftSoul,
-            onSubmitCreate = onProfileSubmitCreate,
-            onDelete = onProfileDelete,
-            onRename = onProfileRename,
-            onImport = onProfileImport,
-            onExport = onProfileExport,
-            onDismissNotice = onProfileDismissNotice,
-            modifier = modifier,
-        )
+        val subject = profiles
+        if (subject == null) {
+            Text(
+                "配置档案暂不可用（缺少组件）",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = modifier.padding(20.dp),
+            )
+        } else {
+            ProfilesContent(component = subject, modifier = modifier)
+        }
         return
     }
     if (state.selected == SettingsPage.ProviderKeys) {
-        ProviderKeysPage(
-            state = providerState,
-            onEdit = onProviderEdit,
-            onSave = onProviderSave,
-            onRefresh = onProviderRefresh,
-            onDismissSaved = onProviderDismissSaved,
-            onQueryChange = onProviderQueryChange,
-            modifier = modifier,
-        )
+        val subject = providerKeys
+        if (subject == null) {
+            Text(
+                "提供方密钥暂不可用（缺少组件）",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = modifier.padding(20.dp),
+            )
+        } else {
+            ProviderKeysContent(component = subject, modifier = modifier)
+        }
         return
     }
     if (state.selected == SettingsPage.CustomEndpoints) {
-        CustomEndpointPage(
-            state = endpointsState,
-            onCreate = endpointActions.onCreate,
-            onEditEndpoint = endpointActions.onEdit,
-            onDraftChange = endpointActions.onDraftChange,
-            onValidate = endpointActions.onValidate,
-            onSave = endpointActions.onSave,
-            onCancel = endpointActions.onCancel,
-            onActivate = endpointActions.onActivate,
-            onAskDelete = endpointActions.onAskDelete,
-            onConfirmDelete = endpointActions.onConfirmDelete,
-            onDismissDelete = endpointActions.onDismissDelete,
-            onRefresh = endpointActions.onRefresh,
-            modifier = modifier,
-        )
+        val subject = customEndpoints
+        if (subject == null) {
+            Text(
+                "自定义端点暂不可用（缺少组件）",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = modifier.padding(20.dp),
+            )
+        } else {
+            CustomEndpointContent(component = subject, modifier = modifier)
+        }
         return
     }
     if (state.selected == SettingsPage.TerminalAppearance) {

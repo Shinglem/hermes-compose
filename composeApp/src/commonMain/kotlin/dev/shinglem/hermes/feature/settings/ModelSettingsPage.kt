@@ -55,7 +55,7 @@ import dev.shinglem.hermes.ui.icon.AppIcons
  */
 @Composable
 fun MainModelPage(
-    state: ModelSettingsState,
+    state: dev.shinglem.hermes.component.settings.ModelSettingsState,
     onProvider: (String) -> Unit,
     onModel: (String) -> Unit,
     onContextChange: (String) -> Unit,
@@ -208,7 +208,7 @@ fun MainModelPage(
 /** 模型配置 · 备用模型页：主模型不可用时的回退顺序。 */
 @Composable
 fun FallbackModelPage(
-    state: ModelSettingsState,
+    state: dev.shinglem.hermes.component.settings.ModelSettingsState,
     onAdd: () -> Unit,
     onRemove: (Int) -> Unit,
     onSave: () -> Unit,
@@ -293,7 +293,7 @@ fun FallbackModelPage(
 /** 模型配置 · 辅助模型页：任务槽位列表 + 全部重置。 */
 @Composable
 fun AuxModelPage(
-    state: ModelSettingsState,
+    state: dev.shinglem.hermes.component.settings.ModelSettingsState,
     onAssign: (AuxTaskDto) -> Unit,
     onReset: () -> Unit,
     onRefresh: () -> Unit,

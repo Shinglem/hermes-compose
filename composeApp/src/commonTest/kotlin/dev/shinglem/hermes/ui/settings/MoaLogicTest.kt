@@ -1,7 +1,17 @@
-package dev.shinglem.hermes.feature.settings
+package dev.shinglem.hermes.ui.settings
 
 import dev.shinglem.hermes.core.contract.MoaPresetDto
+import dev.shinglem.hermes.feature.settings.MOA_FANOUTS
+import dev.shinglem.hermes.feature.settings.MOA_POLICIES
+import dev.shinglem.hermes.feature.settings.moaConfigProblem
+import dev.shinglem.hermes.feature.settings.moaPresetProblem
+import dev.shinglem.hermes.feature.settings.moaSlotProblem
 import dev.shinglem.hermes.core.contract.MoaSlotDto
+import dev.shinglem.hermes.feature.settings.MOA_FANOUTS
+import dev.shinglem.hermes.feature.settings.MOA_POLICIES
+import dev.shinglem.hermes.feature.settings.moaConfigProblem
+import dev.shinglem.hermes.feature.settings.moaPresetProblem
+import dev.shinglem.hermes.feature.settings.moaSlotProblem
 import dev.shinglem.hermes.core.result.Loadable
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -80,9 +90,9 @@ class MoaLogicTest {
     @Test
     fun `状态里选中的预设与问题同步`() {
         val safe = preset(listOf(slot("openai", "gpt-5")), slot("a", "b"))
-        val state = MoaSettingsState(
+        val state = dev.shinglem.hermes.component.settings.MoaState(
             config = Loadable.Ready(dev.shinglem.hermes.core.contract.MoaConfigDto(presets = mapOf("main" to safe))),
-            presets = mapOf("main" to safe),
+            presets = kotlinx.collections.immutable.persistentMapOf("main" to safe),
             selected = "main",
         )
         assertEquals(safe, state.preset)

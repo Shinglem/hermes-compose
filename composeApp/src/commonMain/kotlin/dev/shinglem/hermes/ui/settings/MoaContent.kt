@@ -1,4 +1,4 @@
-package dev.shinglem.hermes.feature.settings
+package dev.shinglem.hermes.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +30,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +40,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.shinglem.hermes.component.settings.MoaComponent
+import dev.shinglem.hermes.component.settings.MoaIntent
+import dev.shinglem.hermes.component.settings.MoaState
+import dev.shinglem.hermes.feature.settings.MOA_FANOUTS
+import dev.shinglem.hermes.feature.settings.MOA_POLICIES
 import dev.shinglem.hermes.core.contract.MoaPresetDto
 import dev.shinglem.hermes.core.contract.MoaSlotDto
 import dev.shinglem.hermes.core.error.toNotice
@@ -50,11 +57,40 @@ import dev.shinglem.hermes.ui.icon.AppIcons
  *
  * 一个预设 = 一组参考模型 + 一个聚合模型。只有 `enabled` 的那个预设会真正参与运行；
  * 保存提交的是**整份预设表**（后端以此为准，没列出的会被删）。
+ *
+ * [modelState] 仍然是旧形状：MoA 需要模型目录来渲染下拉选项，而模型目录是**下一个**
+ * 要迁的域（`ModelSettings`）。等那个迁完，这里再改成收 `ModelCatalogComponent`
+ * ——现在强行一起改会让两个域互相阻塞。
  */
 @Composable
-fun MoaModelsPage(
-    state: MoaSettingsState,
-    modelState: ModelSettingsState,
+fun MoaContent(
+    component: MoaComponent,
+    modelState: dev.shinglem.hermes.component.settings.ModelSettingsState,
+    modifier: Modifier = Modifier,
+) {
+    val state by component.state.collectAsState()
+    MoaModelsPage(
+        state = state,
+        modelState = modelState,
+        onSelectPreset = { component.onIntent(MoaIntent.Select(it)) },
+        onAddPreset = { component.onIntent(MoaIntent.AddPreset) },
+        onDeletePreset = { component.onIntent(MoaIntent.DeletePreset) },
+        onSetDefault = { component.onIntent(MoaIntent.SetDefault) },
+        onSetActive = { component.onIntent(MoaIntent.SetActive) },
+        onPresetChange = { component.onIntent(MoaIntent.SetPreset(it)) },
+        onAddReference = { component.onIntent(MoaIntent.AddReference) },
+        onRemoveReference = { component.onIntent(MoaIntent.RemoveReference(it)) },
+        onReferenceChange = { index, slot -> component.onIntent(MoaIntent.UpdateReference(index, slot)) },
+        onSave = { component.onIntent(MoaIntent.Save) },
+        onRefresh = { component.onIntent(MoaIntent.Reload) },
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun MoaModelsPage(
+    state: MoaState,
+    modelState: dev.shinglem.hermes.component.settings.ModelSettingsState,
     onSelectPreset: (String) -> Unit,
     onAddPreset: () -> Unit,
     onDeletePreset: () -> Unit,
@@ -215,7 +251,7 @@ fun MoaModelsPage(
 
 @Composable
 private fun PresetSelector(
-    state: MoaSettingsState,
+    state: MoaState,
     onSelect: (String) -> Unit,
     onAdd: () -> Unit,
     onDelete: () -> Unit,
@@ -277,7 +313,7 @@ private fun PresetSelector(
 private fun SlotEditor(
     title: String,
     slot: MoaSlotDto,
-    modelState: ModelSettingsState,
+    modelState: dev.shinglem.hermes.component.settings.ModelSettingsState,
     busy: Boolean,
     onChange: (MoaSlotDto) -> Unit,
     onRemove: (() -> Unit)? = null,

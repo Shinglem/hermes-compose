@@ -1,8 +1,12 @@
-package dev.shinglem.hermes.feature.settings
+package dev.shinglem.hermes.component.settings
 
 import dev.shinglem.hermes.core.contract.AuxTaskDto
 import dev.shinglem.hermes.core.contract.ModelInfoAdminDto
 import dev.shinglem.hermes.core.result.Loadable
+import dev.shinglem.hermes.feature.settings.contextLengthPatch
+import dev.shinglem.hermes.feature.settings.fallbackPatch
+import dev.shinglem.hermes.feature.settings.readFallbackProviders
+import dev.shinglem.hermes.feature.settings.FallbackEntry
 import dev.shinglem.hermes.feature.model.ModelCatalog
 import dev.shinglem.hermes.feature.model.ModelEntry
 import dev.shinglem.hermes.feature.model.ModelProviderGroup

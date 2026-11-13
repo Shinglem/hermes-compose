@@ -1,13 +1,11 @@
 package dev.shinglem.hermes.feature.settings
 
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import dev.shinglem.hermes.core.contract.CredentialPoolDto
 import dev.shinglem.hermes.core.contract.CuratorStatusDto
+import dev.shinglem.hermes.core.contract.HooksDto
 import dev.shinglem.hermes.core.contract.MemoryStatusDto
 import dev.shinglem.hermes.core.contract.ModelAnalyticsDto
 import dev.shinglem.hermes.core.contract.OpsCheckpointsDto
-import dev.shinglem.hermes.core.contract.HooksDto
 import dev.shinglem.hermes.core.contract.PairingDto
 import dev.shinglem.hermes.core.contract.SessionStatsDto
 import dev.shinglem.hermes.core.contract.UsageAnalyticsDto
@@ -18,6 +16,7 @@ import dev.shinglem.hermes.core.error.toUserNotice
 import dev.shinglem.hermes.platform.appDataDir
 import dev.shinglem.hermes.platform.readLocalTextFile
 import dev.shinglem.hermes.platform.writeBytesToFile
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -27,130 +26,27 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 
 /**
- * 设置中心「维护」页组的状态：记忆、诊断与维护、凭据池、用量、会话维护。
+ * 维护页六块状态的**别名**（S2 过渡）。
  *
- * 五块互不依赖，各自一份 `StateFlow`；切 profile 时统一作废（[setProfile]），
- * 与 [ProviderKeysViewModel] 的语义一致 —— 上一轮的数据属于上一个 profile，不能沿用。
+ * 真正的定义在 `component/settings/MaintenanceContract.kt`（那里能被 Component 复用）；
+ * 这里保留同名别名，让 6 个 UI 页面一行不用改。等它们都改成收 Component 后一起删。
  */
-data class MemoryUiState(
-    val loading: Boolean = false,
-    val status: MemoryStatusDto? = null,
-    /** 正在执行的动作（`reset:<target>`），用于禁用按钮。 */
-    val busy: String? = null,
-    /** 等二次确认的重置目标（`all` / `memory` / `user`）。 */
-    val pendingReset: String? = null,
-    /** `GET /api/config` 快照（只读内置层的四项配置）。 */
-    val config: JsonObject? = null,
-    /** 用户改过但未保存的配置项（点分路径 → 文本）。 */
-    val configEdits: Map<String, String> = emptyMap(),
-    val configSaving: Boolean = false,
-    /** 正在编辑的记忆文件（`memory` / `user`）；null = 编辑器关闭。 */
-    val editingFile: String? = null,
-    val filePath: String = "",
-    val fileText: String = "",
-    val fileLoading: Boolean = false,
-    val fileSaving: Boolean = false,
-    val notice: String? = null,
-    val error: String? = null,
-) {
-    /** 表单显示值：改过的用编辑值，否则读后端配置。 */
-    fun configValue(spec: ConfigFieldSpec): String =
-        configEdits[spec.path] ?: config?.readPath(spec.path).orEmpty()
-}
+typealias MemoryUiState = dev.shinglem.hermes.component.settings.MemoryUiState
+typealias OpsUiState = dev.shinglem.hermes.component.settings.OpsUiState
+typealias CredentialPoolUiState = dev.shinglem.hermes.component.settings.CredentialPoolUiState
+typealias UsageUiState = dev.shinglem.hermes.component.settings.UsageUiState
+typealias SessionMaintenanceUiState = dev.shinglem.hermes.component.settings.SessionMaintenanceUiState
+typealias IntegrationUiState = dev.shinglem.hermes.component.settings.IntegrationUiState
+typealias MaintenanceAction = dev.shinglem.hermes.component.settings.MaintenanceAction
 
-data class OpsUiState(
-    val loading: Boolean = false,
-    /** 正在跑的动作名（中文），null 表示空闲。 */
-    val running: String? = null,
-    /** 动作日志尾部；只在本次会话内保留。 */
-    val log: List<String> = emptyList(),
-    val exitCode: Int? = null,
-    val checkpoints: OpsCheckpointsDto? = null,
-    val curator: CuratorStatusDto? = null,
-    /** 备份产物的路径（服务端生成时才有）。 */
-    val backupArchive: String? = null,
-    val confirmPrune: Boolean = false,
-    /** 把服务端备份 zip 下载到本机（`%LOCALAPPDATA%\hermes-compose\backups`）。 */
-    val downloading: Boolean = false,
-    val downloadedPath: String? = null,
-    /** 恢复用的 archive 路径（服务端可读的路径）。 */
-    val importArchive: String = "",
-    val importing: Boolean = false,
-    /** 调试分享返回的链接（可复制）。 */
-    val sharing: Boolean = false,
-    val debugUrls: List<String> = emptyList(),
-    val notice: String? = null,
-    val error: String? = null,
-)
-
-data class CredentialPoolUiState(
-    val loading: Boolean = false,
-    val data: CredentialPoolDto? = null,
-    val provider: String = "",
-    val apiKey: String = "",
-    val label: String = "",
-    val saving: Boolean = false,
-    /** 等确认删除的 `(provider, index)`。 */
-    val pendingDelete: Pair<String, Int>? = null,
-    val notice: String? = null,
-    val error: String? = null,
-)
-
-data class UsageUiState(
-    val loading: Boolean = false,
-    val days: Int = 30,
-    val data: UsageAnalyticsDto? = null,
-    /** `/api/analytics/models`：按模型的卡片（独立于 usage 的 by_model）。 */
-    val models: ModelAnalyticsDto? = null,
-    val error: String? = null,
-)
-
-data class SessionMaintenanceUiState(
-    val loading: Boolean = false,
-    val stats: SessionStatsDto? = null,
-    val emptyCount: Long? = null,
-    val busy: Boolean = false,
-    val confirmDeleteEmpty: Boolean = false,
-    /** 按条件清理：天数（默认 90）与 dry-run 报告。 */
-    val pruneDays: String = "90",
-    val pruneReport: JsonObject? = null,
-    val pruning: Boolean = false,
-    /** 正在导入（选完文件后提交）。 */
-    val importing: Boolean = false,
-    val notice: String? = null,
-    val error: String? = null,
-)
-
-/** 外部集成：shell 钩子 + 配对（远程管理端）白名单。 */
-data class IntegrationUiState(
-    val loading: Boolean = false,
-    val hooks: HooksDto? = null,
-    val pairing: PairingDto? = null,
-    val newEvent: String = "",
-    val newCommand: String = "",
-    val newMatcher: String = "",
-    /** 正在执行的动作标识（删除/批准/撤销）。 */
-    val busy: String? = null,
-    val notice: String? = null,
-    val error: String? = null,
-)
-
-/** 维护页能触发的后台动作。 */
-enum class MaintenanceAction(val label: String) {
-    DOCTOR("运行诊断（doctor）"),
-    SECURITY_AUDIT("安全审计"),
-    BACKUP("备份配置与数据"),
-    CURATOR_RUN("立即整理技能"),
-    PRUNE_CHECKPOINTS("清理检查点"),
-    DUMP("导出诊断转储"),
-}
-
+/** 维护页组的状态持有者（S2 过渡形态，见 `DefaultMaintenanceComponent` 的类注释）。 */
 class MaintenanceViewModel(
     private val repository: MaintenanceRepository,
     private val configRepository: ConfigRepository,
     /** 后端数据根（`HERMES_HOME`）绝对路径：拼记忆文件路径用。 */
     private val hermesHome: String = "",
-) : ViewModel() {
+    private val scope: kotlinx.coroutines.CoroutineScope,
+) {
 
     private val _memory = MutableStateFlow(MemoryUiState())
     val memory: StateFlow<MemoryUiState> = _memory.asStateFlow()
@@ -209,7 +105,7 @@ class MaintenanceViewModel(
     fun refreshMemory() {
         if (_memory.value.loading) return
         _memory.update { it.copy(loading = true, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val status = repository.memoryStatus(profile)
                 val config = configRepository.read(profile)
@@ -237,7 +133,7 @@ class MaintenanceViewModel(
             return
         }
         _memory.update { it.copy(configSaving = true, notice = null, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 configRepository.patch(profile, patch)
                 val config = configRepository.read(profile)
@@ -268,7 +164,7 @@ class MaintenanceViewModel(
     fun confirmResetMemory() {
         val target = _memory.value.pendingReset ?: return
         _memory.update { it.copy(pendingReset = null, busy = "reset:$target", error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val result = repository.resetMemory(target, profile)
                 val status = repository.memoryStatus(profile)
@@ -310,7 +206,7 @@ class MaintenanceViewModel(
         _memory.update {
             it.copy(editingFile = which, filePath = path, fileText = "", fileLoading = true, error = null)
         }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val file = repository.readTextFile(path, profile)
                 _memory.update {
@@ -338,7 +234,7 @@ class MaintenanceViewModel(
         val path = state.filePath
         if (path.isBlank() || state.fileSaving) return
         _memory.update { it.copy(fileSaving = true, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.writeTextFile(path, state.fileText, profile)
                 val status = repository.memoryStatus(profile)
@@ -376,7 +272,7 @@ class MaintenanceViewModel(
 
     fun refreshOps() {
         _ops.update { it.copy(loading = true, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val checkpoints = repository.checkpoints(profile)
                 val curator = runCatching { repository.curator(profile) }.getOrNull()
@@ -394,7 +290,7 @@ class MaintenanceViewModel(
         _ops.update {
             it.copy(running = action.label, log = emptyList(), exitCode = null, notice = null, error = null)
         }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val started = when (action) {
                     MaintenanceAction.DOCTOR -> repository.runDoctor(profile)
@@ -447,7 +343,7 @@ class MaintenanceViewModel(
     }
 
     fun toggleCuratorPaused(paused: Boolean) {
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val next = repository.setCuratorPaused(paused, profile)
                 _ops.update { it.copy(curator = it.curator?.copy(paused = next)) }
@@ -468,7 +364,7 @@ class MaintenanceViewModel(
         val archive = _ops.value.backupArchive ?: return
         if (_ops.value.downloading) return
         _ops.update { it.copy(downloading = true, notice = null, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val bytes = repository.downloadBackup(archive, profile)
                 val name = archive.substringAfterLast('/').substringAfterLast('\\')
@@ -498,7 +394,7 @@ class MaintenanceViewModel(
         val archive = _ops.value.importArchive.trim()
         if (archive.isBlank() || _ops.value.importing) return
         _ops.update { it.copy(importing = true, notice = null, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val started = repository.importBackup(archive, force = true, profile = profile)
                 val status = repository.awaitAction(started.name)
@@ -526,7 +422,7 @@ class MaintenanceViewModel(
     fun runDebugShare() {
         if (_ops.value.sharing) return
         _ops.update { it.copy(sharing = true, debugUrls = emptyList(), notice = null, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val result = repository.debugShare(lines = 200, redact = true, profile = profile)
                 val urls = collectHttpUrls(result.toString())
@@ -553,7 +449,7 @@ class MaintenanceViewModel(
 
     fun refreshCredentials() {
         _credentials.update { it.copy(loading = true, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val data = repository.credentialPool(profile)
                 _credentials.update { it.copy(loading = false, data = data) }
@@ -583,7 +479,7 @@ class MaintenanceViewModel(
         val state = _credentials.value
         if (state.saving || state.provider.isBlank() || state.apiKey.isBlank()) return
         _credentials.update { it.copy(saving = true, notice = null, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val result = repository.addCredential(
                     provider = state.provider.trim(),
@@ -622,7 +518,7 @@ class MaintenanceViewModel(
     fun confirmDeleteCredential() {
         val (provider, index) = _credentials.value.pendingDelete ?: return
         _credentials.update { it.copy(pendingDelete = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.deleteCredential(provider, index, profile)
                 val data = repository.credentialPool(profile)
@@ -644,7 +540,7 @@ class MaintenanceViewModel(
     fun refreshUsage(days: Int = _usage.value.days) {
         if (_usage.value.loading) return
         _usage.update { it.copy(loading = true, days = days, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val data = repository.usage(days, profile)
                 val models = runCatching { repository.modelAnalytics(days, profile) }.getOrNull()
@@ -661,7 +557,7 @@ class MaintenanceViewModel(
 
     fun refreshSessionMaintenance() {
         _sessions.update { it.copy(loading = true, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val stats = repository.sessionStats(profile)
                 val empty = runCatching { repository.emptySessionCount(profile) }.getOrNull()
@@ -687,7 +583,7 @@ class MaintenanceViewModel(
     fun confirmDeleteEmptySessions() {
         if (_sessions.value.busy) return
         _sessions.update { it.copy(confirmDeleteEmpty = false, busy = true, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val deleted = repository.deleteEmptySessions(profile)
                 val stats = repository.sessionStats(profile)
@@ -723,7 +619,7 @@ class MaintenanceViewModel(
         val days = _sessions.value.pruneDays.toIntOrNull() ?: return
         if (_sessions.value.pruning) return
         _sessions.update { it.copy(pruning = true, pruneReport = null, notice = null, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val report = repository.pruneSessions(days, dryRun = true, profile = profile)
                 _sessions.update { it.copy(pruning = false, pruneReport = report) }
@@ -739,7 +635,7 @@ class MaintenanceViewModel(
         val days = _sessions.value.pruneDays.toIntOrNull() ?: return
         if (_sessions.value.pruning) return
         _sessions.update { it.copy(pruning = true, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val report = repository.pruneSessions(days, dryRun = false, profile = profile)
                 val stats = repository.sessionStats(profile)
@@ -770,7 +666,7 @@ class MaintenanceViewModel(
     fun refreshIntegrations() {
         if (_integrations.value.loading) return
         _integrations.update { it.copy(loading = true, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val hooks = repository.hooks(profile)
                 val pairing = runCatching { repository.pairing(profile) }.getOrNull()
@@ -800,7 +696,7 @@ class MaintenanceViewModel(
         val state = _integrations.value
         if (state.busy != null || state.newEvent.isBlank() || state.newCommand.isBlank()) return
         _integrations.update { it.copy(busy = "add", notice = null, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.addHook(
                     event = state.newEvent.trim(),
@@ -831,7 +727,7 @@ class MaintenanceViewModel(
     fun deleteHook(event: String, command: String) {
         if (_integrations.value.busy != null) return
         _integrations.update { it.copy(busy = "del:$event", notice = null, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.deleteHook(event, command, profile)
                 val hooks = repository.hooks(profile)
@@ -847,7 +743,7 @@ class MaintenanceViewModel(
     fun approvePairing(platform: String, requestId: String) {
         if (_integrations.value.busy != null) return
         _integrations.update { it.copy(busy = "approve:$requestId", notice = null, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.approvePairing(platform, requestId, profile)
                 val pairing = repository.pairing(profile)
@@ -863,7 +759,7 @@ class MaintenanceViewModel(
     fun revokePairing(platform: String, userId: String) {
         if (_integrations.value.busy != null) return
         _integrations.update { it.copy(busy = "revoke:$userId", notice = null, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.revokePairing(platform, userId, profile)
                 val pairing = repository.pairing(profile)
@@ -888,7 +784,7 @@ class MaintenanceViewModel(
             return
         }
         _sessions.update { it.copy(importing = true, notice = null, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val result = repository.importSessions(raw, profile)
                 val stats = repository.sessionStats(profile)

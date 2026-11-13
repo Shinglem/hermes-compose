@@ -1,6 +1,10 @@
-package dev.shinglem.hermes.feature.settings
+package dev.shinglem.hermes.component.settings
 
 import dev.shinglem.hermes.core.contract.ProfileAdminDto
+import dev.shinglem.hermes.feature.settings.CLONE_NONE
+import dev.shinglem.hermes.feature.settings.DEFAULT_PROFILE
+import dev.shinglem.hermes.feature.settings.isProfileNameValid
+import dev.shinglem.hermes.feature.settings.slugifyProfileName
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

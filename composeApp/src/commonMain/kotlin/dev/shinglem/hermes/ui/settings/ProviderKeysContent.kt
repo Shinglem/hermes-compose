@@ -1,4 +1,4 @@
-package dev.shinglem.hermes.feature.settings
+package dev.shinglem.hermes.ui.settings
 
 import dev.shinglem.hermes.core.error.toNotice
 import androidx.compose.foundation.layout.Arrangement
@@ -25,13 +25,19 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.shinglem.hermes.component.settings.ProviderKeysComponent
+import dev.shinglem.hermes.component.settings.ProviderKeysIntent
+import dev.shinglem.hermes.component.settings.ProviderKeysState
 import dev.shinglem.hermes.core.contract.EnvVarDto
 import dev.shinglem.hermes.core.result.Loadable
+import dev.shinglem.hermes.feature.settings.hasValue
 import dev.shinglem.hermes.ui.component.EmptyState
 import dev.shinglem.hermes.ui.icon.AppIcons
 
@@ -40,9 +46,30 @@ import dev.shinglem.hermes.ui.icon.AppIcons
  *
  * 明文只在输入框里存在；已保存的值后端只回 redacted 预览，所以填过一次之后
  * 输入框是空的（占位符显示"已配置"，想换就整个重填）。
+ *
+ * 与 [SecurityContent] 同一形状：**只收 Component**，自己 `collectAsState`。
+ * 迁移前它收 state + 5 个回调，`SettingsPane` 再把它们从 ViewModel 上摘下来 —
+ * 那两跳现在都省了。
  */
 @Composable
-fun ProviderKeysPage(
+fun ProviderKeysContent(
+    component: ProviderKeysComponent,
+    modifier: Modifier = Modifier,
+) {
+    val state by component.state.collectAsState()
+    ProviderKeysForm(
+        state = state,
+        onEdit = { key, value -> component.onIntent(ProviderKeysIntent.Edit(key, value)) },
+        onSave = { key -> component.onIntent(ProviderKeysIntent.Save(key)) },
+        onRefresh = { component.onIntent(ProviderKeysIntent.Reload) },
+        onDismissSaved = { component.onIntent(ProviderKeysIntent.DismissBanner) },
+        onQueryChange = { component.onIntent(ProviderKeysIntent.SetQuery(it)) },
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun ProviderKeysForm(
     state: ProviderKeysState,
     onEdit: (String, String) -> Unit,
     onSave: (String) -> Unit,

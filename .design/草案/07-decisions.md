@@ -1935,5 +1935,30 @@ local 后端 ready 之前一定失败」），Component 接管生命周期后**�
 真机验证：设置 → 安全 → 审批，字段（审批模式 smart / 超时 300 / 重载 MCP 开关 / 命令白名单）
 全部正确回填，"保存"因无改动而禁用，且启动后 `gateway.log` 不再有失败的 `/api/config`。
 
+### 补充：7 个域全部迁完（2026-11-14）
+
+| 域 | 形态 | 说明 |
+|---|---|---|
+| Security | 完整模板 | 样板 |
+| ProviderKeys | 完整模板 | drafts 里是**明文**，保存成功必须立刻清、换 profile 必须整份丢 |
+| CustomEndpoint | 完整模板 | 三条互斥忙状态（`save` / `activate:<id>` / `delete:<id>`），保留带前缀的 key |
+| MoA | 完整模板 | 整表预设 + 选中/默认/生效四者牵连；编辑统一成一条 `PresetsEdited`（算法要读当前选中项，Reducer 收不到外部入参） |
+| ModelSettings | 完整模板 | 四条数据线（info / 目录 / 辅助 / 备用）各自 loading，**一条失败不拖垮其它三条** |
+| Profiles | 完整模板 | **没有 profile 维度**（它管理所有档案本身），所以不随 activeProfile 重建 |
+| Maintenance | **过渡形态** | 见下 |
+
+**Maintenance 为什么不做完整模板**：6 个领域、60 多个动作，逐方法搬进 Executor + Reducer 要重写全部取消语义（每搬一个都可能改掉一处），风险远大于收益；而且它**没有"进页面就拉的单一数据线"**（六块各有自己的刷新时机），模板最大的那个好处用不上。
+
+这轮做法：`MaintenanceViewModel` 的 `viewModelScope` 换成注入的 scope、去掉 `ViewModel` 继承、包成 `DefaultMaintenanceComponent`（`combine` 六条流成一份 `MaintenanceState`）。6 个 UI 页面仍用它的方法引用（60 个 `{ model.onIntent(Xxx) }` 只是噪音）。**"拆 7 个 Store" 排到 S8 收尾。**
+
+**合计**：删 7 个 `*ViewModel.kt` + 7 个 UI 页面，新增 `ui/settings/*Content.kt`，**-3634 行**；660 测试全绿（+57）；真机逐页验过 7 个域的数据全部正确回填。
+
+**三条踩出来的补充规矩**：
+
+5. **`combine` 的多参数重载最多 5 个**，六条流要 5+1 两段拼（`combine(vararg)` 要求元素同型）。
+6. **`instanceKeeper.getOrCreate<T>` 的 `T` 必须是 `InstanceKeeper.Instance`** —— `MaintenanceViewModel` 那种原样保留的类，要包一个 `Holder(model, scope)` 才能放进去。
+7. **UI 与组件包不同时，`typealias` 是最省事的过渡**（`feature/settings/MaintenanceState.kt` 给 6 个 `XxxUiState` 留了同名别名，6 个页面一行不用改）。
+
+
 **代价**：每域多 4 个文件（Contract / Reducer / Executor / StoreFactory）+ 1 个 Component。
 换来的是：一个域的状态机可以被纯函数测试穷举、IO 只有一处、UI 只剩渲染。

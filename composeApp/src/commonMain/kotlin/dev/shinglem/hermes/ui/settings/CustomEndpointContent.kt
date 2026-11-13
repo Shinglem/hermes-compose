@@ -1,4 +1,4 @@
-package dev.shinglem.hermes.feature.settings
+package dev.shinglem.hermes.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,6 +34,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,7 +45,13 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.shinglem.hermes.component.settings.CustomEndpointComponent
+import dev.shinglem.hermes.component.settings.CustomEndpointIntent
+import dev.shinglem.hermes.component.settings.CustomEndpointState
 import dev.shinglem.hermes.core.contract.CustomEndpointDto
+import dev.shinglem.hermes.feature.settings.EndpointDraft
+import dev.shinglem.hermes.feature.settings.API_MODES
+import dev.shinglem.hermes.feature.settings.apiModeLabel
 import dev.shinglem.hermes.core.error.toNotice
 import dev.shinglem.hermes.core.result.Loadable
 import dev.shinglem.hermes.ui.component.EmptyState
@@ -57,7 +64,30 @@ import dev.shinglem.hermes.ui.icon.AppIcons
  * 否则看表单。端点保存在后端 profile 的 `config.yaml`，激活后主模型槽位指向它。
  */
 @Composable
-fun CustomEndpointPage(
+fun CustomEndpointContent(
+    component: CustomEndpointComponent,
+    modifier: Modifier = Modifier,
+) {
+    val state by component.state.collectAsState()
+    CustomEndpointPage(
+        state = state,
+        onCreate = { component.onIntent(CustomEndpointIntent.StartCreate) },
+        onEditEndpoint = { component.onIntent(CustomEndpointIntent.StartEdit(it)) },
+        onDraftChange = { component.onIntent(CustomEndpointIntent.EditDraft(it)) },
+        onValidate = { component.onIntent(CustomEndpointIntent.Validate) },
+        onSave = { component.onIntent(CustomEndpointIntent.Save) },
+        onCancel = { component.onIntent(CustomEndpointIntent.CancelEdit) },
+        onActivate = { component.onIntent(CustomEndpointIntent.Activate(it)) },
+        onAskDelete = { component.onIntent(CustomEndpointIntent.AskDelete(it)) },
+        onConfirmDelete = { component.onIntent(CustomEndpointIntent.ConfirmDelete) },
+        onDismissDelete = { component.onIntent(CustomEndpointIntent.DismissDelete) },
+        onRefresh = { component.onIntent(CustomEndpointIntent.Reload) },
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun CustomEndpointPage(
     state: CustomEndpointState,
     onCreate: () -> Unit,
     onEditEndpoint: (CustomEndpointDto) -> Unit,

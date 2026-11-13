@@ -605,7 +605,7 @@ Windows 实现 = `SetParent` 转 `WS_CHILD` + `SetWindowPos` 定尺寸 + `SetWin
 |---|---|---|---|---|
 | **S0** | 依赖与基座验证 | 🟡 **部分完成**（见下方「S0 实测记录」） | 编译 + 测试绿；4 项 spike 全通过并录 ADR | v0.6.0 |
 | **S1** | 清理违约与闲置 | ✅ **完成** | 编译 + 测试绿（578 全绿）；coil 只剩 `markdown-one` 一份 | v0.6.0 |
-| **S2** | 状态层基座（Component + Store 模板） | 🟡 模板已验证（Security 完成，余 6 域照抄） | `rg 'private var loaded = false'` 为 0；7 域能在纯 JVM 测 `dispatch` 并断言 state | v0.6.0 |
+| **S2** | 状态层基座（Component + Store 模板） | ✅ **完成**（7 域全迁；Maintenance 为过渡形态） | `rg 'private var loaded = false'` 为 0；7 域能在纯 JVM 测 `dispatch` 并断言 state | v0.6.0 |
 | **S3** | 传输与契约收敛 | ⏳ 未开始 | 回归绿；`4001` 家族有单测钉住 | v0.6.0 |
 | **S4** | Chat 域重写 | ⏳ 未开始 | `ChatViewModel.kt` 删除；最长文件 ≤ 400 行；`SessionShadow`/`SessionSwitchPlan` 删除 | v0.6.0 |
 | **S5** | Shell 与导航重写 | ⏳ 未开始 | `AppShell.kt` 删除；`SettingsDetailPane` 参数 ≤ 3；`viewModel {` 全仓库为 0 | v0.6.0 |
@@ -682,9 +682,30 @@ Windows 实现 = `SetParent` 转 `WS_CHILD` + `SetWindowPos` 定尺寸 + `SetWin
 
 ### S2 · 状态层基座（Component + Store 模板）
 
-> **实施状态（2026-11-14）**：🟡 模板已验证 —— **Security 域完成**（其余 6 域照抄）。
+> **实施状态（2026-11-14）**：✅ **S2 完成** —— 7 个 settings 域全部迁完（Security / ProviderKeys / CustomEndpoint / MoA / ModelSettings / Profiles / Maintenance）。
 >
-> 已落地的基座文件（后续各域直接用，不要各自发明）：
+> **落地结果**：
+>
+> | 域 | 形态 | 测试 |
+> |---|---|---|
+> | Security | 完整模板（Contract/Reducer/Executor/StoreFactory + Component） | Reducer 12 + Component 9 |
+> | ProviderKeys | 完整模板 | Component 10 + 分组 7 |
+> | CustomEndpoint | 完整模板 | Component 11 + 逻辑 9 |
+> | MoA | 完整模板 | Component 12 + 逻辑 8 |
+> | ModelSettings | 完整模板（四条数据线：info / 目录 / 辅助 / 备用） | Component 12 + 逻辑 5 |
+> | Profiles | 完整模板（无 profile 维度） | Component 11 + 逻辑 5 |
+> | Maintenance | **过渡形态**（见下） | 沿用既有测试 |
+>
+> 全部 `feature/settings/*ViewModel.kt` 与其 UI 页面已删除，UI 改到 `ui/settings/*Content.kt` 收 Component。合计 **-3634 行**。
+>
+> **Maintenance 为什么是过渡形态**：它 6 个领域、60 多个动作，逐方法搬进
+> Executor + Reducer 要重写全部取消语义，风险远大于收益；而且它**没有"进页面就拉的单一数据线"**
+> （六块各有自己的刷新时机）。这轮的做法是：把 `MaintenanceViewModel` 的 `viewModelScope`
+> 换成 Component 的 scope、包成 `DefaultMaintenanceComponent` 暴露 `state` + `onIntent`，
+> 6 个 UI 页面仍用它的方法引用（60 个 `{ model.onIntent(Xxx) }` 只会增加噪音）。
+> `13 篇` 原计划的"拆 7 个 Store"排到 **S8 收尾**。
+>
+> **已落地的基座文件**（后续各域直接用，不要各自发明）：
 >
 > | 文件 | 作用 |
 > |---|---|
@@ -702,6 +723,10 @@ Windows 实现 = `SetParent` 转 `WS_CHILD` + `SetWindowPos` 定尺寸 + `SetWin
 > 一条红色的「连不上后端服务」（`REST /api/config failed: Connection refused` 早于
 > `gateway connected` 3 秒）。迁移前 UI 的 `LaunchedEffect(profile, isConnected, mode)` 就是干这个的，
 > 接管生命周期时**不能把这个约束丢掉**。
+>
+> **每个域依赖自己的小 Gateway 接口**（`SecurityConfigGateway` / `ProviderKeysGateway` / …）而不是
+> 具体 Repository：后者依赖 `RestClient`（具体类，内部持 Ktor client），纯 JVM 单测里造不出来，
+> 那样整个 Component 都没法测。S3 抽 `domain/repository` 时统一删掉这些过渡接口。
 
 1. 落一套可复制的模板（先用最简单的域验证）：
    ```
@@ -923,6 +948,7 @@ component/chat/
 | 2026-11-13 | **S6 主体完成**：`application{}`→`nucleusApplication{}`、`Window`→`DecoratedWindow`、Swing 托盘→`NucleusTray`、通知窗→`DecoratedWindow(transparent)`；删除自研 `SingleInstance.kt`(250)+`SingleInstanceTest.kt`(83)。真机验证：锁文件 `HermesCompose-28ee0fc6.lock` 已建、第二实例立即退出只剩 1 进程、主窗口正常（gateway 已连、sessions count=1）。新增 ADR-067（通知窗保留 AWT 屏幕几何，`taoAwtProbe` 实测可用但 `MouseInfo` 返回垃圾值）。**遗留**：托盘图标需人工看系统托盘确认；`DeepLinkHandler` 偶发 restore_request 读取 ERROR（Nucleus 内部，无深链时是噪音） | S6 实施 |
 | 2026-11-13 | **S6 两项用户反馈修正**（用户确认托盘与 `--silent` 均正常）：① **标题栏自绘**（ADR-068）—— Tao 的 `DecoratedWindow` 在 Windows 上无边框，不调 `TitleBar` 就没有标题栏也不能拖动；且它不读 `MaterialTheme`，必须显式传 `TitleBarStyle`（否则深灰底 + 深色字看不清）。`App.kt` 拆出 `AppContent` 让标题栏与内容共享同一主题。实测：双击最大化 / 拖动 / 亮暗主题切换均正常。② ~~第二实例提前退出~~ **已回退**（见下条）。591 测试全绿 | 用户反馈"窗口没有标题栏" + "第二次启动后端启动有点慢" |
 | 2026-11-14 | **回退"第二实例提前探测"**（ADR-066 补充）。用户指出"启动慢"不是第二实例的问题 —— 核实日志后确认：慢在**首实例冷启 daemon**（4 次实测 30.9/32.4/32.6/33.5s，波动 ±1.3s；热复用只要 ~1.5s），与单实例判定无关。而探测绕过了 Nucleus 的 `watchForRestoreRequests` 装配路径，属实质风险。已删 `SingleInstanceProbe.kt` + 其 8 个测试，恢复成只设 `configuration`、判定交给 `nucleusApplication`。**另外两项确认不改**：① 冷启额外耗时有本机另一个官方实例占着 `8642`（`api_server_port_in_use`）的影响，用户已确认那是自己开的；② 退出时 `gateway stop` 杀 daemon 是**预期行为**。583 测试全绿（回到探测前基线） | 用户指出「你绕过的部分无效，考虑回退，用回原生写法。应该和第二实例无关」 |
+| 2026-11-14 | **S2 完成**（ADR-069）：7 个 settings 域全部迁成 Component + Store（Security/ProviderKeys/CustomEndpoint/MoA/ModelSettings/Profiles 用完整模板，Maintenance 用过渡形态 —— 6 域 60+ 动作，逐方法搬进 Reducer 风险过大，只把 `viewModelScope` 换成 Component scope 并包成 Component，拆 7 个 Store 排到 S8）。基座：`StoreAdapters` / `StoreHolder` / `RememberComponentContext`。每个域依赖自己的小 Gateway 接口（`SecurityConfigGateway` 等）让 Component 可在纯 JVM 测。删 7 个 `*ViewModel.kt` + 7 个 UI 页面，新增 `ui/settings/*Content.kt`，**-3634 行**。660 测试全绿（+57）。真机验 7 页数据全部正确回填 | S2 排期 |
 | 2026-11-14 | **S2 模板落地**（ADR-069）：Security 域迁成 Component + Store 样板。新增基座 `StoreAdapters`（Store→StateFlow / Label→Channel）、`StoreHolder`（Store + scope 装进 InstanceKeeper）、`RememberComponentContext`（S2 过渡）。Security 拆成 Contract / Reducer / Executor / StoreFactory / Component + `ui/settings/SecurityContent`，删旧 `SecurityState.kt` + `SecurityPage.kt`。**关键修正**：`Appear` 必须带 `connected` —— 第一版在 Component init 里直接读，实测先闪「连不上后端服务」（`REST /api/config failed` 早于 `gateway connected` 3 秒），迁移前 UI 的 `LaunchedEffect(isConnected)` 就是这个约束。真机验证审批页数据正确回填。604 测试全绿（+21） | S2 排期 |
 
 ---

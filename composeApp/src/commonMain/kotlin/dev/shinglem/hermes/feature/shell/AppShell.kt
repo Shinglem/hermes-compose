@@ -60,14 +60,20 @@ import dev.shinglem.hermes.feature.composer.ModelPill
 import dev.shinglem.hermes.feature.composer.ReasoningPill
 import com.arkivanov.decompose.ComponentContext
 import dev.shinglem.hermes.component.rememberDefaultComponentContext
+import dev.shinglem.hermes.component.settings.ConfigCustomEndpointGateway
+import dev.shinglem.hermes.component.settings.ConfigModelSettingsGateway
+import dev.shinglem.hermes.component.settings.MaintenanceIntent
+import dev.shinglem.hermes.component.settings.DefaultMaintenanceComponent
+import dev.shinglem.hermes.component.settings.ConfigProfilesGateway
+import dev.shinglem.hermes.component.settings.DefaultProfilesComponent
+import dev.shinglem.hermes.component.settings.DefaultModelSettingsComponent
+import dev.shinglem.hermes.component.settings.ConfigMoaGateway
+import dev.shinglem.hermes.component.settings.ConfigProviderKeysGateway
 import dev.shinglem.hermes.component.settings.ConfigSecurityGateway
+import dev.shinglem.hermes.component.settings.DefaultCustomEndpointComponent
+import dev.shinglem.hermes.component.settings.DefaultMoaComponent
+import dev.shinglem.hermes.component.settings.DefaultProviderKeysComponent
 import dev.shinglem.hermes.component.settings.DefaultSecurityComponent
-import dev.shinglem.hermes.feature.settings.CustomEndpointViewModel
-import dev.shinglem.hermes.feature.settings.EndpointPageCallbacks
-import dev.shinglem.hermes.feature.settings.ModelPageCallbacks
-import dev.shinglem.hermes.feature.settings.MoaPageCallbacks
-import dev.shinglem.hermes.feature.settings.MoaViewModel
-import dev.shinglem.hermes.feature.settings.MaintenanceViewModel
 import dev.shinglem.hermes.feature.settings.BackendAdminViewModel
 import dev.shinglem.hermes.feature.settings.DEFAULT_PROFILE_KEY
 import dev.shinglem.hermes.feature.settings.ProfileChoice
@@ -75,9 +81,6 @@ import dev.shinglem.hermes.feature.settings.ProfileScope
 import dev.shinglem.hermes.feature.settings.ProfileScopeChips
 import dev.shinglem.hermes.feature.settings.hasOwnProfileScope
 import dev.shinglem.hermes.feature.settings.isProfileScoped
-import dev.shinglem.hermes.feature.settings.ModelSettingsViewModel
-import dev.shinglem.hermes.feature.settings.ProfilesViewModel
-import dev.shinglem.hermes.feature.settings.ProviderKeysViewModel
 import dev.shinglem.hermes.feature.settings.SettingsDetailPane
 import dev.shinglem.hermes.feature.settings.SettingsNavPane
 import dev.shinglem.hermes.feature.settings.SettingsPage
@@ -165,25 +168,6 @@ fun AppShell(
     }
     val capabilityViewModel: CapabilityViewModel = viewModel {        CapabilityViewModel(container.capabilityRepository)
     }
-    val providerKeysViewModel: ProviderKeysViewModel = viewModel {
-        ProviderKeysViewModel(container.providerRepository)
-    }
-    val profilesViewModel: ProfilesViewModel = viewModel {
-        ProfilesViewModel(container.profilesAdminRepository)
-    }
-    val modelSettingsViewModel: ModelSettingsViewModel = viewModel {
-        ModelSettingsViewModel(
-            container.modelRepository,
-            container.modelAdminRepository,
-            container.configRepository,
-        )
-    }
-    val customEndpointViewModel: CustomEndpointViewModel = viewModel {
-        CustomEndpointViewModel(container.customEndpointRepository)
-    }
-    val moaViewModel: MoaViewModel = viewModel {
-        MoaViewModel(container.modelAdminRepository)
-    }
     val settingsViewModel: SettingsViewModel = viewModel {
         SettingsViewModel(
             store = container.settingsStore,
@@ -202,13 +186,20 @@ fun AppShell(
     val updaterViewModel: UpdaterViewModel = viewModel {
         UpdaterViewModel(container.restClient)
     }
-    val maintenanceViewModel: MaintenanceViewModel = viewModel {
-        MaintenanceViewModel(
-            container.maintenanceRepository,
-            container.configRepository,
-            container.hermesHome,
+    // 维护页组：S2 起由 Component 持有（内部仍是原 MaintenanceViewModel 的状态机，
+    // 只是 scope 由 Component 管 —— 见 DefaultMaintenanceComponent 的类注释）。
+    //
+    // maintenanceState 供 6 个页面直接读；动作仍走 ViewModel 的方法引用
+    // （60 多个动作逐条包成 Intent 只会增加噪音，见 MaintenanceComponent 的类注释）。
+    val maintenanceComponent = remember(context) {
+        DefaultMaintenanceComponent(
+            componentContext = context,
+            repository = container.maintenanceRepository,
+            configRepository = container.configRepository,
+            hermesHome = container.hermesHome,
         )
     }
+    val maintenance = maintenanceComponent.model
 
     val shellState by shellViewModel.state.collectAsStateWithLifecycle()
     // S2：安全三页改用 Decompose Component + MVIKotlin Store（ADR-069）。
@@ -221,6 +212,45 @@ fun AppShell(
             profile = shellState.activeProfile,
         )
     }
+    val providerKeysComponent = remember(context, shellState.activeProfile) {
+        DefaultProviderKeysComponent(
+            componentContext = context,
+            gateway = ConfigProviderKeysGateway(container.providerRepository),
+            profile = shellState.activeProfile,
+        )
+    }
+    val customEndpointComponent = remember(context, shellState.activeProfile) {
+        DefaultCustomEndpointComponent(
+            componentContext = context,
+            gateway = ConfigCustomEndpointGateway(container.customEndpointRepository),
+            profile = shellState.activeProfile,
+        )
+    }
+    val moaComponent = remember(context, shellState.activeProfile) {
+        DefaultMoaComponent(
+            componentContext = context,
+            gateway = ConfigMoaGateway(container.modelAdminRepository),
+            profile = shellState.activeProfile,
+        )
+    }
+    val modelSettingsComponent = remember(context, shellState.activeProfile) {
+        DefaultModelSettingsComponent(
+            componentContext = context,
+            gateway = ConfigModelSettingsGateway(
+                models = container.modelRepository,
+                admin = container.modelAdminRepository,
+                config = container.configRepository,
+            ),
+            profile = shellState.activeProfile,
+        )
+    }
+    // 配置档案页管理的是"所有档案"，不随 activeProfile 重建。
+    val profilesComponent = remember(context) {
+        DefaultProfilesComponent(
+            componentContext = context,
+            gateway = ConfigProfilesGateway(container.profilesAdminRepository),
+        )
+    }
     var showBackendDetail by remember { mutableStateOf(false) }
     // 后端起好再读：与迁移前 `LaunchedEffect(profile, isConnected, mode)` 的把关一致
     // （local 后端 ready 之前请求一定失败）。
@@ -229,22 +259,42 @@ fun AppShell(
             securityComponent.onConnectedChanged(true)
         }
     }
+    LaunchedEffect(providerKeysComponent, shellState.isConnected, shellState.mode) {
+        if (shellState.mode == ShellMode.SETTINGS && shellState.isConnected) {
+            providerKeysComponent.onConnectedChanged(true)
+        }
+    }
+    LaunchedEffect(customEndpointComponent, shellState.isConnected, shellState.mode) {
+        if (shellState.mode == ShellMode.SETTINGS && shellState.isConnected) {
+            customEndpointComponent.onConnectedChanged(true)
+        }
+    }
+    LaunchedEffect(profilesComponent, shellState.isConnected, shellState.mode) {
+        if (shellState.mode == ShellMode.SETTINGS && shellState.isConnected) {
+            profilesComponent.onConnectedChanged(true)
+        }
+    }
+    LaunchedEffect(modelSettingsComponent, shellState.isConnected, shellState.mode) {
+        if (shellState.mode == ShellMode.SETTINGS && shellState.isConnected) {
+            modelSettingsComponent.onConnectedChanged(true)
+        }
+    }
+    LaunchedEffect(moaComponent, shellState.isConnected, shellState.mode) {
+        if (shellState.mode == ShellMode.SETTINGS && shellState.isConnected) {
+            moaComponent.onConnectedChanged(true)
+        }
+    }
     var paletteOpen by remember { mutableStateOf(false) }
     val sessionState by sessionViewModel.state.collectAsStateWithLifecycle()
     val chatState by chatViewModel.state.collectAsStateWithLifecycle()
     val composerState by composerViewModel.state.collectAsStateWithLifecycle()
     val capabilityState by capabilityViewModel.state.collectAsStateWithLifecycle()
-    val providerKeysState by providerKeysViewModel.state.collectAsStateWithLifecycle()
-    val profilesState by profilesViewModel.state.collectAsStateWithLifecycle()
-    val modelSettingsState by modelSettingsViewModel.state.collectAsStateWithLifecycle()
-    val endpointState by customEndpointViewModel.state.collectAsStateWithLifecycle()
-    val moaState by moaViewModel.state.collectAsStateWithLifecycle()
     val settingsState by settingsViewModel.state.collectAsStateWithLifecycle()
     val subagentState by subagentViewModel.state.collectAsStateWithLifecycle()
     val updateState by updaterViewModel.state.collectAsStateWithLifecycle()
     val terminalState by container.terminalViewModel.state.collectAsStateWithLifecycle()
     val terminalSettings by container.terminalViewModel.settings.collectAsStateWithLifecycle()
-    val maintenanceScopeKey by maintenanceViewModel.profileKey.collectAsStateWithLifecycle()
+    val maintenanceScopeKey by maintenance.profileKey.collectAsStateWithLifecycle()
 
     val maintenanceProfileChoices = remember(shellState.profilesOrEmpty) {
         val defaultKey = ShellViewModel.DEFAULT_PROFILE
@@ -308,17 +358,8 @@ fun AppShell(
 
     // 提供方密钥页：profile 变了要重读；只有连上后端才拉（local 后端 ready 之前一定失败）。
     LaunchedEffect(shellState.activeProfile, shellState.isConnected, shellState.mode) {
-        providerKeysViewModel.setProfile(shellState.activeProfile)
         if (shellState.mode == ShellMode.SETTINGS && shellState.isConnected) {
-            providerKeysViewModel.onVisible()
-            profilesViewModel.onVisible()
-            modelSettingsViewModel.setProfile(shellState.activeProfile)
-            modelSettingsViewModel.onVisible()
-            customEndpointViewModel.setProfile(shellState.activeProfile)
-            customEndpointViewModel.onVisible()
-            moaViewModel.setProfile(shellState.activeProfile)
-            moaViewModel.onVisible()
-            maintenanceViewModel.setProfile(shellState.activeProfile)
+            maintenance.setProfile(shellState.activeProfile)
         }
     }
 
@@ -702,7 +743,7 @@ fun AppShell(
                                         ProfileScope(
                                             choices = maintenanceProfileChoices,
                                             activeKey = maintenanceScopeKey ?: DEFAULT_PROFILE_KEY,
-                                            onSelect = maintenanceViewModel::setScopeProfile,
+                                            onSelect = maintenance::setScopeProfile,
                                         ),
                                     )
                                 }
@@ -714,74 +755,13 @@ fun AppShell(
                                 onDismissSaved = settingsViewModel::dismissSaved,
                                 terminalSettings = terminalSettings,
                                 onTerminalSettingsChange = container.terminalViewModel::updateSettings,
-                                providerState = providerKeysState,
-                                onProviderEdit = providerKeysViewModel::edit,
-                                onProviderSave = providerKeysViewModel::save,
-                                onProviderRefresh = providerKeysViewModel::refresh,
-                                onProviderDismissSaved = providerKeysViewModel::dismissSaved,
-                                onProviderQueryChange = providerKeysViewModel::setQuery,
-                                endpointsState = endpointState,
-                                endpointActions = EndpointPageCallbacks(
-                                    onCreate = customEndpointViewModel::startCreate,
-                                    onEdit = customEndpointViewModel::startEdit,
-                                    onDraftChange = customEndpointViewModel::editDraft,
-                                    onValidate = customEndpointViewModel::validate,
-                                    onSave = customEndpointViewModel::save,
-                                    onCancel = customEndpointViewModel::cancelEdit,
-                                    onActivate = customEndpointViewModel::activate,
-                                    onAskDelete = customEndpointViewModel::askDelete,
-                                    onConfirmDelete = customEndpointViewModel::confirmDelete,
-                                    onDismissDelete = customEndpointViewModel::dismissDelete,
-                                    onRefresh = customEndpointViewModel::refresh,
-                                ),
-                                profilesState = profilesState,
-                                onProfileSelect = profilesViewModel::select,
-                                onProfilesRefresh = profilesViewModel::refresh,
-                                onProfileSoulChange = profilesViewModel::editSoul,
-                                onProfileSaveSoul = profilesViewModel::saveSoul,
-                                onProfileStartCreate = profilesViewModel::startCreate,
-                                onProfileCancelCreate = profilesViewModel::cancelCreate,
-                                onProfileDraftName = profilesViewModel::editDraftName,
-                                onProfileDraftClone = profilesViewModel::editDraftClone,
-                                onProfileDraftSoul = profilesViewModel::editDraftSoul,
-                                onProfileSubmitCreate = profilesViewModel::submitCreate,
-                                onProfileDelete = profilesViewModel::delete,
-                                onProfileRename = profilesViewModel::rename,
-                                onProfileImport = profilesViewModel::import,
-                                onProfileExport = profilesViewModel::export,
-                                onProfileDismissNotice = profilesViewModel::dismissNotice,
-                                modelState = modelSettingsState,
-                                moaState = moaState,
-                                moaActions = MoaPageCallbacks(
-                                    onSelectPreset = moaViewModel::select,
-                                    onAddPreset = moaViewModel::addPreset,
-                                    onDeletePreset = moaViewModel::deletePreset,
-                                    onSetDefault = moaViewModel::setDefault,
-                                    onSetActive = moaViewModel::setActive,
-                                    onPresetChange = moaViewModel::setPreset,
-                                    onAddReference = moaViewModel::addReference,
-                                    onRemoveReference = moaViewModel::removeReference,
-                                    onReferenceChange = moaViewModel::updateReference,
-                                    onSave = moaViewModel::save,
-                                    onRefresh = moaViewModel::refresh,
-                                ),
-                                modelActions = ModelPageCallbacks(
-                                    onProvider = modelSettingsViewModel::selectProvider,
-                                    onModel = modelSettingsViewModel::selectModel,
-                                    onContextChange = modelSettingsViewModel::editContext,
-                                    onSaveContext = modelSettingsViewModel::saveContextLength,
-                                    onApply = modelSettingsViewModel::applyMain,
-                                    onConfirmPending = modelSettingsViewModel::confirmPending,
-                                    onDismissPending = modelSettingsViewModel::dismissPending,
-                                    onReloadCatalog = modelSettingsViewModel::loadCatalog,
-                                    onAssignAux = modelSettingsViewModel::assignAuxTask,
-                                    onResetAux = modelSettingsViewModel::resetAux,
-                                    onRefreshAux = modelSettingsViewModel::loadAux,
-                                    onAddFallback = modelSettingsViewModel::addFallback,
-                                    onRemoveFallback = modelSettingsViewModel::removeFallback,
-                                    onSaveFallback = modelSettingsViewModel::saveFallback,
-                                    onRefreshFallback = modelSettingsViewModel::loadFallback,
-                                ),
+                                providerKeys = providerKeysComponent,
+                                customEndpoints = customEndpointComponent,
+
+                                profiles = profilesComponent,
+
+                                modelSettings = modelSettingsComponent,
+                                moa = moaComponent,
                                 security = securityComponent,
                                 officialDesktop = container.officialDesktop,
                                 autostart = autostartInfo,
@@ -801,10 +781,10 @@ fun AppShell(
                                 backendVersion = shellState.health?.version.orEmpty(),
                                 dataDir = appDataDir,
                                 logDir = container.config.app.log.dir,
-                                maintenance = maintenanceViewModel,
+                                maintenance = maintenance,
                                 backendAdmin = backendAdminViewModel,
                                 profileChoices = maintenanceProfileChoices,
-                                onSelectScopeProfile = maintenanceViewModel::setScopeProfile,
+                                onSelectScopeProfile = maintenance::setScopeProfile,
                                 onDeleteOrphanTask = { name ->
                                     composerScope.launch(Dispatchers.IO) {
                                         if (container.deleteOrphanTask(name)) {

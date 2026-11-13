@@ -1,6 +1,9 @@
-package dev.shinglem.hermes.feature.settings
+package dev.shinglem.hermes.component.settings
 
 import dev.shinglem.hermes.core.contract.EnvVarDto
+import dev.shinglem.hermes.feature.settings.CUSTOM_GROUP_ID
+import dev.shinglem.hermes.feature.settings.groupProviderEnvVars
+import dev.shinglem.hermes.feature.settings.hasValue
 import dev.shinglem.hermes.core.result.Loadable
 import kotlin.test.Test
 import kotlin.test.assertEquals
