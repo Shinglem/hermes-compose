@@ -522,12 +522,10 @@ actual object NativeNotifications {
 
     private fun aumidFor(home: File): String = AUMID_PREFIX + instanceId(home)
 
-    /** 与 `SingleInstance` 的命名同源：同一个 home → 同一个 id。 */
-    private fun instanceId(home: File): String {
-        val canonical = runCatching { home.canonicalPath }.getOrDefault(home.absolutePath)
-        val digest = MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray(Charsets.UTF_8))
-        return digest.take(4).joinToString("") { "%02x".format(it) }
-    }
+    /** 与 `SingleInstanceConfig` 的锁标识同源：同一个 home → 同一串哈希（只取哈希部分）。 */
+    private fun instanceId(home: File): String =
+        dev.shinglem.hermes.shell.entry.SingleInstanceConfig.identifierFor(home)
+            .substringAfter('-')   // "HermesCompose-<hash>" → "<hash>"
 
     /** tag / group 各限 16 字符（WinRT 限制）。`GROUP` 保持常量：同组的多条才会在通知中心堆叠。 */
     private const val NOTICE_TAG = "notice"

@@ -1,33 +1,29 @@
 package dev.shinglem.hermes
 
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.toAwtImage
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.WindowState
-import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import dev.nucleusframework.application.DecoratedWindow
+import dev.nucleusframework.application.nucleusApplication
 import dev.shinglem.hermes.core.app.AutostartInfo
-import dev.shinglem.hermes.core.app.DesktopTray
 import dev.shinglem.hermes.ui.notification.NotificationOverlay
 import dev.shinglem.hermes.core.app.Elevation
 import dev.shinglem.hermes.core.app.ElevationRelaunch
 import dev.shinglem.hermes.core.app.ProductInfo
 import dev.shinglem.hermes.core.app.RestartHandover
 import dev.shinglem.hermes.core.app.ScheduledAutostart
-import dev.shinglem.hermes.core.app.SingleInstance
-import dev.shinglem.hermes.core.app.TrayMenuItem
+import dev.shinglem.hermes.shell.entry.SingleInstanceConfig
+import dev.shinglem.hermes.shell.tray.NucleusTray
 import dev.shinglem.hermes.core.backend.BackendBootState
 import dev.shinglem.hermes.core.config.AutostartMode
 import dev.shinglem.hermes.core.config.ConfigEnvNames
@@ -40,6 +36,7 @@ import dev.shinglem.hermes.core.log.StartupLog
 import dev.shinglem.hermes.core.prefs.WindowBounds
 import dev.shinglem.hermes.di.DesktopContainer
 import dev.shinglem.hermes.feature.terminal.TerminalContent
+import dev.shinglem.hermes.platform.SystemNotifications
 import dev.shinglem.hermes.platform.TerminalQuoteBridge
 import dev.shinglem.hermes.platform.NativeNotifications
 import dev.shinglem.hermes.platform.appDataDir
@@ -87,25 +84,14 @@ private fun startupHome(): File = runCatching {
 }.getOrElse { File(System.getProperty("user.dir") ?: ".") }
 
 /**
- * 已有一份在跑：唤醒它然后退出。
+ * **已废弃（ADR-066）**：单实例改由 Nucleus 判定，第二实例在 `nucleusApplication` 内部
+ * 写完 restore 请求后自行 `exitProcess(0)`，永不回到我们的代码。
  *
- * `--silent` 的第二次触发（计划任务）**不唤醒**：用户正在用那一份，别把窗口抢到前台。
- * 唤醒送不到时（跨权限被拒、对方是旧版本）必须给反馈 —— 静默退出等于"点了没反应"。
+ * 保留这个函数只为说明一件事：**"唤醒失败给反馈"这条能力已被放弃**（用户确认）。
+ * 若将来要恢复，需要在 Nucleus 之外另建一条 IPC 探针，而不是加回这里的对话框。
  */
-private fun exitAsSecondInstance(startup: StartupLog, silent: Boolean, home: File): Nothing {
-    if (silent) {
-        startup.info("instance", "already running; silent trigger exits without activating")
-        exitProcess(EXIT_ALREADY_RUNNING)
-    }
-    val activated = SingleInstance.requestActivate(home)
-    startup.info("instance", "already running; activate=$activated")
-    if (!activated) {
-        showFatal(
-            "${ProductInfo.DISPLAY_NAME} 已在运行",
-            "已有一份 ${ProductInfo.DISPLAY_NAME} 在运行（可能在系统托盘里）。\n如果看不到窗口，请从托盘图标打开。",
-            silent = false,
-        )
-    }
+@Suppress("unused")
+private fun exitAsSecondInstanceLegacy(): Nothing {
     exitProcess(EXIT_ALREADY_RUNNING)
 }
 
@@ -166,21 +152,26 @@ fun main(args: Array<String>) {
     NativeNotifications.attachHome(File(startup.homePath))
     NativeNotifications.sync(container.preferences.nativeNotifications)
 
-    // 单实例判定：必须在"提权重启"之前 —— 否则用户先被 UAC 拦一道，点完"是"才被告知已有一份。
-    // 正式占位则在提权之后 —— 互斥量一旦创建，提权后的新进程会把正在退出的旧进程当成已有实例 → 活锁。
-    // 完整顺序见 .design/详细设计/工程与代码/08-单实例与启动时序.md §5。
     val home = startupHome()
+    when (val lock = SingleInstanceConfig.prepare(home)) {
+        is SingleInstanceConfig.Outcome.Ready -> {
+            dev.nucleusframework.core.runtime.SingleInstanceManager.configuration = lock.configuration
+            startup.info("instance", "lock dir=${lock.configuration.lockFilesDir} id=${lock.configuration.lockIdentifier}")
+        }
 
-    // 「重启客户端」拉起的新进程此刻被旧进程的互斥量挡着，先等它把锁交出来（见 RestartHandover）。
+        is SingleInstanceConfig.Outcome.Unavailable -> {
+            // 不能静默继续：Nucleus 在拿不到锁时会 fail-open 返回 true（允许双开）。
+            // 明确记一条错误，但**不阻断启动** —— 用户宁可双开也不愿打不开。
+            startup.error("instance", "单实例不可用：${lock.reason}（可能允许双开）")
+        }
+    }
+
+    // 「重启客户端」拉起的新进程此刻被旧进程的锁挡着，先等它把锁交出来（见 RestartHandover）。
     RestartHandover.parse(args.toList())?.let { predecessor ->
         startup.info("instance", "handover: waiting for predecessor pid=$predecessor")
         if (!RestartHandover.awaitExit(predecessor)) {
             startup.warn("instance", "handover: predecessor pid=$predecessor still alive")
         }
-    }
-
-    if (SingleInstance.isRunning(home)) {
-        exitAsSecondInstance(startup, silent, home)
     }
 
     // 提权：此刻**尚未持有**互斥量，可以安全地 runas 重启自己。
@@ -205,10 +196,9 @@ fun main(args: Array<String>) {
         }
     }
 
-    val instance = SingleInstance.acquire(home)
-        ?: // 探测与占位之间被别的进程抢先了（两个客户端同时启动）。
-        exitAsSecondInstance(startup, silent, home)
-    startup.info("instance", "acquired home=${home.absolutePath}")
+    // Nucleus 在建窗口时完成单实例判定（`acquireSingleInstanceLock`），第二实例在那里 `exitProcess(0)`
+    // 并写 restore 请求，第一实例自动把窗口拉出。所以这里不再自己占锁。
+    startup.info("instance", "home=${home.absolutePath}（单实例由 Nucleus 判定）")
     // 公式引擎的 native dll 由 ratex 自己解压到 `%LOCALAPPDATA%\RaTeX\…`，解压是「先删后拷」：
     // 目标被别的进程占用时整条公式渲染会**静默**退化成源码。这里提前触发一次并把结果写进日志，
     // 否则「公式显示成源码」只能靠猜（实测踩过：上一个实例没退干净，新实例全篇公式都是源码）。
@@ -245,81 +235,58 @@ fun main(args: Array<String>) {
         )
     }
 
-    val activateSignal = MutableStateFlow(0)
-    instance.onActivate {
-        // 唤醒线程在后台跑：只改信号，切前台的动作交给 Compose 侧（见下面的 LaunchedEffect）。
-        activateSignal.value += 1
-    }
-
     val windowConfig = container.config.app.window
     val closeToTray = container.config.app.closeToTray
     val savedBounds = container.preferences.windowBounds
 
-    application {
+    // Tao 窗口壳（ADR-062）。`enableSingleInstance = true` 让 Nucleus 判定单实例并负责
+    // 「第二实例把窗口拉出」（ADR-066）；`--silent` 首启不显示由 `visible` 控制。
+    nucleusApplication(
+        args = args,
+        enableSingleInstance = true,
+        initializeFileKit = false,
+    ) {
         val windowState = rememberWindowState(
             width = (savedBounds?.width ?: windowConfig.width).dp,
             height = (savedBounds?.height ?: windowConfig.height).dp,
             position = savedBounds?.let { WindowPosition(it.x.dp, it.y.dp) } ?: WindowPosition.PlatformDefault,
         )
-        // 后端必须与窗口是否可见无关：静默启动（--silent）时窗口不进入组合，
+        // 后端必须与窗口是否可见无关：静默启动（--silent）时窗口不显示，
         // 若把 start() 放在 App() 里，托盘模式就永远没有后端。
         LaunchedEffect(Unit) { container.backend.start() }
 
         // 托盘常驻：关窗只是隐藏，只有托盘菜单的「退出」才结束进程与后端子进程。
         var windowVisible by remember { mutableStateOf(!silent) }
         val boot = container.backend.state
-        // 窗口 / 任务栏 / 托盘共用一个图标资源（源是 packaging/icon.svg）。不设的话
-        // 任务栏显示的是 Java 咖啡杯 —— 与 exe 的图标对不上。
+        // 窗口 / 任务栏 / 托盘共用一个图标资源（源是 packaging/icon.svg）。
         val appIcon = painterResource(Res.drawable.icon)
-        val density = LocalDensity.current
-        val layoutDirection = LocalLayoutDirection.current
-        // 只算一次：`painterResource` 每次重组都可能给出新的 Painter 实例，
-        // 用它当 remember key 会反复重建托盘图标（图标闪、甚至短暂出现两个）。
-        val trayIconImage = remember { appIcon.toAwtImage(density, layoutDirection, Size(16f, 16f)) }
-
-        // 第二个实例发来的"显示窗口"请求：从托盘里拉出来，并尽力前置。
-        val activation by activateSignal.collectAsState()
-        LaunchedEffect(activation) {
-            if (activation > 0) {
-                windowVisible = true
-                startup.info("activate", "request #$activation -> window shown")
-            }
-        }
 
         fun quit() {
             startup.info("exit", "requested from tray")
-            instance.close()
             container.close()
             exitApplication()
         }
 
-        // 通知窗：与主窗口平级（`application` 作用域），托盘模式下主窗口不在组合里也能弹。
+        // 通知窗：与主窗口平级（`nucleusApplication` 作用域），托盘模式下主窗口不显示也能弹。
         NotificationOverlay()
 
-        val tray = remember(trayIconImage) {
-            DesktopTray(
-                icon = trayIconImage,
-                tooltip = ProductInfo.DISPLAY_NAME,
-                onActivate = { windowVisible = true },
-                menu = {
-                    listOf(
-                        TrayMenuItem.Action("显示主窗口") { windowVisible = true },
-                        TrayMenuItem.Separator,
-                        TrayMenuItem.Action("退出") { quit() },
-                    )
-                },
-            )
-        }
-        DisposableEffect(tray) {
-            tray.install()
-            onDispose { tray.dispose() }
-        }
+        // 托盘：`composenativetray` 的原生桥（解决 CMP-1936 中文菜单乱码）。
+        // 点图标先 `consumePendingAction()` 再决定显示/退出（沿用旧顺序）。
+        NucleusTray(
+            icon = appIcon,
+            tooltip = ProductInfo.DISPLAY_NAME,
+            onActivate = {
+                SystemNotifications.consumePendingAction()
+                windowVisible = true
+            },
+            onShow = { windowVisible = true },
+            onQuit = { quit() },
+        )
 
-        // 窗口**常驻组合、只切换可见性**（`visible`），不再用 `if (windowVisible)` 把它整块移除。
-        // 关到托盘时销毁 AWT 窗口，下次从托盘唤起就是一个新窗口：它的 `InputMethodRequests`
-        // 是空的，用户此时敲下的**第一个键**会被当成普通字符直接塞进输入框（输入法来不及接管），
-        // 第二个键才正常 —— 也就是「偶尔第一个字母绕过输入法」。复用同一个窗口对象即可避免。
-        Window(
+        // 窗口**常驻组合、只切换可见性**（`visible`），不用 `if (windowVisible)` 整块移除。
+        // 理由见 `08-单实例与启动时序.md`：销毁再重建窗口会让输入法的 `InputMethodRequests` 为空，
+        // 用户此时敲下的第一个键会绕过输入法直接落进输入框。
+        DecoratedWindow(
             onCloseRequest = {
                 // 最大化时记的是**还原后**的 bounds：下次启动先按普通窗口恢复。
                 if (windowState.placement == WindowPlacement.Floating) {
@@ -328,19 +295,12 @@ fun main(args: Array<String>) {
                 container.preferences.flush()
                 if (closeToTray) windowVisible = false else quit()
             },
-            title = ProductInfo.DISPLAY_NAME,
-            icon = appIcon,
             state = windowState,
             visible = windowVisible,
+            title = ProductInfo.DISPLAY_NAME,
+            icon = appIcon,
+            minimumSize = DpSize(windowConfig.minWidth.dp, windowConfig.minHeight.dp),
         ) {
-            LaunchedEffect(Unit) {
-                window.minimumSize = Dimension(windowConfig.minWidth, windowConfig.minHeight)
-            }
-            // 窗口从托盘重新显示时，AWT 的输入法上下文可能被系统停用过 —— 显式再启用一次
-            // （幂等；不这么做的话，第一批按键会以普通字符落进输入框）。
-            LaunchedEffect(windowVisible) {
-                if (windowVisible) window.enableInputMethods(true)
-            }
             App(
                 container = container,
                 onExitRequest = { quit() },

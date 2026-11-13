@@ -12,7 +12,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.WindowState
 import dev.shinglem.hermes.core.config.AppOptionsHolder
@@ -21,6 +20,7 @@ import dev.shinglem.hermes.core.config.ThemeStyle
 import dev.shinglem.hermes.platform.NotificationInbox
 import dev.shinglem.hermes.platform.NotificationRequest
 import dev.shinglem.hermes.ui.theme.HermesTheme
+import dev.nucleusframework.application.DecoratedWindow
 import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
 import java.awt.Toolkit
@@ -134,15 +134,26 @@ private fun NotificationWindow(
         }
     }
 
-    Window(
+    // Tao 下的通知窗（ADR-067）。参数对应旧 AWT `Window` 的四个要求：
+    //  - `transparent = true` + `undecorated = true` → 无边框、逐像素透明
+    //    （卡片自己画圆角与阴影，见 NOTIFICATION_SHADOW_MARGIN）
+    //  - `focusable = false` → **不抢焦点**（用户正在输入时不该把光标拿走）
+    //  - `alwaysOnTop = true` → 盖在普通窗口上
+    //  - `hiddenFromDock = true` → 不出现在任务栏（通知不是独立应用窗口）
+    // `visible` 恒为 true：条目在集合里就显示，移除即消失（不需要 show/hide 动画）。
+    DecoratedWindow(
         onCloseRequest = { NotificationInbox.dismiss(request.id) },
         state = state,
+        visible = true,
         title = request.title,
-        undecorated = true,
-        transparent = true,
         resizable = false,
-        alwaysOnTop = true,
+        minimizable = false,
+        maximizable = false,
         focusable = false,
+        alwaysOnTop = true,
+        undecorated = true,
+        hiddenFromDock = true,
+        transparent = true,
     ) {
         HermesTheme(darkTheme = darkTheme, style = themeStyle) {
             Box(modifier = Modifier.fillMaxSize().padding(NOTIFICATION_SHADOW_MARGIN)) {

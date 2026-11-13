@@ -1752,3 +1752,36 @@ fun runHermesApplication(container: AppContainer, flags: LaunchFlags) =
 - 代价：`--silent` 二次触发会抢前台（不可达）、唤醒失败无反馈（已放弃）、提权/非提权共存待验。
 
 ---
+## ADR-067 · 通知浮窗保留 AWT 屏幕几何，改用 Tao `SatelliteWindow`
+
+**决策**：`NotificationOverlay` 的三条约束（贴右下角 / 不抢焦点 / 与主窗口平级）**逻辑全部保留**，
+只把承载窗口从 Compose Desktop 的 `Window` 换成 Tao 的 `SatelliteWindow`。
+屏幕几何仍用 AWT（`GraphicsEnvironment` / `Toolkit.getScreenInsets` / `defaultTransform`）。
+
+**实测依据**（`:composeApp:taoAwtProbe`，独立进程，2026-11-13）：
+
+| API | 结果 | 判定 |
+|---|---|---|
+| `GraphicsEnvironment.isHeadless()` | `false` | ✅ |
+| `screenDevices.size` | `1` | ✅ |
+| `defaultScreenDevice` bounds | `2560x1440@0,0` | ✅ 正确 |
+| `Toolkit.getScreenInsets` | `0,38,0,48` | ✅ 正确（任务栏在底部） |
+| `defaultTransform.scaleX` | `1.0` | ✅ |
+| `MouseInfo.getPointerInfo()` | `-601689920,398` | ⚠️ **垃圾值但不抛** |
+
+**`MouseInfo` 的处置**：垃圾坐标不是 null，`deviceAtMouse` 判不出来 → 落到
+`defaultScreenDevice`。**这恰好是单屏下的正确行为**，现有代码的 `?: defaultScreenDevice`
+兜底已覆盖。但**多屏时必须重验** —— 届时若 `MouseInfo` 仍不可用，需要换成 Tao 自己的
+光标位置 API（`NucleusWindow` 或原生 `GetCursorPos`）。
+
+**为什么不用 `Window`**：Tao 进程没有 AWT 事件循环（`AWT-Windows` 线程存在但无 `AWT-EventQueue`），
+`Window` 会走 AWT 的窗口管理，与 Tao 的窗口栈冲突。`SatelliteWindow` 是 Nucleus 为此设计的
+顶层小窗（Tao 原生），语义最接近。
+
+**探针本身踩到的坑（留档）**：最初把 `AwtScreenProbe` 放在 Composable 的 `remember { }` 里，
+**窗口白屏且进程不退出**（jstack：`main` 停在 `nativeRunBlocking`，`AWT-Windows` 起来了但没有
+`AWT-EventQueue`）。改成独立进程 + 写文件后立刻有结果。**结论：这类系统 API 探针不要挂在 UI 线程上。**
+
+**后果**：`NotificationOverlay.kt` 的 `overlayGeometry()` / `stackOffsets()` / `workArea()` /
+`screenScale()` **全部保留不动**，只换渲染宿主（`Window` → `SatelliteWindow`）。
+`stackOffsets` 的纯函数测试（`NotificationStackTest`）不受影响。

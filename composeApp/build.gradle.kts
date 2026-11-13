@@ -826,3 +826,21 @@ tasks.register<JavaExec>("taoSpike") {
         setExecutable("$dir\\bin\\java.exe")
     }
 }
+
+// ============================================================================
+//  S6 前置探针（临时）：Tao 进程里 AWT 屏幕 API 是否可用。
+//  ---------------------------------------------------------------------------
+//  独立进程 + 写文件，不依赖 Compose 渲染 —— 放进 remember{} 里会导致窗口白屏，
+//  那本身就说明这些调用在 Tao 主线程上可能阻塞。
+//  结果：%TEMP%/hermes-awt-probe.txt 与 stdout。
+// ============================================================================
+tasks.register<JavaExec>("taoAwtProbe") {
+    group = "verification"
+    description = "S6 探针：验 AWT 的 GraphicsEnvironment / Toolkit / MouseInfo 在 Tao 运行时是否可用"
+    mainClass.set("dev.shinglem.hermes.shell.spike.AwtScreenProbe")
+    dependsOn("desktopMainClasses")
+    val desktopMain = kotlin.targets.getByName("desktop").compilations.getByName("main")
+    classpath = files(desktopMain.output.classesDirs, desktopMain.runtimeDependencyFiles)
+    jvmArgs("--enable-native-access=ALL-UNNAMED", "-Dfile.encoding=UTF-8")
+    hermesRtDir?.let { dir -> setExecutable("$dir\\bin\\java.exe") }
+}

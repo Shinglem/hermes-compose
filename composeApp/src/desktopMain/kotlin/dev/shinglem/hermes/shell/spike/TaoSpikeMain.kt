@@ -66,7 +66,8 @@ private fun TaoSpikeContent() {
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Text("S0 · Tao 空壳探针", style = MaterialTheme.typography.titleLarge)
         Text("1) 在下面输入框用微软拼音打「你好世界」，确认候选窗跟随、上屏、退格、撤销都正常。")
-        Text("2) 当前 AWT 探针：$probe")
+        Text("2) AWT 剪贴板：$probe")
+        Text("3) 屏幕几何由 :composeApp:taoAwtProbe 单独验（放这里会白屏）")
         Box(
             Modifier.fillMaxWidth().padding(vertical = 12.dp)
                 .border(1.dp, MaterialTheme.colorScheme.outline),
