@@ -447,7 +447,7 @@ class ChatViewModel(
                         )
                     }
                 } else {
-                    _state.update { state -> state.appendLocalUser(nextLocalId("user"), trimmed) }
+                    _state.update { state -> state.appendLocalUser(nextLocalId("user"), trimmed, attachments) }
                     _state.update {
                         it.copy(streaming = it.streaming ?: StreamingState(startedAt = Clock.System.now()))
                     }
@@ -2080,8 +2080,18 @@ class ChatViewModel(
         )
     }
 
-    private fun ChatState.appendLocalUser(id: String, text: String): ChatState {
-        val item = ChatItem.UserMessage(id, Clock.System.now(), text)
+    private fun ChatState.appendLocalUser(
+        id: String,
+        text: String,
+        attachments: List<PromptAttachment> = emptyList(),
+    ): ChatState {
+        val item = ChatItem.UserMessage(
+            id = id,
+            timestamp = Clock.System.now(),
+            text = text,
+            // 乐观行也要带上附件，否则"刚发出去的那条"看不到图，要等重新拉历史才出现（#20）。
+            attachments = attachments.map { UserAttachment(path = it.path, name = it.path.fileNameOrPath()) },
+        )
         return copy(load = Loadable.Ready(load.valueOrNull.orEmpty() + item))
     }
 

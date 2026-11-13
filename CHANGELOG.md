@@ -5,6 +5,37 @@
 
 ---
 
+
+## [0.5.8] · 2026-11-13（hermes 0.23.0）
+
+> **完整包版本**：tag `v0.5.8-0.23.0`，由 CI `desktop-release` 构建。
+> 纯桌面外壳（不含 payload）；payload 与工具链不变：hermes 0.23.0 / `toolchain-v1`。
+
+### 修复
+
+- **发出带附件的消息后，对话里看不到附件链接**（#20）。图片其实是送达的（agent 能描述内容），
+  但这一轮的用户消息在界面上只有文字，回头翻历史也看不出它带过图。
+
+  根因有两处：发送时的本地乐观行只带 `text`；而后端把附件记在正文里
+  （`@image:<绝对路径>` 行 + 紧随其后的 `[screenshot]` 占位行），客户端原样渲染，
+  用户只会看到一串没意义的路径。
+
+  现在：`ChatItem.UserMessage` 带 `attachments`，渲染成可点击的附件 chip（图标 + 文件名）；
+  两个来源都覆盖 —— 本地乐观行直接取 `PromptAttachment`，读历史时由
+  `splitUserAttachments()` 从正文解析 `@image:` 行并丢掉占位行。
+  所以**刚发出的那条和刷新后的历史都能看到**。
+
+  点击用新增的 `openLocalPath()` 交给系统默认程序。**没有复用 `openExternalUrl()`** ——
+  那个只放行 `http`/`https`/`mailto`（输入来自模型输出，不能替用户执行本地文件）；
+  附件路径来自用户自己，语义不同，因此单独一条通道
+  （`Desktop.open` → 失败回落 `rundll32 url.dll,FileProtocolHandler`）。
+
+### 升级
+
+- 覆盖 `bin/App.jar` 即可（`lib/`、`app/*.cfg` 与 payload 均无变化）。
+
+---
+
 ## [0.5.7] · 2026-11-13（hermes 0.23.0）
 
 > **完整包版本**：tag `v0.5.7-0.23.0`，由 CI `desktop-release` 构建。
@@ -907,10 +938,10 @@ jlink 裁剪运行时、原生启动器打包、单实例与自启任务清理�
 
 | 数字 | 在哪 | 谁生成 | 谁消费 |
 |---|---|---|---|
-| `appVersion = "0.5.7"` | `composeApp/build.gradle.kts` | 手工 | jpackage 的 `packageVersion` / `-Djpackage.app-version`、启动器 cfg、发布资产文件名 |
+| `appVersion = "0.5.8"` | `composeApp/build.gradle.kts` | 手工 | jpackage 的 `packageVersion` / `-Djpackage.app-version`、启动器 cfg、发布资产文件名 |
 | `v<桌面版本>-<hermes版本>` | GitHub Release tag | `desktop-release` 按输入拼 | 发布资产入口、`gh release download` |
 
-**tag 就是唯一版本号**，形如 `v0.5.7-0.23.0`：前半是桌面端版本（对应 `appVersion`），
+**tag 就是唯一版本号**，形如 `v0.5.8-0.23.0`：前半是桌面端版本（对应 `appVersion`），
 后半是配套的 Hermes payload 版本（`Shinglem/hermes-bundle` 的 tag）。
 `appVersion` 只影响 exe 的属性与 cfg，不回写 tag。
 
@@ -919,7 +950,7 @@ jlink 裁剪运行时、原生启动器打包、单实例与自启任务清理�
 
 | Release | tag 形式 | 资产 |
 |---|---|---|
-| 桌面端 | `v0.5.7-0.23.0` | `hermes-desktop-compose-0.5.7-0.23.0-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
+| 桌面端 | `v0.5.8-0.23.0` | `hermes-desktop-compose-0.5.8-0.23.0-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
 | 工具链 | `toolchain-v1` | `launcher-windows-x64.zip` / `runtime-windows-x64.zip` / `SHA256SUMS.txt` |
 | payload | 另一个仓库 `Shinglem/hermes-bundle` 的 `v0.23.0` | payload 压缩分卷 |
 

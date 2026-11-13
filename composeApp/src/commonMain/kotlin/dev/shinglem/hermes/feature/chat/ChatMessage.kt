@@ -11,6 +11,13 @@ sealed interface ChatItem {
         override val id: String,
         override val timestamp: Instant?,
         val text: String,
+        /**
+         * 这一轮带的图片附件（#20）。
+         *
+         * 两个来源：发送时从 composer 透传（本地乐观行），以及读历史时从正文的
+         * `@image:<path>` 行解析（见 [splitUserAttachments]）。后者保证刷新后仍然看得到。
+         */
+        val attachments: List<UserAttachment> = emptyList(),
     ) : ChatItem
 
     data class AssistantMessage(

@@ -26,8 +26,13 @@ fun projectChat(rows: List<ChatRow>): List<ChatItem> {
         if (row.hidden) return@forEach
 
         when (row.role) {
-            ROLE_USER -> if (row.text.isNotBlank()) {
-                items += ChatItem.UserMessage(row.id, row.timestamp, row.text)
+            ROLE_USER -> {
+                // 正文里的 `@image:<path>` 行是后端对附件的记法：拆出来变成 chip，
+                // 否则重开历史只能看到一行没意义的路径（#20）。
+                val (text, attachments) = splitUserAttachments(row.text)
+                if (text.isNotBlank() || attachments.isNotEmpty()) {
+                    items += ChatItem.UserMessage(row.id, row.timestamp, text, attachments)
+                }
             }
 
             ROLE_ASSISTANT -> {
@@ -84,6 +89,51 @@ internal fun abnormalFinishNote(finishReason: String?): String? = when (finishRe
     "incomplete" -> "回答未完成（提供方提前结束）。"
     else -> null
 }
+
+/** 用户消息里的一条附件引用（从后端落库正文里解析出来的）。 */
+data class UserAttachment(
+    /** 绝对路径（后端 `@image:` 行里的那个）。 */
+    val path: String,
+    /** 显示用文件名。 */
+    val name: String,
+)
+
+/**
+ * 从后端落库的 user 正文里拆出附件引用（#20）。
+ *
+ * 后端把图注记成两种行：`@image:<绝对路径>`（引用本行之上的一条媒体）与紧随其后的
+ * `[screenshot]` 之类占位标记。界面上不该原样显示这两行 —— 它们对用户没有意义，
+ * 而应该变成一条可点击的附件 chip。
+ *
+ * 返回的正文已去掉这两类行；
+ * 解析失败的路径（空串）与重复项都会被丢弃。
+ */
+internal fun splitUserAttachments(text: String): Pair<String, List<UserAttachment>> {
+    if (!text.contains('@')) return text.trimEnd() to emptyList()
+    val kept = ArrayList<String>(8)
+    val attachments = ArrayList<UserAttachment>(4)
+    for (rawLine in text.lineSequence()) {
+        val line = rawLine.trim()
+        if (line.startsWith(IMAGE_REF_PREFIX)) {
+            val path = line.removePrefix(IMAGE_REF_PREFIX).trim().trim('"', '\'')
+            if (path.isNotEmpty()) {
+                attachments += UserAttachment(path = path, name = path.substringAfterLast('\\').substringAfterLast('/'))
+            }
+            continue
+        }
+        // `[screenshot]` / `[image]` 之类占位标记：信息已经由上面那条 chip 表达
+        if (line in MEDIA_PLACEHOLDERS) continue
+        kept += rawLine
+    }
+    return kept.joinToString("\n").trim() to attachments.distinctBy { it.path }
+}
+
+private const val IMAGE_REF_PREFIX = "@image:"
+private val MEDIA_PLACEHOLDERS = setOf("[screenshot]", "[image]", "[attached image]")
+
+/** 取文件名；路径里没有分隔符时原样返回（供界面显示用）。 */
+internal fun String.fileNameOrPath(): String =
+    substringAfterLast('\\').substringAfterLast('/').ifBlank { this }
 
 private fun truncationNotice(row: ChatRow): ChatItem.Notice? {
     val note = abnormalFinishNote(row.finishReason) ?: return null

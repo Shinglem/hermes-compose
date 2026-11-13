@@ -38,12 +38,14 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import org.jetbrains.compose.resources.stringResource
 import androidx.compose.ui.unit.dp
 import dev.shinglem.hermes.markdown.MarkdownText
 import dev.shinglem.hermes.platform.openExternalUrl
+import dev.shinglem.hermes.platform.openLocalPath
 import dev.shinglem.hermes.platform.touchDragScroll
 import dev.shinglem.hermes.resources.Res
 import dev.shinglem.hermes.resources.chat_branch_message
@@ -155,11 +157,52 @@ private fun UserMessageBlock(item: ChatItem.UserMessage) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(4.dp))
-            MarkdownText(
-                item.text,
-                mermaidFallbackText = stringResource(Res.string.chat_mermaid_fallback),
-                onLinkClick = { url -> openExternalUrl(url) },
-            )
+            if (item.text.isNotBlank()) {
+                MarkdownText(
+                    item.text,
+                    mermaidFallbackText = stringResource(Res.string.chat_mermaid_fallback),
+                    onLinkClick = { url -> openExternalUrl(url) },
+                )
+            }
+            if (item.attachments.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                AttachmentChips(item.attachments)
+            }
+        }
+    }
+}
+
+/**
+ * 这一轮带的图片附件（#20）。
+ *
+ * 只显示文件名，点击用**系统默认程序**打开 —— 图片预览交给用户自己的看图工具，
+ * 客户端不自己造预览窗口（与硬约束 8「不做等价复刻」一致）。
+ */
+@Composable
+private fun AttachmentChips(attachments: List<UserAttachment>) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        attachments.forEach { attachment ->
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { openLocalPath(attachment.path) }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    imageVector = AppIcons.AttachFile,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = attachment.name,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }
