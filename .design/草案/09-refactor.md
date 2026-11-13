@@ -609,7 +609,7 @@ Windows 实现 = `SetParent` 转 `WS_CHILD` + `SetWindowPos` 定尺寸 + `SetWin
 | **S3** | 传输与契约收敛 | ⏳ 未开始 | 回归绿；`4001` 家族有单测钉住 | v0.6.0 |
 | **S4** | Chat 域重写 | ⏳ 未开始 | `ChatViewModel.kt` 删除；最长文件 ≤ 400 行；`SessionShadow`/`SessionSwitchPlan` 删除 | v0.6.0 |
 | **S5** | Shell 与导航重写 | ⏳ 未开始 | `AppShell.kt` 删除；`SettingsDetailPane` 参数 ≤ 3；`viewModel {` 全仓库为 0 | v0.6.0 |
-| **S6** | 桌面壳迁 Tao | ⏳ 未开始 | 六项回归（单实例/提权/自启/托盘/触摸/IME）全过 | v0.6.0 |
+| **S6** | 桌面壳迁 Tao | 🟡 **主体完成**（托盘待人工确认） | 六项回归（单实例/提权/自启/托盘/触摸/IME）全过 | v0.6.0 |
 | **S8** | 收尾 | ⏳ 未开始 | §6 验收口径 1–19 全过 | v0.6.0 |
 | **S7** | 内嵌槽位（浏览器面板 + 插件宿主骨架）+ 编辑器槽位与选型 | ⏳ 未开始 | 浏览器面板可用；宿主页面能加载且桥通；编辑器选定并留槽 | **v0.6.1** |
 
@@ -878,6 +878,7 @@ component/chat/
 | 2026-11-13 | **调整阶段顺序：S1 之后先做 S6，再 S2–S5**。理由：① S6 只动 8 个文件、S2–S5 是 300+ 文件的量级 —— 用最小工验证最大风险；② S6 只碰 `shell/`，与 `component/`+`ui/` 正交，不返工；③ S6 之后 S2–S5 每步都能在真实产品壳里目视验证。**触摸仍无法验证**（用户环境限制），S6 该条记为"未验证 + 保留退路"，不计通过 | 用户提出、评估后采纳 |
 | 2026-11-13 | **ADR-066：单实例与 `--silent` 保留自研实现**。读双方源码后确认 Nucleus 缺三条已定论语义（`--silent` 不唤醒 / `--silent` 不建主窗口 / 按 home 隔离便携包），且 `ObserveSingleInstanceRestore` 是 internal 无法从外部拦。因此 `enableSingleInstance = false`，S6 的单实例部分是**纯搬家**（工作量反而变小） | 用户提问「单实例和 silent 能否靠 Nucleus 实现」，逐条对比后否决 |
 | 2026-11-13 | **ADR-066 修正（推翻初版）**：改为**采用** Nucleus 单实例。复核发现初版两条判断是错的（`DecoratedWindow(visible=)` 与 `SingleInstanceManager.configuration` 都是公开 API）；属实的"二次触发抢前台"场景不可达（任务只有 LogonTrigger 无重复），"唤醒失败无反馈"用户已接受。代价：删自研 250 行 + 83 行测试；新增待验项：提权/非提权实例可能互相看不见 | 用户追问"静默实例能否按 Nucleus 方式占锁"，重新核查后推翻 |
+| 2026-11-13 | **S6 主体完成**：`application{}`→`nucleusApplication{}`、`Window`→`DecoratedWindow`、Swing 托盘→`NucleusTray`、通知窗→`DecoratedWindow(transparent)`；删除自研 `SingleInstance.kt`(250)+`SingleInstanceTest.kt`(83)。真机验证：锁文件 `HermesCompose-28ee0fc6.lock` 已建、第二实例立即退出只剩 1 进程、主窗口正常（gateway 已连、sessions count=1）。新增 ADR-067（通知窗保留 AWT 屏幕几何，`taoAwtProbe` 实测可用但 `MouseInfo` 返回垃圾值）。**遗留**：托盘图标需人工看系统托盘确认；`DeepLinkHandler` 偶发 restore_request 读取 ERROR（Nucleus 内部，无深链时是噪音） | S6 实施 |
 
 ---
 
