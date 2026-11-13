@@ -1532,6 +1532,7 @@ Decompose `ChildPanels`（`Main` / `Details`，`mode = SINGLE | DUAL | TRIPLE`�
 
 > **单实例与 `--silent` 采用 Nucleus 的机制** —— 见 ADR-066：`enableSingleInstance = true`（静默也占锁），`DecoratedWindow(visible = !silent)`，删掉自研 250 行 + 83 行测试。第二实例在配置解析**之前**只读探测锁并提前退出（73ms，原 ~2s）。
 > **标题栏必须自绘** —— 见 ADR-068：Tao 的 `DecoratedWindow` 在 Windows 上无边框，不调 `TitleBar` 就没有标题栏也不能拖动；它不读 `MaterialTheme`，配色要显式传 `TitleBarStyle`。
+> **状态层模板** —— 见 ADR-069：Security 作为首个样板（Contract/Reducer/Executor/StoreFactory + Component），四条落库规矩 + `Appear(connected)` 的就绪把关。
 
 **必须保住的能力（不许回归）**：
 
@@ -1874,3 +1875,65 @@ Compose Desktop 的 `Window` 会带系统标题栏。不调 `TitleBar` 就得到
 **代价**：自绘标题栏意味着少了一点"系统原生"（比如 Windows 的吸附布局浮层、Aero Snap 拖到边缘
 仍由 OS 处理，但标题栏高度/按钮外观不跟系统主题档位走）。换来的是标题栏与 M3 配色一致、
 换风格时整窗统一。
+
+---
+## ADR-069 · 状态层模板：Decompose Component + MVIKotlin Store（S2 落地形态）
+
+**决策**：settings 各域按统一三件套重写，Security 作为首个样板（其余 6 个域照抄）：
+
+```
+component/<域>/XxxContract.kt     State / Intent / Result / Effect
+component/<域>/store/XxxReducer    纯函数（无协程、无 IO）
+component/<域>/store/XxxExecutor   CoroutineExecutor（唯一做 suspend 的地方）
+component/<域>/store/XxxStoreFactory
+component/<域>/XxxComponent       接口 + Default（instanceKeeper 持 Store）
+ui/<域>/XxxContent.kt            只收 Component，自己 collectAsState
+```
+
+**四条落库时踩出来的规矩**：
+
+1. **`Store` 不能直接放进 `InstanceKeeper`**。`getOrCreate<T>` 的 `T` 必须是
+   `InstanceKeeper.Instance`，直接放 Store 会让编译器推断出
+   `InstanceKeeper.Instance & Store<…>` 的交集并报
+   `TYPE_INTERSECTION_AS_REIFIED_ERROR`。统一用 `StoreHolder`（`component/StoreHolder.kt`）
+   包一层 —— 它还顺带承载 Executor 的 `CoroutineScope`，`onDestroy` 里一并取消，
+   避免在途请求在 Store 销毁后才 dispatch。
+2. **`Store.init()` 必须在 `accept` 之前**。`DefaultStore` 在 `init()` 里挂 executor，
+   未 init 时 `accept` 被**静默丢弃**（表现为"点了没反应"，极难查）。这个初始化放在
+   `StoreHolder` 的 `init` 里，谁用都不会漏。
+3. **`CoroutineExecutor` 没有 `execute { }` 辅助**（那是别人博客里的写法）。
+   可用的是 `protected val scope: CoroutineScope` + `dispatch` / `publish` / `state()`，
+   所以并发都写 `scope.launch { }`，取消随 Component 的 scope 传播。
+4. **Reducer 的参数名必须是 `msg`**（MVIKotlin 4.4.0 的 `Reducer.reduce(State, Message)`），
+   写成别的名字会得到 `PARAMETER_NAME_CHANGED_ON_OVERRIDE` 警告。
+
+**`Appear` 必须带"后端是否就绪"**（这条是实跑踩出来的，最值得记）：
+
+第一版让 Component 在 `init` 里直接 `Appear`，结果打开设置页先闪一条红色
+「连不上后端服务」—— 日志证据：`00:48:28.315 REST /api/config failed: Connection refused`，
+而 `gateway connected` 是 `00:48:31.025`。迁移前的 UI 用
+`LaunchedEffect(profile, isConnected, mode)` 把关（原注释：「只有连上后端才拉，
+local 后端 ready 之前一定失败」），Component 接管生命周期后**不能把这个约束丢掉**。
+
+改成 `SecurityIntent.Appear(connected: Boolean)`：未就绪时是**空操作**，等下一次已连接的
+`Appear`。UI 侧仍用 `LaunchedEffect` 推这个信号（不是为了"拉数据"，而是把"就绪"这个外部
+事实告诉 Component——这是它唯一不知道的东西）。
+
+**为什么 `profile` 是 Store 的构造参数而不是可变字段**：迁移前的 `setProfile` 本来就是
+"`loaded = false` + 状态重置"，即彻底丢弃；做成构造参数后上层用 `key(profile)` 重建 Component，
+语义等价但**不可能忘**。State 里仍保留 `profile` 字段，Reducer 用它兜底"结果回来时 profile 已变"
+（丢掉旧 edits，否则会把 A 仓库的改动写进 B 仓库）。
+
+**Domain 接口而非具体 Repository**：Security 只依赖 `SecurityConfigGateway`
+（`read` / `patch` 两个方法）。原因是 `ConfigRepository` 依赖 `RestClient`（具体类，
+内部持 Ktor client），纯 JVM 单测里造不出来 —— 那整个 Component 就没法测。
+这类小接口是 `13 篇` §2「component 只依赖 domain 接口」的最小落地：
+每域只声明自己用到的那几个方法，不引整份 Repository。S3 把 Repository 下沉到 `data/`
+时会统一抽 `domain/repository` 接口，届时删掉这些过渡接口。
+
+**实测**：604 个测试全绿（新增 21：`SecurityReducerTest` 12 + `SecurityComponentTest` 9）。
+真机验证：设置 → 安全 → 审批，字段（审批模式 smart / 超时 300 / 重载 MCP 开关 / 命令白名单）
+全部正确回填，"保存"因无改动而禁用，且启动后 `gateway.log` 不再有失败的 `/api/config`。
+
+**代价**：每域多 4 个文件（Contract / Reducer / Executor / StoreFactory）+ 1 个 Component。
+换来的是：一个域的状态机可以被纯函数测试穷举、IO 只有一处、UI 只剩渲染。

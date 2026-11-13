@@ -58,6 +58,10 @@ import dev.shinglem.hermes.feature.composer.ComposerController
 import dev.shinglem.hermes.feature.composer.ComposerViewModel
 import dev.shinglem.hermes.feature.composer.ModelPill
 import dev.shinglem.hermes.feature.composer.ReasoningPill
+import com.arkivanov.decompose.ComponentContext
+import dev.shinglem.hermes.component.rememberDefaultComponentContext
+import dev.shinglem.hermes.component.settings.ConfigSecurityGateway
+import dev.shinglem.hermes.component.settings.DefaultSecurityComponent
 import dev.shinglem.hermes.feature.settings.CustomEndpointViewModel
 import dev.shinglem.hermes.feature.settings.EndpointPageCallbacks
 import dev.shinglem.hermes.feature.settings.ModelPageCallbacks
@@ -73,7 +77,6 @@ import dev.shinglem.hermes.feature.settings.hasOwnProfileScope
 import dev.shinglem.hermes.feature.settings.isProfileScoped
 import dev.shinglem.hermes.feature.settings.ModelSettingsViewModel
 import dev.shinglem.hermes.feature.settings.ProfilesViewModel
-import dev.shinglem.hermes.feature.settings.SecurityViewModel
 import dev.shinglem.hermes.feature.settings.ProviderKeysViewModel
 import dev.shinglem.hermes.feature.settings.SettingsDetailPane
 import dev.shinglem.hermes.feature.settings.SettingsNavPane
@@ -117,7 +120,17 @@ fun AppShell(
     terminalContent: @Composable (TerminalTabVm, Modifier) -> Unit = { _, _ -> },
     /** 「引用终端选中内容」：读取 Swing 侧的选中文本，由 desktop 侧实现。 */
     onQuoteTerminalSelection: (() -> Unit)? = null,
+    /**
+     * S2 过渡参数：settings 各域改用 Decompose Component 后需要 `ComponentContext`。
+     * S5 落 `RootComponent` 时会由它统一持有，届时这个参数删除（`13 篇` §6.2）。
+     *
+     * 默认值 `null` 表示"由本函数自己造一个"（见函数体首行）；这样调用方不必关心，
+     * 又能保证 `remember` 一定在 composition 里执行（默认参数里的 `@Composable` 调用
+     * 在部分调用形态下不被允许）。
+     */
+    componentContext: ComponentContext? = null,
 ) {
+    val context = componentContext ?: rememberDefaultComponentContext()
     val shellViewModel: ShellViewModel = viewModel {
         ShellViewModel(
             gateway = container.gateway,
@@ -165,9 +178,6 @@ fun AppShell(
             container.configRepository,
         )
     }
-    val securityViewModel: SecurityViewModel = viewModel {
-        SecurityViewModel(container.configRepository)
-    }
     val customEndpointViewModel: CustomEndpointViewModel = viewModel {
         CustomEndpointViewModel(container.customEndpointRepository)
     }
@@ -201,7 +211,24 @@ fun AppShell(
     }
 
     val shellState by shellViewModel.state.collectAsStateWithLifecycle()
+    // S2：安全三页改用 Decompose Component + MVIKotlin Store（ADR-069）。
+    // `remember` 而不是 `viewModel` —— Component 有自己的生命周期，不是 androidx ViewModel。
+    // profile 变化时按 key 重建：与旧 `setProfile` 的"彻底重置"语义一致，但不可能忘。
+    val securityComponent = remember(context, shellState.activeProfile) {
+        DefaultSecurityComponent(
+            componentContext = context,
+            repository = ConfigSecurityGateway(container.configRepository),
+            profile = shellState.activeProfile,
+        )
+    }
     var showBackendDetail by remember { mutableStateOf(false) }
+    // 后端起好再读：与迁移前 `LaunchedEffect(profile, isConnected, mode)` 的把关一致
+    // （local 后端 ready 之前请求一定失败）。
+    LaunchedEffect(securityComponent, shellState.isConnected, shellState.mode) {
+        if (shellState.mode == ShellMode.SETTINGS && shellState.isConnected) {
+            securityComponent.onConnectedChanged(true)
+        }
+    }
     var paletteOpen by remember { mutableStateOf(false) }
     val sessionState by sessionViewModel.state.collectAsStateWithLifecycle()
     val chatState by chatViewModel.state.collectAsStateWithLifecycle()
@@ -210,7 +237,6 @@ fun AppShell(
     val providerKeysState by providerKeysViewModel.state.collectAsStateWithLifecycle()
     val profilesState by profilesViewModel.state.collectAsStateWithLifecycle()
     val modelSettingsState by modelSettingsViewModel.state.collectAsStateWithLifecycle()
-    val securityState by securityViewModel.state.collectAsStateWithLifecycle()
     val endpointState by customEndpointViewModel.state.collectAsStateWithLifecycle()
     val moaState by moaViewModel.state.collectAsStateWithLifecycle()
     val settingsState by settingsViewModel.state.collectAsStateWithLifecycle()
@@ -288,8 +314,6 @@ fun AppShell(
             profilesViewModel.onVisible()
             modelSettingsViewModel.setProfile(shellState.activeProfile)
             modelSettingsViewModel.onVisible()
-            securityViewModel.setProfile(shellState.activeProfile)
-            securityViewModel.onVisible()
             customEndpointViewModel.setProfile(shellState.activeProfile)
             customEndpointViewModel.onVisible()
             moaViewModel.setProfile(shellState.activeProfile)
@@ -758,10 +782,7 @@ fun AppShell(
                                     onSaveFallback = modelSettingsViewModel::saveFallback,
                                     onRefreshFallback = modelSettingsViewModel::loadFallback,
                                 ),
-                                securityState = securityState,
-                                onSecurityEdit = securityViewModel::edit,
-                                onSecuritySave = securityViewModel::save,
-                                onSecurityRefresh = securityViewModel::refresh,
+                                security = securityComponent,
                                 officialDesktop = container.officialDesktop,
                                 autostart = autostartInfo,
                                 orphanTasks = orphanTasks,

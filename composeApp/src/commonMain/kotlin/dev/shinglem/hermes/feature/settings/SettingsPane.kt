@@ -31,6 +31,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.shinglem.hermes.core.config.EditorsOptions
+import dev.shinglem.hermes.component.settings.SecurityComponent
+import dev.shinglem.hermes.ui.settings.SecurityContent
 import dev.shinglem.hermes.core.app.AutostartInfo
 import dev.shinglem.hermes.core.app.OrphanTaskInfo
 import dev.shinglem.hermes.feature.terminal.TerminalSettings
@@ -129,10 +131,8 @@ fun SettingsDetailPane(
     modelActions: ModelPageCallbacks = ModelPageCallbacks(),
     moaState: MoaSettingsState = MoaSettingsState(),
     moaActions: MoaPageCallbacks = MoaPageCallbacks(),
-    securityState: SecurityState = SecurityState(),
-    onSecurityEdit: (String, String) -> Unit = { _, _ -> },
-    onSecuritySave: (List<ConfigFieldSpec>) -> Unit = {},
-    onSecurityRefresh: () -> Unit = {},
+    /** 安全三页：S2 起整页由 Component 驱动，不再收 state + 三个回调。 */
+    security: SecurityComponent? = null,
     officialDesktop: dev.shinglem.hermes.core.app.OfficialDesktopLauncher? = null,
     autostart: AutostartInfo = AutostartInfo.DISABLED,
     orphanTasks: List<OrphanTaskInfo> = emptyList(),
@@ -364,24 +364,17 @@ fun SettingsDetailPane(
             SettingsPage.Privacy -> SecurityTab.PRIVACY
             else -> SecurityTab.CHECKPOINTS
         }
-        SecurityFormPage(
-            title = when (tab) {
-                SecurityTab.APPROVALS -> "审批"
-                SecurityTab.PRIVACY -> "隐私与网络"
-                SecurityTab.CHECKPOINTS -> "检查点"
-            },
-            subtitle = when (tab) {
-                SecurityTab.APPROVALS -> "危险动作需要确认的策略；改完立即对后端生效（审批模式会热广播给运行中的会话）。"
-                SecurityTab.PRIVACY -> "日志脱敏与内网访问限制；改完对后续请求生效。"
-                SecurityTab.CHECKPOINTS -> "文件改动快照；开关对**新会话**生效。"
-            },
-            specs = securityFieldsOf(tab),
-            state = securityState,
-            onEdit = onSecurityEdit,
-            onSave = onSecuritySave,
-            onReload = onSecurityRefresh,
-            modifier = modifier,
-        )
+        val subject = security
+        if (subject == null) {
+            Text(
+                "安全设置暂不可用（缺少组件）",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = modifier.padding(20.dp),
+            )
+        } else {
+            SecurityContent(component = subject, tab = tab, modifier = modifier)
+        }
         return
     }
     if (state.selected == SettingsPage.MainModel) {
