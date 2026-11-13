@@ -34,7 +34,6 @@ import dev.shinglem.hermes.core.app.ProductInfo
 import dev.shinglem.hermes.core.app.RestartHandover
 import dev.shinglem.hermes.core.app.ScheduledAutostart
 import dev.shinglem.hermes.shell.entry.SingleInstanceConfig
-import dev.shinglem.hermes.shell.entry.SingleInstanceProbe
 import dev.shinglem.hermes.shell.tray.NucleusTray
 import dev.shinglem.hermes.core.backend.BackendBootState
 import dev.shinglem.hermes.core.config.AutostartMode
@@ -128,40 +127,23 @@ fun main(args: Array<String>) {
     startup.info("cwd", System.getProperty("user.dir").orEmpty())
     startup.info("home", startup.homePath)
 
-    // ── 第二实例提前退出：必须在「解析配置 / 起后端」之前（S6 实测优化）──────────────
-    // 原来要等 `nucleusApplication` 才判定，第二实例因此把解析配置 → 起后端 → 自启对账
-    // 整套跑完才退出（实测到 autostart 日志就 ~2s，用户感知是「点了要等好几秒，然后什么都没发生」）。
-    //
-    // 这里**只读探测**，不占锁：真正的锁仍由 Nucleus 在 `nucleusApplication` 里占，
-    // 它的两个回调（`DeepLinkHandler.writeUriTo` / `SingleInstanceRestoreBus.fire`）才能正确装配。
-    // 详见 `shell/entry/SingleInstanceProbe.kt` 的类注释（S6 实测踩过：自己提前占锁会让唤醒失效）。
+    // ── 单实例配置：必须在第一次 `isSingleInstance()` 之前设好 ────────────────────
+    // 只设 `configuration`，**判定本身交给 Nucleus**（`nucleusApplication` 里的
+    // `acquireSingleInstanceLock`）。不要自己提前判定：首实例拿到锁时 `onLockAcquired`
+    // 会用 `onRestoreRequest` 去 `watchForRestoreRequests()`，那是**唯一**能让
+    // "第二实例请求 → 拉出窗口"生效的地方，而配套的 `SingleInstanceRestoreBus` 是 internal。
+    // 曾试过"配置解析前探测锁、判为第二实例就提前退出"，绕过了这条路径 → 已回退（ADR-066）。
     val home = startupHome()
     when (val lock = SingleInstanceConfig.prepare(home)) {
         is SingleInstanceConfig.Outcome.Ready -> {
-            // **必须在这里就设进 Nucleus**（setter 只允许在第一次 `isSingleInstance()` 之前改）：
-            // 不设的话 `nucleusApplication` 会用默认配置 —— 锁文件落在 `java.io.tmpdir` 下、
-            // 名字按主类派生（实测 `dev.shinglem.hermes.MainKt.lock`），提权/非提权会话的 TEMP
-            // 不同就会互相看不见（这正是 `LockDir` 要自定义目录的原因）。
-            // 探测与真正的判定也必须是**同一个**文件，否则探测永远读不到首实例的锁。
+            // 不设的话 Nucleus 用默认配置 —— 锁文件落在 `java.io.tmpdir` 下、名字按主类派生
+            // （实测 `dev.shinglem.hermes.MainKt.lock`），提权/非提权会话的 TEMP 不同就会互相
+            // 看不见（这正是 `LockDir` 要自定义目录的原因）。
             SingleInstanceManager.configuration = lock.configuration
             startup.info(
                 "instance",
                 "lock=${lock.configuration.lockFilePath} id=${lock.configuration.lockIdentifier}",
             )
-            when (SingleInstanceProbe.probe(lock.configuration)) {
-                SingleInstanceProbe.Verdict.SECOND -> {
-                    val woke = SingleInstanceProbe.requestRestore(lock.configuration)
-                    startup.info("instance", "already running; exited early（未解析配置）wake=$woke")
-                    exitProcess(0)
-                }
-
-                SingleInstanceProbe.Verdict.FIRST ->
-                    startup.info("instance", "first instance（锁目录 ${lock.configuration.lockFilesDir}）")
-
-                // 探测出错不阻断：交给 Nucleus 按原逻辑判定（它自己的兜底是 fail-open 允许双开）。
-                SingleInstanceProbe.Verdict.UNKNOWN ->
-                    startup.warn("instance", "单实例探测失败，交由 Nucleus 判定")
-            }
         }
 
         is SingleInstanceConfig.Outcome.Unavailable -> {
@@ -220,9 +202,8 @@ fun main(args: Array<String>) {
         }
     }
 
-    // 单实例锁已在上面（配置解析之前）由 `acquireSingleInstanceLock` 取得；
-    // `nucleusApplication` 内部会再调一次并走 `fileLock != null` 的提前返回分支。
-    startup.info("instance", "home=${home.absolutePath}（单实例已提前判定）")
+    // 单实例锁由 `nucleusApplication` 内部的 `acquireSingleInstanceLock` 取得（上面只设了配置）。
+    startup.info("instance", "home=${home.absolutePath}（单实例由 Nucleus 判定）")
     // 公式引擎的 native dll 由 ratex 自己解压到 `%LOCALAPPDATA%\RaTeX\…`，解压是「先删后拷」：
     // 目标被别的进程占用时整条公式渲染会**静默**退化成源码。这里提前触发一次并把结果写进日志，
     // 否则「公式显示成源码」只能靠猜（实测踩过：上一个实例没退干净，新实例全篇公式都是源码）。

@@ -1750,22 +1750,36 @@ fun runHermesApplication(container: AppContainer, flags: LaunchFlags) =
 | 4 | 未单独验（强杀后锁由 OS 释放，`retryLock` 兜底） |
 | 5 | ✅ **不成立的风险已排除**：`ConfigPaths.resolveHome()` 用 `jarDerivedHome()` 从 jar 位置反推，**与进程权限无关**，提权/非提权算出同一 `<home>` → 同一锁文件 |
 
-### 补充：第二实例提前退出（S6 实测优化）
+### 补充：第二实例退出开销 —— **不做优化**（2026-11-14 回退）
 
-`acquireSingleInstanceLock` 要等 Compose 起来才执行，而它前面已有「解析配置 → 起后端 → 自启对账」，
-第二实例实测要 ~2s 才被判定（用户反馈"第二次启动时 hermes 后端启动有点慢"就是这个）。
+曾怀疑"第二实例要把解析配置 → 起后端 → 自启对账整套跑完才退出"是用户感知的"启动慢"，
+据此加了 `SingleInstanceProbe`（配置解析前 `tryLock` 探测，判为第二实例就写唤醒请求后退出，
+实测 73ms）。
 
-改为在配置解析之前**只读探测**一次锁（`shell/entry/SingleInstanceProbe.kt`）：判为第二实例就写唤醒请求后立即退出。
-实测 `start` → `exited early` **73ms**，配置一次都没解析。三条硬约束（都是踩出来的）：
+**这是误判，已回退。** 用户反馈的慢是**首实例界面出来后网关要十来秒**，与单实例判定无关：
 
-1. **必须先把 `configuration` 设进 Nucleus 再探测**。否则探测读的是默认配置（锁文件在 `java.io.tmpdir`，
-   名字按主类派生：实测 `dev.shinglem.hermes.MainKt.lock`），与 Nucleus 实际用的目录对不上 →
-   探测恒为 FIRST、优化静默失效，但功能看起来仍正常（Nucleus 兜底）。
-2. **探测成功后必须立刻 `release()`**。占住不放会让 Nucleus 把本进程判成第二实例，表现是"永远开不起来"。
-3. **不能自己调 `isSingleInstance()` 提前判定**。首实例拿到锁时 `onLockAcquired` 会用
-   `onRestoreRequest` 去 `watchForRestoreRequests()` —— 那是**唯一**能让"第二实例请求 → 拉出窗口"
-   生效的地方；而配套的 `SingleInstanceRestoreBus.fire()` / `ObserveSingleInstanceRestore` 都是 `internal`，
-   外部抄不全。实测踩过：传空 Lambda 提前判定，第二实例正常退出，但最小化的窗口再也不动了。
+| 场景 | 实测 |
+|---|---|
+| 复用已有 daemon | ~1.5s attach |
+| **冷启 daemon** | **30.9s / 32.4s / 32.6s / 33.5s**（4 次，波动 ±1.3s） |
+
+冷启耗时全部在后端自身流程里（本机当时另有官方实例占着 `8642`
+→ `gateway_state.json` 报 `api_server_port_in_use`，会额外拖长平台恢复）。
+用户已确认：退出时 `gateway stop` 杀 daemon 是**预期行为**，不改。
+
+**为什么必须回退**（不只是"没用"，是**有害**）：
+
+1. 首实例拿到锁时 `onLockAcquired` 会用 `onRestoreRequest` 去 `watchForRestoreRequests()` ——
+   那是**唯一**能让"第二实例请求 → 拉出窗口"生效的地方；配套的
+   `SingleInstanceRestoreBus.fire()` / `ObserveSingleInstanceRestore` 都是 `internal`，外部抄不全。
+   实测踩过：传空 Lambda 提前判定，第二实例正常退出但最小化的窗口再也不动了。
+2. 探测与 Nucleus 必须用**同一个**锁文件。漏设 `configuration` 时探测读的是默认配置
+   （`java.io.tmpdir` + 主类派生名，实测 `dev.shinglem.hermes.MainKt.lock`），恒为 FIRST ——
+   优化静默失效但功能看起来正常，极难发现。
+3. 探测成功后必须立刻 `release()`，占住不放会让 Nucleus 把本进程判成第二实例。
+
+**结论**：现在只设 `configuration`，判定全交给 `nucleusApplication` 里的
+`acquireSingleInstanceLock`。**不要再往这个方向优化。**
 
 **风险与退路**：
 

@@ -759,8 +759,10 @@ component/chat/
 > **两项实测修正（原计划没有）**：
 > - **标题栏必须自绘**（ADR-068）：Tao 的 `DecoratedWindow` 在 Windows 上无边框，不调 `TitleBar`
 >   就没有标题栏也不能拖动；且 `TitleBar` 不读 `MaterialTheme`，配色要显式传 `TitleBarStyle`。
-> - **第二实例在配置解析前就退出**（ADR-066 补充）：只读探测锁（`shell/entry/SingleInstanceProbe.kt`）
->   → 判为第二实例写唤醒请求后立即退出。实测 73ms（原 ~2s）。三条硬约束见 ADR-066 补充节。
+> - ~~第二实例在配置解析前就退出~~ **已回退（2026-11-14）**：先加过 `SingleInstanceProbe` 提前探测，
+>   后来证实"启动慢"是**首实例冷启 daemon**（4 次实测 30.9/32.4/32.6/33.5s；热复用 ~1.5s），
+>   与单实例判定无关。现在只设 `configuration`，判定全交给 `nucleusApplication`。
+>   **不要再往这个方向优化**（绕过了 `watchForRestoreRequests` 装配，会让唤醒失效）。
 
 1. `Main.kt` 拆成 `shell/` 包：`DesktopEntry`（参数/单实例/提权自启）+ `HermesApplication`（窗口与组合）
 2. `application {}` → `nucleusApplication(backend = Tao)`；`Window` → `DecoratedWindow`
@@ -898,7 +900,8 @@ component/chat/
 | 2026-11-13 | **ADR-066：单实例与 `--silent` 保留自研实现**。读双方源码后确认 Nucleus 缺三条已定论语义（`--silent` 不唤醒 / `--silent` 不建主窗口 / 按 home 隔离便携包），且 `ObserveSingleInstanceRestore` 是 internal 无法从外部拦。因此 `enableSingleInstance = false`，S6 的单实例部分是**纯搬家**（工作量反而变小） | 用户提问「单实例和 silent 能否靠 Nucleus 实现」，逐条对比后否决 |
 | 2026-11-13 | **ADR-066 修正（推翻初版）**：改为**采用** Nucleus 单实例。复核发现初版两条判断是错的（`DecoratedWindow(visible=)` 与 `SingleInstanceManager.configuration` 都是公开 API）；属实的"二次触发抢前台"场景不可达（任务只有 LogonTrigger 无重复），"唤醒失败无反馈"用户已接受。代价：删自研 250 行 + 83 行测试；新增待验项：提权/非提权实例可能互相看不见 | 用户追问"静默实例能否按 Nucleus 方式占锁"，重新核查后推翻 |
 | 2026-11-13 | **S6 主体完成**：`application{}`→`nucleusApplication{}`、`Window`→`DecoratedWindow`、Swing 托盘→`NucleusTray`、通知窗→`DecoratedWindow(transparent)`；删除自研 `SingleInstance.kt`(250)+`SingleInstanceTest.kt`(83)。真机验证：锁文件 `HermesCompose-28ee0fc6.lock` 已建、第二实例立即退出只剩 1 进程、主窗口正常（gateway 已连、sessions count=1）。新增 ADR-067（通知窗保留 AWT 屏幕几何，`taoAwtProbe` 实测可用但 `MouseInfo` 返回垃圾值）。**遗留**：托盘图标需人工看系统托盘确认；`DeepLinkHandler` 偶发 restore_request 读取 ERROR（Nucleus 内部，无深链时是噪音） | S6 实施 |
-| 2026-11-13 | **S6 两项用户反馈修正**（用户确认托盘与 `--silent` 均正常）：① **标题栏自绘**（ADR-068）—— Tao 的 `DecoratedWindow` 在 Windows 上无边框，不调 `TitleBar` 就没有标题栏也不能拖动；且它不读 `MaterialTheme`，必须显式传 `TitleBarStyle`（否则深灰底 + 深色字看不清）。`App.kt` 拆出 `AppContent` 让标题栏与内容共享同一主题。实测：双击最大化 / 拖动 / 亮暗主题切换均正常。② **第二实例提前退出**（ADR-066 补充）—— 在配置解析前只读探测锁（`shell/entry/SingleInstanceProbe.kt`），判为第二实例写唤醒请求后立即退出，实测 **73ms**（原 ~2s，用户反馈"第二次启动后端启动有点慢"）。三条硬约束：必须先把 `configuration` 设进 Nucleus 再探测、探测成功必须立刻 `release()`、不能自己调 `isSingleInstance()`（会丢掉 `watchForRestoreRequests` → 唤醒失效）。591 测试全绿（+8 个 `SingleInstanceProbeTest`） | 用户反馈"窗口没有标题栏" + "第二次启动后端启动有点慢" |
+| 2026-11-13 | **S6 两项用户反馈修正**（用户确认托盘与 `--silent` 均正常）：① **标题栏自绘**（ADR-068）—— Tao 的 `DecoratedWindow` 在 Windows 上无边框，不调 `TitleBar` 就没有标题栏也不能拖动；且它不读 `MaterialTheme`，必须显式传 `TitleBarStyle`（否则深灰底 + 深色字看不清）。`App.kt` 拆出 `AppContent` 让标题栏与内容共享同一主题。实测：双击最大化 / 拖动 / 亮暗主题切换均正常。② ~~第二实例提前退出~~ **已回退**（见下条）。591 测试全绿 | 用户反馈"窗口没有标题栏" + "第二次启动后端启动有点慢" |
+| 2026-11-14 | **回退"第二实例提前探测"**（ADR-066 补充）。用户指出"启动慢"不是第二实例的问题 —— 核实日志后确认：慢在**首实例冷启 daemon**（4 次实测 30.9/32.4/32.6/33.5s，波动 ±1.3s；热复用只要 ~1.5s），与单实例判定无关。而探测绕过了 Nucleus 的 `watchForRestoreRequests` 装配路径，属实质风险。已删 `SingleInstanceProbe.kt` + 其 8 个测试，恢复成只设 `configuration`、判定交给 `nucleusApplication`。**另外两项确认不改**：① 冷启额外耗时有本机另一个官方实例占着 `8642`（`api_server_port_in_use`）的影响，用户已确认那是自己开的；② 退出时 `gateway stop` 杀 daemon 是**预期行为**。583 测试全绿（回到探测前基线） | 用户指出「你绕过的部分无效，考虑回退，用回原生写法。应该和第二实例无关」 |
 
 ---
 
