@@ -1530,7 +1530,7 @@ Decompose `ChildPanels`（`Main` / `Details`，`mode = SINGLE | DUAL | TRIPLE`�
 结果是 AWT 依赖文件从 **10 个降到 3 个**，且 **`java.desktop` 仍需保留在运行时镜像里**
 —— 不要指望靠迁 Tao 裁掉它。
 
-> **单实例与 `--silent` 不采用 Nucleus 的机制** —— 见 ADR-066：`enableSingleInstance = false`，自研实现原样保留。
+> **单实例与 `--silent` 采用 Nucleus 的机制** —— 见 ADR-066：`enableSingleInstance = true`（静默也占锁），`DecoratedWindow(visible = !silent)`，删掉自研 250 行 + 83 行测试。
 
 **必须保住的能力（不许回归）**：
 
@@ -1667,41 +1667,88 @@ ADR-002 / ADR-003 的**结论仍有效**（不自造 WebView、不做 JS 引擎�
 
 ---
 
-## ADR-066 · 单实例与 `--silent` 保留自研实现，`enableSingleInstance = false`
+## ADR-066 · 单实例改用 Nucleus 的实现，删掉自研
 
-**决策**：S6 迁 Tao 时**不采用** Nucleus 的单实例机制，`nucleusApplication` 传
-`enableSingleInstance = false`，自研 `SingleInstance`（`CreateMutexW` + 命名事件）原样保留，
-只从 `core/app/` 搬到 `shell/singleinstance/`（纯搬家，逻辑不改）。
+**决策**：S6 迁 Tao 时**采用 Nucleus 的单实例**（`enableSingleInstance = true`，含 `--silent` 启动），
+**删除**自研 `SingleInstance.kt`（250 行）与 `SingleInstanceTest.kt`（83 行），
+只保留按 `<home>` 隔离的 `configuration` 覆盖与 `visible = !silent`。
 
-**理由**：读完双方实现后逐条对比，Nucleus 缺三条我们已定论的语义，每条都对应真实日常场景。
+**这份 ADR 推翻了它的初版。** 初版结论是"保留自研"，依据是三条"Nucleus 做不到"。逐条复核后，
+**两条其实做得到，第三条场景不可达且用户明确接受**：
 
-| 能力 | 自研（`core/app/SingleInstance.kt`） | Nucleus（`SingleInstanceManager.kt`） | 差距 |
-|---|---|---|---|
-| 互斥机制 | `Local\` 命名内核对象（FFM `CreateMutexW`）；**句柄随进程回收，强杀无僵尸锁** | `FileChannel.tryLock()` 锁文件 + shutdown hook 删文件 | 都能判重；Nucleus 被强杀时 hook 不执行，靠 OS 释放锁 + `retryLock` 兜底 |
-| 唤醒方式 | 命名事件 `SetEvent` → 专用等待线程 | 写 restore-request 文件 → `WatchService` **常驻轮询线程** | 等价，但 Nucleus 多一个常驻线程 |
-| **`--silent` 第二次触发** | **直接退出，不唤醒**（`exitAsSecondInstance` 的 `silent` 分支，注释明写「用户正在用那一份，别把窗口抢到前台」） | 无条件 `SingleInstanceRestoreBus.fire()` → `ObserveSingleInstanceRestore` 执行 `show() + setMinimized(false) + toFront() + requestFocus()` | ❌ **开机自启会把正在用的窗口抢到前台** |
-| **`--silent` 首启** | `windowVisible = !silent` → 主窗口**不进入组合** | 无此概念，`DecoratedWindow` 一组合就显示 | ❌ 需自己在外层套 `if` |
-| 唤醒失败的反馈 | 送不到时弹「已在运行」对话框 | `exitProcess(0)` 静默 | ❌ 退步 |
-| 名字隔离 | 按 `<home>` **canonicalPath 哈希**（两份便携包各自跑，这是设计目标） | `AppIdProvider.appId()` 单一常量 | ❌ **两份便携包会互相拦截** |
+| 原初版判断 | 复核结果 |
+|---|---|
+| "`--silent` 首启不建主窗口" Nucleus 做不到 | ❌ **判断错误**：`DecoratedWindow(visible: Boolean = true)` 是**公开参数**，一路传到 `TaoWindow`，spike 已验证 `visible=false` 不显示 |
+| "便携包隔离" Nucleus 做不到 | ❌ **判断错误**：`SingleInstanceManager.configuration` 是 **`public var`**，`Configuration(lockFilesDir, lockIdentifier)` 可覆盖；`AppIdProvider` 也能用 `-Dnucleus.app.id` |
+| "`--silent` 二次触发会抢前台" | ✅ **属实**，但**场景不可达**：本机任务 XML 实测只有 `<LogonTrigger><Delay>PT20S</Delay>`，无重复/空闲/恢复触发器 → 同一登录会话内不可能第二次 `--silent`。用户已明确接受 |
+| "唤醒失败没有反馈" | ✅ 属实，**用户已明确放弃**该能力（Nucleus 静默 `exitProcess(0)`） |
 
-**为什么不用 Nucleus 的机制但有条件地参考它**：
+**关键前提（初版漏掉的）**：静默实例**必须正常占锁**。这一点成立 —— Nucleus 的
+`acquireSingleInstanceLock(args)` 在 `nucleusApplication` 里**无条件执行**（只受 `enableSingleInstance` 控制，
+与是否 `--silent` 无关）。所以：
 
-- `SingleInstanceManager.releaseForHandoff()` 这个能力我们**暂时用不上**（我们的重启交接走
-  `RestartHandover`，语义已定论），但它是好设计，将来若做热更新可参考。
-- `SingleInstanceRestoreEffect` 这类「无窗口托盘应用收到二次启动」的钩子，我们的
-  `requestActivate` 已覆盖同等能力。
+| 场景 | 行为 |
+|---|---|
+| 登录自启（`--silent`） | 占锁 + `visible = false` → 驻留托盘，无可见窗口 ✅ |
+| 随后手动双击图标（无 `--silent`） | 判为第二实例 → 写 restore 请求 → 静默实例 `visible = true` 拉出窗口 ✅ |
+| 静默实例再收到 `--silent` | 也会被拉出窗口 —— **唯一退步**，但如上述不可达 |
+
+**落地形状**（`shell/entry/DesktopEntry.kt`）：
+
+```kotlin
+fun main(args: Array<String>) {
+    val flags = parseFlags(args)            // --silent / --tray ...
+    val startup = StartupLog(startupHome(flags))
+    // 必须在 nucleusApplication 之前，且只在第一次 isSingleInstance() 之前生效
+    SingleInstanceManager.configuration = SingleInstanceManager.Configuration(
+        lockFilesDir = Paths.get(home.absolutePath, "locks"),   // 便携包隔离
+        lockIdentifier = "HermesCompose-${homeHash(home)}",
+    )
+    // 提权 / 自启对账 / 后端启动：逻辑一行不改，只搬位置
+    runHermesApplication(container, flags)
+}
+
+// shell/entry/HermesApplication.kt
+fun runHermesApplication(container: AppContainer, flags: LaunchFlags) =
+    nucleusApplication(args = flags.args, enableSingleInstance = true, initializeFileKit = false) {
+        var visible by remember { mutableStateOf(!flags.silent) }
+        DecoratedWindow(
+            onCloseRequest = { if (container.preferences.closeToTray) visible = false else exitApplication() },
+            visible = visible,              // ← 静默首启不显示；托盘唤起时置 true
+            title = ProductInfo.DISPLAY_NAME,
+        ) {
+            KoinApplication(...) { AppRoot(container) }
+        }
+        NotificationOverlay(container)
+        NucleusTray(container) { visible = true }
+    }
+```
+
+**删除清单**：
+
+| 文件 | 行数 | 说明 |
+|---|---|---|
+| `core/app/SingleInstance.kt` | 250 | 含私有 `NativeObjects` FFM 封装，无其它引用 |
+| `desktopTest/.../SingleInstanceTest.kt` | 83 | 5 个用例；其中「不同 home 互不影响」的意图由 `configuration.lockFilesDir` 承接 |
+
+**验收口径**（S6 必须真机过）：
+
+1. 首个实例（`--silent`）：进程在、托盘在、**无可见窗口**、占着锁
+2. 再启动一个（无 `--silent`）：第二个进程退出、第一个窗口**被拉出并前置**
+3. 两份便携包（不同 `<home>`）：**各能起一份**，互不拦截
+4. 强杀后重启：能正常占锁（Nucleus 靠 OS 释放 `FileLock` + `retryLock` 兜底）
+5. 提权实例与非提权实例：**能看到彼此**（锁文件路径相同）—— 需实测，若不成立再退回自研
+
+**风险与退路**：
+
+- **第 5 条是新增的未知**：自研用 `Local\` 命名对象绕过 `Global\` 特权限定；Nucleus 用用户目录下的锁文件，
+  提权实例读非提权用户的 `AppData` 通常可读，但**用户目录不同**（`C:\Users\A` vs `C:\Windows\System32\config\systemprofile`）
+  会导致路径不同 → **看不到彼此 → 允许双开**。这一条必须先验，不过就退回自研（代码在 git 历史里）。
+- Nucleus 3.0 仍是 dev 版，单实例语义押在它身上；但接触面只在 `shell/entry/` 一处。
 
 **代价与收益**：
 
-- 代价：S6 少了一次"删 130 行自研代码"的机会；`SingleInstance.kt` 继续由我们维护。
-- 收益：S6 **不需要写新代码**（纯搬家），`--silent` / 便携包隔离 / 唤醒反馈三条语义零风险。
-  这实际上让 S6 变小了。
+- 收益：**-333 行**（250 + 83）、少一套 FFM 命名对象维护、托盘/窗口/单实例三件事用同一套 API。
+- 代价：`--silent` 二次触发会抢前台（不可达）、唤醒失败无反馈（已放弃）、提权/非提权共存待验。
 
-**S6 必须验的一条**：`enableSingleInstance = false` 之后，Nucleus 是否**仍创建锁文件**
-（`primePlatformIntegrations` 里有 reflection 调用 AUMID / autolaunch，需确认不含 SingleInstance）。
-若不创建 → 完全干净；若仍创建 → 确认它不会与我们的 mutex 打架（两个独立机制可以共存，
-只要 Nucleus 的锁不参与"是否第二实例"的判定）。
-
-**替代方案（否决）**：用 Nucleus 单实例 + 自己覆盖 `SingleInstanceRestoreEffect` 里
-"不抢前台"的判断 —— 但 `ObserveSingleInstanceRestore` 是 `internal` 且由 `DecoratedWindow`
-内部自动挂，**拦不住**；且 `AppIdProvider.appId()` 无法按 home 区分。两条都无法从外部修补。
+---

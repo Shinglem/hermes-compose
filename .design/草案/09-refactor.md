@@ -504,7 +504,7 @@ Nucleus **3.0 移除了全部 AWT 窗口后端**（`decorated-window-jni` / `-jb
 
 | 能力 | 现状实现 | 迁 Tao 后的要求 |
 |---|---|---|
-| 单实例 | 自研 `CreateMutexW` + `--silent` 激活 | `nucleusApplication` **自带单实例锁**，必须能关掉或让位；两条语义不能打架 |
+| 单实例 | 自研 `CreateMutexW` + `--silent` 激活 | **改用 Nucleus**（ADR-066）：`enableSingleInstance = true` 含静默实例；删自研 333 行 |
 | 提权重启 | `ShellExecute runas` + `--elevated` | 入口换壳后仍工作 |
 | 开机自启 | 计划任务 `RunLevel=HighestAvailable` + `<Arguments>--silent</Arguments>` | **不变**（不归 Tao 管） |
 | 托盘常驻 | `closeToTray` + `windowVisible` | 行为不变 |
@@ -512,17 +512,18 @@ Nucleus **3.0 移除了全部 AWT 窗口后端**（`decorated-window-jni` / `-jb
 | 中文输入 | BasicTextField + 系统 IME | `TaoImeSession` 端到端验 |
 | 标题栏/主题 | M3 + `AppPalette` | `DecoratedWindow` 的原生标题栏要与暗色协调；必要时用自绘标题栏 |
 
-#### 单实例：不采用 Nucleus（ADR-066）
+#### 单实例：采用 Nucleus（ADR-066）
 
-> **结论**：`enableSingleInstance = false`，自研 `SingleInstance`（`CreateMutexW` + 命名事件）**原样保留**。
-> 纯搬家到 `shell/singleinstance/`，逻辑一行不改。
+> **结论**：`enableSingleInstance = true`（**静默也占锁**）；`DecoratedWindow(visible = !silent)`
+> 控制首启不显示；`SingleInstanceManager.configuration` 按 `<home>` 隔离便携包。
+> **删掉自研 `SingleInstance.kt`（250 行）+ `SingleInstanceTest.kt`（83 行）。**
 >
-> 原因（详见 ADR-066）：Nucleus 缺三条已定论的语义 ——
-> ① `--silent` 第二次触发**不唤醒**（Nucleus 无条件 `show()+toFront()+requestFocus()`）；
-> ② `--silent` 首启**不建主窗口**（无此开关）；
-> ③ 名字按 `<home>` 哈希**隔离两份便携包**（Nucleus 用 `AppIdProvider.appId()` 单一常量）。
+> 初版判断"Nucleus 做不到"有两条是错的：`DecoratedWindow(visible=)` 与
+> `SingleInstanceManager.configuration` 都是**公开 API**。属实的只有"`--silent` 二次触发会抢前台"
+> （场景不可达：任务只有 `<LogonTrigger>` 无重复）与"唤醒失败无反馈"（**用户已接受**）。
 >
-> **待验**：`enableSingleInstance = false` 后 Nucleus 是否仍创建锁文件（不影响我们的判定即可共存）。
+> **待验**：提权与非提权实例是否能看到彼此（Nucleus 用用户目录锁文件，提权进程的
+> `AppData` 可能是 `systemprofile` → 路径不同 → 允许双开）。**不过就退回自研。**
 
 #### 原判定方法（留档）
 
@@ -823,7 +824,8 @@ component/chat/
 | **`ChildPanels` 是 experimental** | 已获准；**收在一层薄封装**（`ui/shell/PanelsHost.kt`），变 API 时只改一处 |
 | **Y 方案的立论基础未实测**：「back stack 里 Component 不销毁、继续跑」 | S0 第 3 步专门验证；不成立则整个 Y 的前提塌了，退回 X |
 | **Nucleus 3.0 无稳定版 + 单人主力** | ① 版本在 `libs.versions.toml` 钉死 dev 号；② 全部接触面收在 `shell/`，必要时 vendor / fork 自己打补丁；③ S0 第 4 步不过就整段推后 |
-| ~~`nucleusApplication` 的核内单实例锁与自研锁冲突~~ | **已解除（ADR-066）**：`enableSingleInstance` 是公开参数，且决定**不采用** Nucleus 单实例；自研实现纯搬家，S6 这部分零风险 |
+| ~~`nucleusApplication` 的核内单实例锁与自研锁冲突~~ | **已消除**：改用 Nucleus 单实例（ADR-066），自研 333 行删除 |
+| **提权/非提权实例可能互相看不见**（新增） | Nucleus 用用户目录锁文件，提权进程的 `AppData` 可能是 `systemprofile` → 路径不同 → 允许双开。**S6 第 5 条验，不过退回自研** |
 | **Tao 触摸/IME 回归** | S0 第 4 步 + S6 第 8 步各验一次；保留 `Modifier.touchDragScroll` 退路 |
 | **Nucleus 许可证待核**（GitHub 识别 `NOASSERTION`） | 引入前读 LICENSE 原文；不合规则不引入（`composenativetray` 同批） |
 | **`NativeView` 子窗口在 resize/DPI 切换下裂** | **v0.6.1** 的验点；不通过则浏览器面板退 L0（CDP 像素流） |
@@ -875,6 +877,7 @@ component/chat/
 | 2026-11-13 | **S1 完成**：`SessionSummary` 下沉 `domain/model`（core 不再依赖 feature）、删 coil 三依赖、`ContentNegotiation` 真装上 + `getAs/sendAs`、7 份 `Throwable.describe` 收敛成 `toUserNotice`/`asAppError`、`pad2` 提为 `core/time` 内部函数、3 个 `@Preview`、`ConfirmDialog` 迁 5 处（余 9 处是表单/详情型，随 S5 各页重写）。578 测试全绿 | S1 排期 |
 | 2026-11-13 | **调整阶段顺序：S1 之后先做 S6，再 S2–S5**。理由：① S6 只动 8 个文件、S2–S5 是 300+ 文件的量级 —— 用最小工验证最大风险；② S6 只碰 `shell/`，与 `component/`+`ui/` 正交，不返工；③ S6 之后 S2–S5 每步都能在真实产品壳里目视验证。**触摸仍无法验证**（用户环境限制），S6 该条记为"未验证 + 保留退路"，不计通过 | 用户提出、评估后采纳 |
 | 2026-11-13 | **ADR-066：单实例与 `--silent` 保留自研实现**。读双方源码后确认 Nucleus 缺三条已定论语义（`--silent` 不唤醒 / `--silent` 不建主窗口 / 按 home 隔离便携包），且 `ObserveSingleInstanceRestore` 是 internal 无法从外部拦。因此 `enableSingleInstance = false`，S6 的单实例部分是**纯搬家**（工作量反而变小） | 用户提问「单实例和 silent 能否靠 Nucleus 实现」，逐条对比后否决 |
+| 2026-11-13 | **ADR-066 修正（推翻初版）**：改为**采用** Nucleus 单实例。复核发现初版两条判断是错的（`DecoratedWindow(visible=)` 与 `SingleInstanceManager.configuration` 都是公开 API）；属实的"二次触发抢前台"场景不可达（任务只有 LogonTrigger 无重复），"唤醒失败无反馈"用户已接受。代价：删自研 250 行 + 83 行测试；新增待验项：提权/非提权实例可能互相看不见 | 用户追问"静默实例能否按 Nucleus 方式占锁"，重新核查后推翻 |
 
 ---
 
