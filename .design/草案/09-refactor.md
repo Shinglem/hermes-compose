@@ -4,8 +4,13 @@
 > 风险 → 验收口径 → 变更记录。**只留结论与可执行项，不写决策过程**；取舍理由一律进
 > [`07-decisions.md`](07-decisions.md)（ADR-057 ~ ADR-064）。
 >
-> 基线：`main` @ `3b180ac`（v0.5.5 之后）。实测口径：`composeApp/src` **291 个源文件 / 43,737 行 /
-> 533 个 `@Test`**，全部来自本轮实地统计。
+> **怎么落地、怎么测**见详细设计两篇：
+> [`13-重构落地设计（v0.6.0）`](../详细设计/工程与代码/13-重构落地设计（v0.6.0）.md)（逐文件的改法）与
+> [`14-测试计划（v0.6.0）`](../详细设计/工程与代码/14-测试计划（v0.6.0）.md)（逐测试的处置）。
+>
+> 基线：`main` @ `3b180ac`（v0.5.5 之后）。实测口径（2026-11-13，分支 `feature/v0.6.0-refactor`）：
+> `composeApp/src` **305 个源文件 / 49,935 行 / 573 个 `@Test` / 83 个测试文件**，
+> **16 个 androidx `ViewModel` 子类**、**11 个单文件 > 600 行**。
 >
 > **怎么"方便后续调整"**：§3 每个阶段带**状态列**与退出条件；每推进一段就改状态 + 在 §7 追加一行。
 > 阶段内的细项用会话内的 todo 跟踪，不进本文正文（避免两处维护）。
@@ -14,20 +19,30 @@
 
 ## 0. 决策前提（已与用户确认）
 
+### 0.1 版本切分（已定）
+
+| 版本 | 范围 | 说明 |
+|---|---|---|
+| **v0.6.0** | **S0–S6 + S8** | **完整对齐 v0.5.x 全部功能**，重新设计与规划代码。**不含 S7、不含编辑器** |
+| **v0.6.1** | **S7 + 内嵌编辑器槽位 + 编辑器选型定稿** | S7.1 浏览器面板 / S7.2 插件宿主骨架 / 编辑器槽位与选型 |
+| 分支 | **`feature/v0.6.0-refactor`** | 整个 v0.6.0 在该分支开发，**不直接动 `main`** |
+
+### 0.2 技术前提
+
 | 项 | 结论 |
 |---|---|
 | **整体架构** | **Decompose 3.6.1 + MVIKotlin 4.4.0 + Koin 4.2.2**（ADR-057） |
 | **桌面窗口壳** | **迁 Nucleus Tao 3.0 dev**（`nucleusApplication` + `DecoratedWindow`），接受 dev 版（ADR-062） |
 | 允许 experimental | `ChildPanels`（Main/Details/Extra + SINGLE/DUAL/TRIPLE）可用；`ChildItems` 不用 |
 | 时间旅行调试 | 0.6.0 **不接** `mvikotlin-timetravel`，0.7 再评估 |
-| 重构力度 | 结构性重写：15 个 `ViewModel` → `Component` + `Store`，状态逻辑平移 |
+| 重构力度 | 结构性重写：16 个 androidx `ViewModel` → `Component` + `Store`，状态逻辑平移 |
 | 状态稳定性 | UiState / Store State 用 `@Immutable` + **kotlinx-collections-immutable 0.5.2** |
-| **浏览器面板** | `NativeView` 嵌**我们自己拉起**的 payload Chromium（不是像素流、不是 WebView）（ADR-063） |
-| **插件宿主** | **全部插件运行在 WebView 内，不与 Compose UI 融合**；只做宿主框架，**不重写插件机制**；**本期不做插件功能**（ADR-064） |
-| **内置编辑器** | **不内嵌 VSCode**；后续选轻量单进程原生编辑器；ADR-005「不做文件树 / 自研编辑器内核」不变（ADR-064） |
+| **浏览器面板** | **v0.6.1** 用 `NativeView` 嵌**我们自己拉起**的 payload Chromium（ADR-063） |
+| **插件宿主** | **v0.6.1 只搭骨架**；全部插件运行在 WebView 内，不与 Compose UI 融合；**不重写插件机制**（ADR-064） |
+| **内置编辑器** | **不内嵌 VSCode**；v0.6.1 定选型（倾向单进程原生轻量编辑器）；ADR-005 不变（ADR-064） |
 | #13 / #14 / #15 | 不进 v0.6.0，在 0.5.x 线解决 |
 | 通知 / AUMID | 不进 v0.6.0，登记为 [`待修复问题.md`](../待修复问题.md) **#21** |
-| CI 门禁 | 本轮**不加** `desktopTest` 到 `desktop-release`（保持只编译） |
+| CI 门禁 | 本轮**不加** `desktopTest` 到 `desktop-release`（保持只编译）；但分支上每次提交须本地 T1–T5 全绿 |
 
 ---
 
@@ -37,10 +52,10 @@
 
 | 位置 | 现状 | 判定 |
 |---|---|---|
-| `feature/shell/AppShell.kt` | **1,059 行**；98 条 import；15 个 `viewModel {}`；19 个 `collectAsStateWithLifecycle`；13 个 `LaunchedEffect`；`Scaffold` 内 **192 条 `onXxx = ` 回调接线** | 一个文件同时是：容器装配、副作用编排、导航、通知分发、三模式布局、面板拼装 |
-| `feature/chat/ChatViewModel.kt` | **≈1,900 行**、78 个方法；持有 **8 个 `Map<SessionKey, *>`**（`cache` / `runtimeIds` / `generations` / `revisions` / `lastEventAt` / `cwds` / `savedStates` / `dirtyKeys`）+ 6 个待决表 | 传输、会话生命周期、fence 管理、流式状态机、模型切换、审批/澄清、后台任务、用量、重发/分支 —— 9 个关注点挤在一个类 |
+| `feature/shell/AppShell.kt` | **1,071 行**；98 条 import；15 个 `viewModel {}`；19 个 `collectAsStateWithLifecycle`；13 个 `LaunchedEffect`；`Scaffold` 内 **192 条 `onXxx = ` 回调接线** | 一个文件同时是：容器装配、副作用编排、导航、通知分发、三模式布局、面板拼装 |
+| `feature/chat/ChatViewModel.kt` | **2,147 行**、78 个方法；持有 **8 个 `Map<SessionKey, *>`**（`cache` / `runtimeIds` / `generations` / `revisions` / `lastEventAt` / `cwds` / `savedStates` / `dirtyKeys`）+ 6 个待决表 | 传输、会话生命周期、fence 管理、流式状态机、模型切换、审批/澄清、后台任务、用量、重发/分支 —— 9 个关注点挤在一个类 |
 | `feature/settings/SettingsDetailPane` | **62 个参数**、24 个 `SettingsPage` 分支 | 参数膨胀本身就是"这个函数不该存在"的信号 |
-| `feature/settings/MaintenanceState.kt` | **830 行**、单个 ViewModel 管 memory / ops / credentials / usage / sessions / integrations / debug **7 个不相关领域** | settings 域总计 9,157 行 / 34 文件，是全仓库最重的一块 |
+| `feature/settings/MaintenanceState.kt` | **915 行**、单个 ViewModel 管 memory / ops / credentials / usage / sessions / integrations / debug **7 个不相关领域** | settings 域总计 9,157 行 / 34 文件，是全仓库最重的一块 |
 | `feature/capabilities/CapabilityViewModel.kt` | 535 行管 skills / toolsets / platforms / cron / blueprints / catalog 六块 | 同上 |
 
 ### 1.2 分层违约（低耦合失败）
@@ -83,7 +98,7 @@
   `ComposerViewModel` / `CapabilityViewModel` / `MaintenanceViewModel` / `SecurityViewModel` 等）
 - 原因：构造参数全是 `final class`（`ChatRepository` 等），无法注入 fake；唯一替身是
   `SettingsCatalogTest.kt:143` 的 `FakeRestarter`
-- 现有 533 个测试大多是**纯函数/纯逻辑**（`ScrollFollow` / `SessionSwitchPlan` / `SessionShadow` /
+- 现有 573 个测试大多是**纯函数/纯逻辑**（`ScrollFollow` / `SessionSwitchPlan` / `SessionShadow` /
   `ChatProjection` / `buildSessionRows`）—— **这是本仓库最好的资产**，继续加测试而不是替换
 - `@Preview` **0 处**，截图测试 **0 处**
 
@@ -316,7 +331,7 @@ val componentModule = module {
 | **`mvikotlin-timetravel`** | 4.4.0 | 需录制器 + proto + 调试 UI，独立工作面。**0.7 评估** |
 | **Koin Annotations**（KSP） | 4.2.2 | 零 KSP；收益只是少写几行 DSL |
 | **kotlinx-serialization 契约生成器** | — | ADR-010 曾计划；生成器本身几百行且需跟后端 schema。本轮把 DTO 集中到 `domain/contract`，为将来留位 |
-| **Kotest / MockK** | — | 现有 `kotlin.test` + 533 测试已够 |
+| **Kotest / MockK** | — | 现有 `kotlin.test` + 573 测试已够 |
 | **Detekt / ktlint** | — | 仓库当前无任何静态分析；全量 lint 会一次报上千条历史问题。关键约束靠架构测试覆盖，留 v0.7 |
 | **multiplatform-settings** | 1.3.0（已用） | **保留**，只有 `AppPreferences` / `JsonFileSettings` 两处用 |
 | **`nucleus.screen-capture`** | 3.0 dev | 只有 dev 版，且是**单帧截图**不是串流 → 浏览器面板不用它（ADR-063） |
@@ -364,7 +379,7 @@ val componentModule = module {
 - 用于验证 `Store.state`（StateFlow）与 `Store.labels`（Label 流）的**发射序列**。
 - 为什么本轮必须有：S4 拆出 `ChatStore` 后，核心正确性判据就是「dispatch 一串 Intent →
   state 序列正确 + label 恰好发一次」。手写 `TestScope + launch { collect }` 抓不住"多发/少发"。
-- 与现有资产互补：533 个**同步纯函数**测试补的是逻辑，Turbine 补的是**异步流序列**，不替换。
+- 与现有资产互补：573 个**同步纯函数**测试补的是逻辑，Turbine 补的是**异步流序列**，不替换。
 
 **② FileKit 0.17.0**（`io.github.vinceglb:filekit-dialogs-compose`，**MIT**）— `implementation`
 - 删掉 5 个 `expect` + 5 个 `actual`：`FilePicker.kt`（`pickExecutableFile` / `pickJsonFile`）、
@@ -573,20 +588,23 @@ Windows 实现 = `SetParent` 转 `WS_CHILD` + `SetWindowPos` 定尺寸 + `SetWin
 
 ## 3. 阶段（每段带状态与退出条件）
 
-| 阶段 | 内容 | 状态 | 退出条件 |
-|---|---|---|---|
-| **S0** | 依赖与基座验证 | ⏳ 未开始 | 编译 + 测试绿；4 项 spike 全通过并录 ADR |
-| **S1** | 清理违约与闲置 | ⏳ 未开始 | 编译 + 测试绿；依赖树里 coil 只剩 `markdown-one` 一份 |
-| **S2** | 状态层基座（Component + Store 模板） | ⏳ 未开始 | `rg 'private var loaded = false'` 为 0；7 域能在纯 JVM 测 `dispatch` 并断言 state |
-| **S3** | 传输与契约收敛 | ⏳ 未开始 | 回归绿；`4001` 家族有单测钉住 |
-| **S4** | Chat 域重写 | ⏳ 未开始 | `ChatViewModel.kt` 删除；最长文件 ≤ 400 行；`SessionShadow`/`SessionSwitchPlan` 删除 |
-| **S5** | Shell 与导航重写 | ⏳ 未开始 | `AppShell.kt` 删除；`SettingsDetailPane` 参数 ≤ 3；`viewModel {` 全仓库为 0 |
-| **S6** | 桌面壳迁 Tao | ⏳ 未开始 | 六项回归（单实例/提权/自启/托盘/触摸/IME）全过 |
-| **S7** | 内嵌槽位（浏览器面板 + 插件宿主骨架） | ⏳ 未开始 | 浏览器面板可用；宿主页面能加载且桥通 |
-| **S8** | 收尾 | ⏳ 未开始 | §6 验收口径 1–15 全过 |
+| 阶段 | 内容 | 状态 | 退出条件 | 版本 |
+|---|---|---|---|---|
+| **S0** | 依赖与基座验证 | ⏳ 未开始 | 编译 + 测试绿；4 项 spike 全通过并录 ADR | v0.6.0 |
+| **S1** | 清理违约与闲置 | ⏳ 未开始 | 编译 + 测试绿；依赖树里 coil 只剩 `markdown-one` 一份 | v0.6.0 |
+| **S2** | 状态层基座（Component + Store 模板） | ⏳ 未开始 | `rg 'private var loaded = false'` 为 0；7 域能在纯 JVM 测 `dispatch` 并断言 state | v0.6.0 |
+| **S3** | 传输与契约收敛 | ⏳ 未开始 | 回归绿；`4001` 家族有单测钉住 | v0.6.0 |
+| **S4** | Chat 域重写 | ⏳ 未开始 | `ChatViewModel.kt` 删除；最长文件 ≤ 400 行；`SessionShadow`/`SessionSwitchPlan` 删除 | v0.6.0 |
+| **S5** | Shell 与导航重写 | ⏳ 未开始 | `AppShell.kt` 删除；`SettingsDetailPane` 参数 ≤ 3；`viewModel {` 全仓库为 0 | v0.6.0 |
+| **S6** | 桌面壳迁 Tao | ⏳ 未开始 | 六项回归（单实例/提权/自启/托盘/触摸/IME）全过 | v0.6.0 |
+| **S8** | 收尾 | ⏳ 未开始 | §6 验收口径 1–19 全过 | v0.6.0 |
+| **S7** | 内嵌槽位（浏览器面板 + 插件宿主骨架）+ 编辑器槽位与选型 | ⏳ 未开始 | 浏览器面板可用；宿主页面能加载且桥通；编辑器选定并留槽 | **v0.6.1** |
 
-> **可切割**：S6 / S7 若在 S0 的第 4 步（Tao 可行性）不过，**整段推到 0.6.1**，
-> 0.6.0 只交付 S0–S5 + S8。此时浏览器面板退到 L0（CDP 像素流），不影响其他验收项。
+> **v0.6.0 的范围就是 S0–S6 + S8**（完整对齐 v0.5.x 功能）。
+> **S7 与编辑器明确推后到 v0.6.1**，v0.6.0 不为其预留半成品代码。
+>
+> **可切割**：S6 若在 S0 的第 4 步（Tao 可行性 / 单实例锁 / 中文 IME / 触摸 / AWT 共存）不过，
+> **整段推到 v0.6.1**，v0.6.0 只交付 S0–S5 + S8（此时桌面壳仍为 Compose Desktop 自带窗口）。
 
 ### S0 · 依赖与基座验证
 
@@ -645,7 +663,7 @@ Windows 实现 = `SetParent` 转 `WS_CHILD` + `SetWindowPos` 定尺寸 + `SetWin
    ```
 2. 迁移顺序（从简到繁）：`Security` → `ProviderKeys` → `CustomEndpoint` → `Moa` →
    `ModelSettings` → `Profiles` → `Maintenance`
-   （`Maintenance` 830 行管 7 个领域，**先拆成 7 个 Store 再套模板**）
+   （`Maintenance` 915 行管 7 个领域，**先拆成 7 个 Store 再套模板**）
 3. 每迁一个域：删掉手写 `setProfile` / `onVisible` / `loaded`，改用生命周期 + `Intent`
 4. `@Immutable` + `ImmutableList` 铺到所有已迁移 State
 5. 每个域补 1 个 `Reducer` 纯函数单测 + 1 个 `Component` 单测
@@ -688,7 +706,7 @@ component/chat/
 ### S5 · Shell 与导航重写
 
 1. `RootComponent` + `ChildStack`（会话/能力/设置）+ `ChildPanels`（Main/Details）
-2. `AppShell`（1,059 行）拆成：
+2. `AppShell`（1,071 行）拆成：
    - `AppRoot`（≤80 行）：`KoinApplication` + `RootContent`
    - `RootContent`：`Row { ProfileRail; ChildStackView }`
    - `SessionsContent` / `CapabilitiesContent` / `SettingsContent` 各自持有子 Component
@@ -709,9 +727,13 @@ component/chat/
 8. **六项回归**：单实例（含 `--silent` 激活）/ 提权重启 / 开机自启 / 托盘常驻 /
    触摸滚动 / 中文 IME
 
-### S7 · 内嵌槽位
+### S7 · 内嵌槽位（**v0.6.1**，不在 v0.6.0 范围）
 
-**7.1 浏览器面板（做）**
+> v0.6.0 **不写 S7 的任何代码**。本节留作交接：v0.6.0 合入 `main` 后，
+> 在 v0.6.1 分支上按此实施。详细落地见
+> [`13-重构落地设计 §10`](../详细设计/工程与代码/13-重构落地设计（v0.6.0）.md)。
+
+**7.1 浏览器面板**
 
 1. `shell/browser/BrowserProcess.kt`：起 payload Chromium
    （`--remote-debugging-port=0` / `--do-not-de-elevate` / 临时 `--user-data-dir`），
@@ -739,8 +761,9 @@ component/chat/
 2. 硬编码文案 100 处 → `strings.xml`
 3. `runCatching` 逐处审（57 处），`CancellationException` 全部重抛
 4. 单测：8 个域各至少 1 个 Component 测试 + 1 个 Reducer 测试
-5. 文档同步：`03-architecture.md` 分层图、`02-selection.md` 依赖表、`07-decisions.md` ADR
+5. 文档同步：`03-architecture.md` 分层图、`02-selection.md` 依赖表、`07-decisions.md` ADR 状态
 6. `CHANGELOG.md` 写 0.6.0 条目（重构为主，行为变化逐条列）
+7. **v0.6.0 合入 `main`**（`feature/v0.6.0-refactor` → PR）
 
 ---
 
@@ -754,12 +777,13 @@ component/chat/
 - 不用 Decompose 的 **`ChildItems`**（alpha；"会话并行"用 `SessionRuntimeStore` 更直接）
 - 不把 `markdown-one` / `terminal` 拆成独立发布模块
 - 不动 `modules/terminal-bossterm` 上游 fork
-- **不做插件功能**（发现/加载/市场/权限）—— 只搭 WebView 宿主骨架
-- **不自研插件机制**（插件仍走官方 `plugin.js`）
-- **不内嵌 VSCode**；v0.6.0 也不引入任何编辑器
+- **v0.6.0 不做 S7**（浏览器面板 / 插件宿主骨架）—— 全部推后到 v0.6.1
+- **v0.6.0 不引入任何编辑器**，也不为编辑器留半成品槽位
+- **不做插件功能**（发现/加载/市场/权限）—— 且**不自研插件机制**（插件仍走官方 `plugin.js`）
+- **不内嵌 VSCode**
 - **不改通知栈**（`ShortcutScan` / `ShortcutAumidWriter` / `ProcessAumid` / `NativeNotifications`
   逻辑不动，只允许搬到新包）；AUMID 免快捷方式见 `待修复问题.md` #21
-- 不动 `main()` 之外的**单实例 / 提权 / 自启**语义（只换窗口壳）
+- 不动**单实例 / 提权 / 自启**语义（S6 只换窗口壳，这三条一行不改）
 - 不做视觉重设计（ADR-055 的色板不动）
 
 ---
@@ -776,11 +800,11 @@ component/chat/
 | **`nucleusApplication` 的核内单实例锁与自研锁冲突** | S0 第 4 步单列验证项；两条都不可调则退回 Compose Desktop 窗口壳 |
 | **Tao 触摸/IME 回归** | S0 第 4 步 + S6 第 8 步各验一次；保留 `Modifier.touchDragScroll` 退路 |
 | **Nucleus 许可证待核**（GitHub 识别 `NOASSERTION`） | 引入前读 LICENSE 原文；不合规则不引入（`composenativetray` 同批） |
-| **`NativeView` 子窗口在 resize/DPI 切换下裂** | S7 第 4 步的验点；不通过则浏览器面板退 L0（CDP 像素流） |
-| **composewebview POM 依赖 compose 1.11.1（我们 1.12.2）** | S7 spike 实测；不通过改自写 WebView2 controller |
-| **WebView2 Runtime 依赖** | 本机已装（157.0.4341.46）；发布时检测 + 引导安装；缺失时降级提示卡片 |
+| **`NativeView` 子窗口在 resize/DPI 切换下裂** | **v0.6.1** 的验点；不通过则浏览器面板退 L0（CDP 像素流） |
+| **composewebview POM 依赖 compose 1.11.1（我们 1.12.2）** | **v0.6.1** spike 实测；不通过改自写 WebView2 controller |
+| **WebView2 Runtime 依赖** | **v0.6.1** 事项；本机已装（157.0.4341.46），发布时检测 + 引导安装 |
 | MVIKotlin「数据流只在 Main thread」与现有 `Dispatchers.Swing` scope | `CoroutineExecutor` 用 UI scope；`mvikotlin-main` 的断言在测试里暴露问题 |
-| 15 个 Component 重写引入行为回归 | 533 现有测试 + 每域新增 Reducer/Component 测试；按域分 15 次小提交 |
+| 16 个 Component 重写引入行为回归 | 573 现有测试 + 每域新增 Reducer/Component 测试；按域分 16 次小提交 |
 | Decompose / Nucleus 均非 JetBrains 官方 | 单点封装：Decompose 只在 `component/` + `ui/`；Nucleus 只在 `shell/`；`domain`/`data`/`core` 完全不依赖它们 |
 | 返回键语义变化 | 保留 `Shortcuts.kt` 的 `appShortcutOf` 纯函数与 `ShortcutsTest`，键位行为钉住 |
 
@@ -789,7 +813,7 @@ component/chat/
 ## 6. 验收口径
 
 1. `./gradlew :composeApp:compileKotlinDesktop :composeApp:desktopTest` 全绿
-2. 单文件 > 600 行的 `.kt`：从 8 个降到 **0**（`ChatRepository` 也拆）
+2. 单文件 > 600 行的 `.kt`：从 **11 个降到 0**（含 `ChatRepository` 750 行也要拆）
 3. `rg 'import androidx.compose' composeApp/src/commonMain/kotlin/**/component` 为 0
 4. `rg 'import dev.shinglem.hermes.(component|ui|shell)' composeApp/src/commonMain/kotlin/**/{core,domain}` 为 0
 5. `rg 'import dev.nucleusframework' composeApp/src/**` 只命中 `shell/` 与 `di/`
@@ -804,11 +828,13 @@ component/chat/
 14. **真机过一遍 0.5.5 的 5 条修复**（切模型 / 思考块跟随 / 滚动吸附 / 会话切换 / 审批通知）不回归
 15. **真机六项**：单实例（含 `--silent` 激活）/ 提权重启 / 开机自启 / 托盘常驻 /
     触摸滚动 / 中文 IME 全过
-16. **浏览器面板**：agent 操作实时可见；DPI 100·150·200% 不裂；关面板无残留进程
-17. **插件宿主骨架**：本地宿主页面能加载；JS↔Kotlin 一个来回通；WebView2 缺失时降级不崩
-18. **通知栈零改动**：`ShortcutScan` / `ShortcutAumidWriter` / `ProcessAumid` /
+16. **通知栈零改动**：`ShortcutScan` / `ShortcutAumidWriter` / `ProcessAumid` /
     `NativeNotifications.desktop.kt` 的公开行为不变（仅允许搬家，逻辑不改）
-19. 提权进程下 FileKit 对话框能弹出（若不过则回退 `expect/actual`，并在 §2.8 记录）
+17. 提权进程下 FileKit 对话框能弹出（若不过则回退 `expect/actual`，并在 §2.8 记录）
+18. **测试数不减**：`@Test` ≥ **573**；减少的用例必须逐条说明是搬家而非删除（见 14 篇 §2）
+19. **功能对齐**：v0.5.8 的全部功能域手工清单全过（14 篇 §6.3，共 16 行覆盖会话/对话/输入/终端/能力/设置/通知/子代理/后端/命令面板/快捷键）
+
+> 原 S7 相关的验收（浏览器面板 / 插件宿主骨架）随 S7 移到 **v0.6.1**。
 
 ---
 
@@ -817,6 +843,8 @@ component/chat/
 | 日期 | 改动 | 原因 |
 |---|---|---|
 | 2026-11-13 | 初稿：合并 v0.6.0 重构计划（15 VM → Component + Store、Decompose/MVIKotlin/Koin）+ 桌面壳迁 Tao + 内嵌槽位 | 架构重排定稿；`NativeView` 是浏览器面板的唯一可行路径，而它要求 Tao |
+| 2026-11-13 | **范围切分**：v0.6.0 = **S0–S6 + S8**（完整对齐 v0.5.x）；**S7 + 编辑器槽位与选型 → v0.6.1**。基线更新为 305 文件 / 49,935 行 / 573 测试 / 16 个 androidx ViewModel / 11 个 >600 行文件。验收口径重排为 19 条（原 S7 两条移出）。开发分支 `feature/v0.6.0-refactor` | 用户要求 v0.6.0 完整实现 v0.5.x 全部功能，S7 与编辑器另立版本 |
+| 2026-11-13 | 新增落地与测试两篇：[13-重构落地设计](../详细设计/工程与代码/13-重构落地设计（v0.6.0）.md)、[14-测试计划](../详细设计/工程与代码/14-测试计划（v0.6.0）.md) | 计划本身要能被照着实施与验证 |
 
 ---
 
