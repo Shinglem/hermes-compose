@@ -1,23 +1,43 @@
 # 03 · 架构
 
+> **v0.6.0 重排中。** 本篇描述**目标架构**，其落地阶段与验收在
+> [`09-refactor.md`](09-refactor.md)；取舍理由在 ADR-057 ~ ADR-064。
+> 与当前代码不一致处，以 09 篇的阶段计划为准（逐步逼近）。
+
 ## 1. 分层
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ UI 层          Compose 组件（feature/*），只读状态、发意图   │
+│ UI 层          Compose 组件（ui/*），只读状态、发意图        │
 ├─────────────────────────────────────────────────────────┤
-│ 状态层         ViewModel / *StateHolder：StateFlow<UiState> │
+│ 组件层         Component / Store（component/*，不 import    │
+│                Compose；Reducer 是纯函数，可纯 JVM 单测）    │
 ├─────────────────────────────────────────────────────────┤
-│ 领域层         Repository：一次业务操作 = 一次或多次传输调用 │
+│ 领域层         Repository 接口 + 领域模型（domain/*）       │
+├─────────────────────────────────────────────────────────┤
+│ 数据层         Repository 实现（data/*）：唯一持有传输对象   │
 ├─────────────────────────────────────────────────────────┤
 │ 传输层         GatewayClient（WS JSON-RPC）                  │
 │                RestClient（HTTP /api/*）                     │
 ├─────────────────────────────────────────────────────────┤
 │ 平台层         PTY（BossTerm 自带）· 剪贴板 · 外链 · 偏好     │
+├─────────────────────────────────────────────────────────┤
+│ 桌面壳层       shell/*：Tao 窗口 / 托盘 / 单实例 / 提权 /     │
+│                内嵌槽位（唯一允许 import Nucleus 的层）      │
 └─────────────────────────────────────────────────────────┘
 ```
 
-**依赖方向单向向下**。UI 层不得直接持有传输层对象；Repository 不得持有 Composable。
+**依赖方向单向向下**，并由架构测试钉死（见 09 篇 §2.1）：
+
+1. `component/` 与 `domain/` 不得 import `androidx.compose.*`
+2. `core/` 与 `domain/` 不得 import `component/` / `ui/` / `shell/`
+3. `ui/` 不得 import `data/`
+4. **只有 `shell/` 可 import `dev.nucleusframework.*`** —— Nucleus 可替换，代价只在这一层
+
+> **历史**：v0.5.x 及以前是「UI / 状态（ViewModel）/ 领域 / 传输 / 平台」五层。
+> 状态层用 `ViewModel` + 手写状态机，`AppShell.kt` 一个文件 1,059 行。
+> 重排原因见 ADR-057（Nav3 在 desktop 上作用域为空壳、Decompose 的 back stack 语义
+> 直接消掉 `SessionShadow` 一类补丁）。
 
 ---
 
@@ -157,22 +177,35 @@ Compose Desktop 里把它放在 `application { }` 作用域，`Window { }` 只�
 
 ## 8. 目录结构（建议）
 
+> **2026-11-13 重排（v0.6.0，见 [`09-refactor.md`](09-refactor.md) §2.1）**：
+> 分层由「UI / 状态 / 领域 / 传输 / 平台」改为
+> 「`component / ui / domain / data / core / platform / shell / di`」，
+> 15 个 `ViewModel` 全部换成 `Component` + `Store`（ADR-057 ~ ADR-059），
+> 窗口壳迁 Nucleus Tao（ADR-062）。下面的旧结构只用于理解历史，**新代码按 09 篇写**。
+
 ```
-composeApp/src/commonMain/kotlin/dev/shinglem/hermes/
-├── App.kt                     ← Application 入口 + AppContainer
-├── core/
-│   ├── transport/             ← GatewayClient / RestClient / JsonRpcFrames
-│   ├── contract/              ← 生成的契约类型与 RpcMethods
-│   └── prefs/                 ← Preferences 封装
-├── feature/
-│   ├── session/               ← 会话列表、置顶、分组
-│   ├── chat/                  ← 消息列表、流式渲染
-│   ├── composer/              ← 输入框、chip、补全
-│   ├── terminal/              ← BossTerm 封装、折叠面板
-│   ├── capabilities/          ← 技能与工具 / 消息平台 / 定时任务
-│   └── settings/
-├── ui/
-│   ├── layout/                ← Scaffold、rail、状态条
-│   └── theme/                 ← M3 主题（原生）
-└── platform/                  ← 外链编辑器、剪贴板、文件选择
+composeApp/src/commonMain/kotlin/dev/shinglem/hermes/     ← v0.6.0 目标结构
+├── component/          ← 业务逻辑（纯 Kotlin，禁止 import Compose）
+│   ├── root/           ← RootComponent：ChildStack + ChildPanels
+│   ├── chat/           ← ChatComponent / ChatStore / SessionRuntimeStore
+│   ├── session/ composer/ terminal/ capabilities/ settings/ notification/
+│   └── <域>/store/     ← Intent / Result / Label / Reducer / Executor
+├── ui/                 ← 纯 Composable，只接 (State, callbacks)（唯一 import Compose 的层）
+├── domain/             ← Repository 接口 + 领域模型
+├── data/               ← Repository 实现（唯一持有 GatewayClient / RestClient）
+├── core/               ← transport / contract / error / result / time / config / log
+├── platform/           ← expect/actual（不变）
+├── shell/              ← 桌面壳：Tao 窗口 / 托盘 / 单实例 / 提权 / 自启 / 内嵌槽位
+│   ├── browser/        ← BrowserProcess（拉起 Chromium）+ BrowserPanel（NativeView）
+│   └── plugins/        ← PluginHostView（WebView 槽位 + 桥，骨架）
+├── di/                 ← Koin 模块（appModule / componentModule）
+└── App.kt              ← 非 Composable 门面（保留）
+```
+
+```
+composeApp/src/commonMain/kotlin/dev/shinglem/hermes/     ← v0.5.x 及以前（历史）
+├── core/ transport / contract / prefs
+├── feature/ session · chat · composer · terminal · capabilities · settings
+├── ui/ layout · theme
+└── platform/
 ```

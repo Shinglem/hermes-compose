@@ -155,9 +155,22 @@
 ### 不引入
 
 - **不用 SQLDelight / Room**：本期只需存布局、草稿、最近会话等少量 key-value，JSON 或 settings 足够。
-- **不用 DI 框架**（Koin 等）：手动构造 + 一个 AppContainer 即可，减少编译期与心智负担。
-- **不用导航库**（Decompose / Navigation 3）：单窗口 + 一个顶层状态（`AppMode`）足够。
 - **不用 react-query 式缓存框架**：`StateFlow` + Repository 手写失效。
+
+> **2026-11-13 修订（v0.6.0，ADR-057 / ADR-061）**：上两条仍有效，但下面这条**作废**：
+> ~~不用 DI 框架（Koin 等）：手动构造 + 一个 AppContainer 即可~~
+> ~~不用导航库（Decompose / Navigation 3）：单窗口 + 一个顶层状态（`AppMode`）足够~~
+>
+> 现在**引入 Koin 4.2.2 + Decompose 3.6.1**（+ MVIKotlin 4.4.0），理由见 ADR-057：
+> ① Nav3 在 desktop 上的导航项级 ViewModel 作用域是空壳（jar 仅 5,029 字节）；
+> ② Decompose 的「back stack 里 Component 不销毁」直接替代 `SessionShadow` 一类补丁；
+> ③ 15 个 `viewModel {}` 手工 lambda 是 `AppShell.kt` 1,059 行的根因之一。
+> `AppContainer` 保留，但降级为「非 Composable 侧门面」，内部从 Koin 解析。
+>
+> 同时新增：`kotlinx-collections-immutable` 0.5.2、`composewebview` 1.0.3（仅插件宿主骨架用）、
+> Nucleus Tao（仅 `shell/`）、FileKit 0.17.0、Turbine 1.2.1（test）；
+> 移除 `adaptive-layout` / `adaptive-navigation` 与 `coil-*` 三件套（重复声明）。
+> **完整依赖表以 [`09-refactor.md`](09-refactor.md) §2.7 为准。**
 
 ---
 

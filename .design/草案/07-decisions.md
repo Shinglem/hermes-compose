@@ -25,6 +25,12 @@
 
 **后果**：丢掉 UI 扩展；后端能力（工具、技能、cron、平台适配器）不受影响。
 
+> **2026-11-13 修订（ADR-064）**：本条从"永久不做"改为**"有计划地做，但换形态"** ——
+> 插件**只在 WebView 容器内运行，不与 Compose UI 融合**；插件机制仍用官方
+> `plugin.js` / manifest，**不自研**。v0.6.0 只搭宿主骨架（一个 WebView 槽位 + 桥），
+> 插件功能本身不在本期。原结论中"不能把 `render()` 的 ReactNode 落成 Compose 组件"
+> **依然成立** —— 所以插件永远待在那块 WebView 里。
+
 ---
 
 ## ADR-003 · 不做 JS 引擎宿主
@@ -34,6 +40,9 @@
 **理由**：即使有了 JS 引擎，`render()` 返回的仍是用 React 描述的元素树，需要 React + DOM 渲染层才能落地。引擎本身解决不了渲染问题。
 
 **后果**：插件体系整体不做（见 ADR-002）。
+
+> **2026-11-13 修订（ADR-064）**：仍然**不做 JS 引擎宿主**。插件宿主走 WebView（浏览器自带 JS 运行时），
+> 不引入 QuickJS / J2V8。本条结论不变。
 
 ---
 
@@ -67,6 +76,13 @@
 相对路径需用会话的 cwd 拼成绝对路径。
 
 **后果**：省约 15–20 人天与整套编辑器依赖。
+
+> **2026-11-13 补充（ADR-064）**：v0.6.0 **不改变**本条。曾考虑的两个方向都被否决：
+> ① **内嵌 VSCode** —— Electron 多进程 IDE，外壳/快捷键/体重/单实例都去不掉；
+> ② **自研编辑器内核** —— 与硬约束 4（`BasicTextField` 保证中文 IME）冲突。
+>
+> 若将来要内嵌，只选**单进程原生轻量编辑器**（几 MB、纯 Win32 窗口），
+> 机制走 `NativeView`（ADR-063 的同一套），届时单独开 ADR。
 
 ---
 
@@ -1361,3 +1377,254 @@ toast 归属只认开始菜单 `.lnk`
 真要摆脱，只能放弃原生 toast 只用自绘通知窗 —— 属产品决策，可单独重开。
 
 ---
+
+## ADR-057 · 采用 Decompose + MVIKotlin + Koin，放弃 navigation3
+
+**决策**：v0.6.0 的架构基座定为 **Decompose 3.6.1 + MVIKotlin 4.4.0 + Koin 4.2.2**。
+`ViewModel`（15 个）+ 手写状态机 + `enum ShellMode` 全部退役。navigation3 不引入。
+
+**理由**（三条都是实测，不是偏好）：
+
+1. **Nav3 的杀手能力在 desktop 上是空壳**：`lifecycle-viewmodel-navigation3-desktop-2.11.0.jar`
+   只有 **5,029 字节**（`META-INF` + `EmptyRedirectRoot.kt`），导航项级 ViewModel 作用域必须靠
+   Koin 的 `navigation<T>` 从外部硬补 —— 这是「用外部机制模拟一等公民」。
+2. **Decompose 的 back stack 语义直接消掉我们最痛的两块补丁**：官方原话
+   「Components in the back stack are **not destroyed**, they continue working in background
+   **without UI**」。这正是 `SessionShadow.kt`（133 行）与 `SessionSwitchPlan.kt`（60 行）
+   存在的全部理由，以及 `4001 stale_generation` 家族（0.5.4 / 0.5.5 连续两版在修）的温床。
+3. **MVIKotlin 与 Decompose 不是竞争关系**：两者是同一作者在 Essenty 之上的两层
+   （Decompose = 导航 + Component，MVIKotlin = Store/Reducer/Label），官方明确
+   「does not bring or enforce any particular architecture」「can be introduced incrementally」。
+   `Reducer` 是纯函数，我们 533 个纯函数测试**可平移**；`Label` 内建替代 5 个 `var onXxx`。
+
+**替代方案与否决理由**：
+
+| 候选 | 否决理由 |
+|---|---|
+| Nav3 + androidx ViewModel + 自研 reducer（方案 X） | desktop 作用域空壳；切走会话继续跑仍需手写 `SessionShadow` 一类补丁 |
+| Decompose + 自研 reducer + Koin（方案 Z） | reducer 骨架 / Label 分发 / 取消传播要自己写，恰是最易出 bug 的部分；既然允许大改，一步到位 |
+| Circuit 0.39.0 | 0.x；`Screen`/`Presenter` 与 `Store` 同层级竞争 |
+| Voyager 1.1.0-beta03 | 纯导航，主版本仍 beta 性质；作用域能力已被 Component 覆盖 |
+| KStateMachine 0.38.1 | **BSL-1.0**（不在现有许可集合）；我们的状态是累积式，FSM 表达别扭 |
+
+**已知代价**：
+
+- **Essenty 版本交叉**：Decompose 3.6.1 依赖 2.7.1，MVIKotlin 4.4.0 编译于 2.5.0。
+  必须 S0 第 1 步实证二进制兼容；不通过则调版本配对，最差退回方案 X。
+- **`ChildPanels` 是 experimental**：收在 `ui/shell/PanelsHost.kt` 一层薄封装里，变 API 只改一处。
+- **两个库都非 JetBrains 官方**：单点封装 —— Decompose 只出现在 `component/` + `ui/`，
+  `domain` / `data` / `core` 完全不依赖它。
+
+**后果**：`AppShell.kt`（1,059 行）、`ChatViewModel.kt`（≈1,900 行）、`SessionShadow.kt`、
+`SessionSwitchPlan.kt` 全部删除；`viewModel {}` 与 `androidx.lifecycle.viewmodel` 归零；
+分层硬边界由架构测试钉死（`component` / `domain` 不得 import Compose）。
+
+---
+
+## ADR-058 · 三栏由 `ChildPanels` 承接，rail 留在面板之外
+
+**决策**：两栏/三栏不再用 `adaptive-layout` 的 `ListDetailPaneScaffold`，改用
+Decompose `ChildPanels`（`Main` / `Details`，`mode = SINGLE | DUAL | TRIPLE`）。
+`ProfileRail` 保持在 `ChildPanels` 之外。
+
+**理由**：
+
+- `ChildPanels` 的 mode 与我们的单栏/双栏**一一对应**，且**每个 panel 有独立 Lifecycle** ——
+  「切到设置时列表应该 PAUSE」这类规则不再手写。
+- **它只管生命周期不管布局**：尺寸分配仍是我们自己写
+  `Row { List(weight = 0.34f); Detail(weight = 0.66f) }`，按窗口宽度档位切换。
+  这反而**顺手删掉** CMP-8735 的 `key(宽度档位)` 绕法（见 AGENTS.md 硬约束 11）。
+- **rail 不能进 panel**：它是导航（切 profile / 切模式），不是内容。进 panel 后在窄窗会被
+  `maxHorizontalPartitions` 收起 —— 这与 ADR-048「rail 是导航目的地」的决定一致。
+
+**替代方案**：`ChildStack` + 现有 Compose 布局（避开 experimental）—— 否决，因为要重新手写
+「哪个 panel 该 PAUSE / CREATED」的规则，正是我们要删掉的那类代码。
+
+**后果**：`AdaptiveListDetail.kt`（70 行）删除；`ChildPanels` 的 experimental 风险靠
+`PanelsHost.kt` 单点封装隔离。
+
+---
+
+## ADR-059 · `Component` + `Store` 模板与强制 import 边界
+
+**决策**：每个功能域一个「`XxxComponent`（业务逻辑，无 Compose）+ `XxxStore`（MVIKotlin）
++ `XxxContent`（纯 Composable）」三件套。分层为
+`component / ui / domain / data / core / platform / shell / di`，并由架构测试钉死：
+
+1. `component/` 与 `domain/` 不得 import `androidx.compose.*`
+2. `core/` 与 `domain/` 不得 import `dev.shinglem.hermes.(component|ui|shell).*`
+3. `ui/` 不得 import `...data.`
+4. `shell/` 是**唯一**允许 import `dev.nucleusframework.*` 的包
+
+**理由**：「业务逻辑可用纯 JVM 单测」是 Decompose 的核心承诺，也是我们解决 8 个 ViewModel
+零覆盖的**唯一**可行路径（现在构造参数全是 `final class`，无法注入 fake）。边界写成测试而不是
+写成口号 —— 本项目已有 `ImportBoundaryTest` 之外的一批纯函数测试作为先例。
+
+**后果**：`Repository` 必须抽 `interface`（实现类改名 `XxxRepositoryImpl`）才能在 Koin 里绑定；
+`AppContainer` 降级为「非 Composable 侧门面」（`Main` / 托盘 / 自启），内部从 Koin 解析。
+
+---
+
+## ADR-060 · 移除 `adaptive-layout` / `adaptive-navigation`
+
+**决策**：删掉这两个依赖，以及配套的 `AdaptiveListDetail.kt` 与 CMP-8735 的 `key(宽度档位)` 绕法。
+
+**理由**：被 `ChildPanels`（ADR-058）完全取代。保留两套「谁 PAUSE」的机制会让生命周期语义
+出现两个真相源。CMP-8735「desktop 不随 resize 自适应」的绕法也随之消失。
+
+**后果**：依赖表少两项；宽度档位判断（`width < 840.dp`）保留在 `ui/`，只是不再驱动 scaffold 的
+`directive` 而驱动 `ChildPanels` 的 mode。
+
+---
+
+## ADR-061 · 移除 coil 重复声明、启用 ContentNegotiation、引入 Turbine / FileKit / immutable-collections
+
+**决策**：四项依赖调整一次做完：
+
+| 动作 | 对象 | 理由 |
+|---|---|---|
+| **移除** | `coil-compose` / `coil-svg` / `coil-network-ktor3`（来自 `composeApp`） | 在 `composeApp` 内 **0 引用**；真正使用者 `modules/markdown-one` 自己已声明同版本 |
+| **启用** | `ktor-client-content-negotiation` + `ktor-serialization-json` | **声明了但 0 处 `install()`** → 全仓 54 处手写 `JsonElement` 取值。装上后 `RestClient` 提供 `getAs<T>()` |
+| **引入** | `kotlinx-collections-immutable` 0.5.2 | `@Immutable` 目前**仅 1 处**；`List<T>` 不稳定 → 每次 state 变更整棵子树重组 |
+| **引入** | `io.github.vinceglb:filekit-dialogs-compose` 0.17.0（MIT） | 删掉 5 个 `expect` + 5 个 `actual` 文件选择器 |
+| **引入** | `app.cash.turbine:turbine` 1.2.1（testImplementation） | `Store.labels` 的「恰好发一次」只有 `awaitItem()` 能可靠断言 |
+
+**FileKit 的三条前置验证**（不通过就回退 `expect/actual`，代码留在 git 历史）：
+① JSON / 图片 / `.tar.gz` 三类 filter 行为；② 取消返回 `null` 与现有 `String?` 约定一致；
+③ **提权进程里对话框能弹出**（原生 `IFileDialog` 走 shell 通路，UIPI 不拦，但必须实测）。
+
+**不引入的相邻候选**：`compose-stable-marker`（desktop 变体只到 1.0.6，且本质是 workaround）、
+`multiplatform-paging`（alpha，我们只需"插一页 + 保锚点"）、Store5/cache4（与 Executor 职责重叠）。
+
+**后果**：`libs.versions.toml` 与 `02-selection.md` 同步更新；`@Immutable` + `ImmutableList`
+铺满所有 State（验收口径 10）。
+
+---
+
+## ADR-062 · 桌面窗口壳迁 Nucleus Tao 3.0（dev）
+
+**决策**：v0.6.0 把窗口壳从 Compose Desktop 自带（AWT）迁到
+**`nucleusApplication(backend = Tao)` + `DecoratedWindow`**，用
+`nucleus.decorated-window-tao:3.0.0-dev-202611061347`。**接受 dev 版**。
+托盘换 `composenativetray 2.1.7`。**只迁窗口层，不迁无窗口工具类。**
+
+**为什么必须迁**：`NativeView`（把外部/自有原生窗口嵌进 Compose 的唯一路径）在 Nucleus
+**只剩 Tao 后端** —— 3.0 已删除全部 AWT 后端（`decorated-window-jni` / `-jbr` / `-awt`）。
+不迁 Tao，就没有浏览器面板（ADR-063）与插件宿主（ADR-064）。
+
+**实测依据**（2026-11-13）：
+
+| 项 | 数字 |
+|---|---|
+| 稳定版 | 只到 **2.5.18**；3.0 只有 `3.0.0-dev-*`（末版 `202611061347`） |
+| 仓库 | 441★ / 19 贡献者（主力 `kdroidFilter` 3,235 提交）/ 2026-02 建仓 |
+| jar | 6.0 MB / 1,149 条目 |
+| Windows 原生库 | **仅 629 KB**（`nucleus_tao.dll` 540 + `native_view` 30 + `gl` 23 + `deco` 24 + `dnd` 12） |
+| ANGLE | `nucleus.angle-natives:8037.1`，jar 4.5 MB |
+| 依赖 | `compose.desktop 1.12.1` / `kotlin-stdlib 2.4.20`（我们 1.12.2 / 2.4.21，取高兼容） |
+| IME | Tao 自带 `TaoImeSession`（preedit / commit 路由） |
+| 触摸 | Windows 走 DirectManipulation |
+
+**迁移边界（关键）**：只换**窗口层**（应用入口 / 主窗口 / 窗口状态 / 托盘 / 错误弹窗 / 通知浮窗 /
+前台判定），**保留无窗口工具类**（剪贴板 `Toolkit.systemClipboard`、打开链接 `Desktop.browse`）。
+结果是 AWT 依赖文件从 **10 个降到 3 个**，且 **`java.desktop` 仍需保留在运行时镜像里**
+—— 不要指望靠迁 Tao 裁掉它。
+
+**必须保住的能力（不许回归）**：
+
+| 能力 | 风险 | 判据 |
+|---|---|---|
+| 单实例 | **`nucleusApplication` 自带单实例锁**，与我们自研 `CreateMutexW` + `--silent` 语义会打架 | S0 第 4 步：必须先证明能关掉或让位；两条都不行则**不迁** |
+| 提权重启 | 入口换壳 | `ShellExecute runas` + `--elevated` 仍工作 |
+| 开机自启 | 计划任务 `RunLevel=HighestAvailable` + `--silent` | 不归 Tao 管，行为不变 |
+| 托盘常驻 | Swing → `composenativetray` | 保持 `install()` / `dispose()` / `menu()` 对外形状；`consumePendingAction()` 顺序不变 |
+| 触摸滚动 | Temurin 27 + `touchDragScroll` → DirectManipulation | 重测；保留退路 |
+| 中文 IME | `BasicTextField` | 端到端验（候选窗跟随 / 上屏 / 撤销） |
+
+**风险与缓解**：
+
+- **dev 版 + 单人主力**：版本钉死在 `libs.versions.toml`；接触面全部收在 `shell/`；
+  必要时 vendor / fork 自打补丁。
+- **许可证待核**（GitHub 识别 `NOASSERTION`）：引入前读 LICENSE 原文，不合规就不引入。
+- **可切割**：S0 第 4 步不过 → S6/S7 整段推后到 0.6.1，0.6.0 只交付 S0–S5 + S8。
+
+**后果**：`Main.kt`（393 行）拆成 `shell/DesktopEntry` + `shell/HermesApplication`；
+`DesktopTray.kt` 重写；`platform/AppFocus.desktop.kt` 的 `Window.getWindows()` 兜底必须换 API。
+
+---
+
+## ADR-063 · 浏览器面板用 `NativeView` 嵌自有 Chromium（不用像素流、不用 WebView）
+
+**决策**：hermes 浏览器面板 = **我们自己拉起** payload 自带的 Chromium（headed）→ 拿顶层
+`HWND` → `NativeView` + `nucleusHwndPlatformView` 嵌进 Compose 面板；
+**同时**带 `--remote-debugging-port=0`，把 `cdp_url` 写后端，让 agent 操作的就是这一块。
+
+**为什么不选另外两条**：
+
+| 方案 | 否决理由 |
+|---|---|
+| **CDP 像素流**（`Page.startScreencast` 贴到 Compose 画布） | 实测性能够（63 fps / 10.6 KB 帧 / 捕获→到达 p50 4.5 ms / 中文可打），但：**文本选择拿不到**、**触摸滚动实测不通**（`synthesizeScrollGesture` 在 headless 下 scrollY=0）、IME 要靠 `imeSetComposition` 手工回显组合态。属"能看能用但手感差一档" |
+| **`composewebview`（WebView2）** | 它是**另一个浏览器**（Edge/WebView2），**不能显示 payload Chromium 的页面**。面板要展示 agent 正在操作的那一个实例 |
+
+**为什么 `NativeView` 比自写 `SetParent` 强**（实测对比）：
+
+- 自写 `SetParent` + `WS_CHILD` + `MoveWindow`：能嵌进去，画面完整（真实 Chromium 截图验证），
+  进程存活、可逆还原。**但 Win32 子窗口永远画在父窗口之上** —— toolbar / 加载遮罩 / 关闭按钮
+  全部被盖住。
+- `NativeView` 额外做了 **`WindowsNativeViewBlendingOverlay`（DirectComposition）**，
+  把宿主的 Compose 场景合成到子窗口之上。这是"能用"与"好用"的分界。
+
+**安全与生命周期**：只绑 `127.0.0.1`、`--remote-debugging-port=0`（随机）、临时
+`--user-data-dir`、退出杀进程树；提权时必带 `--do-not-de-elevate`
+（否则 `Chrome exited early`，见 `详细设计/工程与代码/07-提权与自启动.md` §13）。
+关闭面板清 `cdp_url`；忘了清也有 `BrowserArgsReconciler.deadLoopbackCdpUrl()` 自愈。
+
+**后果**：面板与 agent **共享同一个浏览器实例**（所见即所操作）；
+resize / 最小化 / DPI 切换 / 提权下可用性是 S7 的硬验点，不过则退回像素流（L0）兜底。
+
+---
+
+## ADR-064 · 插件只在 WebView 内运行；不自研插件机制；不内嵌 VSCode
+
+**决策**：三条一起定：
+
+1. **所有插件运行在 WebView 里，不与 Compose UI 融合** —— 我们用一整块 WebView 占据一个 pane，
+   里面跑**自己的宿主页面**，插件 pane 往宿主页面里插。
+2. **只做宿主框架，不重写插件机制** —— 插件仍是官方的 `plugin.js` / manifest，
+   由宿主页面按官方机制加载。我们只提供容器 + 桥（`window.hermes.*`）。
+3. **不内嵌 VSCode 作为编辑器**；v0.6.0 也不引入任何编辑器，仍是"跳外部编辑器"。
+
+**理由**：
+
+1. **边界最省**：插件不碰 Compose，就不用处理「React 节点树 → Compose」这个不可能任务；
+   也不会因为插件的 CSS 污染我们的主题。这是把 ADR-002「放弃前端插件生态」从"永久不做"
+   改成"用官方机制在一个隔离容器里做"，而不需要自造 WebView。
+2. **不自研**：官方契约已经有 86 个 desktop 插件在用。重写一遍 = 与上游分叉（违反 ADR-001 的精神）。
+   引 WebView 只解决「渲染容器」这 1/6，另外 5/6（React 运行时、宿主桥、发现/manifest、安全边界、
+   布局整合）**仍然要做**，所以不能因为"有了 WebView"就以为插件生态白得。
+3. **不嵌 VSCode**：它是 Electron 多进程 IDE —— 标题栏 / 活动栏 / 侧边栏 / 状态栏去不掉，
+   `Ctrl+P` / `Ctrl+Shift+P` 抢快捷键，数百 MB 体重，默认单实例抓不到用户已开的窗口，
+   崩溃/升级要监听重嵌。**功能齐全的代价就是那套壳**。
+
+**替代方案**：
+
+| 候选 | 否决理由 |
+|---|---|
+| 内嵌 VSCode | 见上；且现有"跳外部编辑器"已零成本可用（`feature/editors/`） |
+| 自研插件系统 | 与官方契约分叉 |
+| 插件直接产出 Compose UI | 需要 React 运行时 + DOM，等于自造 WebView（ADR-002 的原结论仍然成立） |
+
+**v0.6.0 的交付边界**：**只搭骨架** —— 槽位能加载本地宿主页面 + 双向桥打通。
+**不做**：插件发现、manifest 解析、生命周期、市场、权限模型（用户明确定稿"插件现在不做"）。
+
+**编辑器方向（非本期）**：若将来要内嵌，选**单进程原生轻量编辑器**（Notepad4 / SciTE /
+Notepad-- 一类，几 MB、纯 Win32 窗口），机制已就绪（同样是 `HWND` → `NativeView` 一个槽位），
+不需要新架构。ADR-005「不做文件树 / 自研编辑器内核」不变。
+
+**后果**：`composewebview 1.0.3`（MIT，Tao-only）或自写 WebView2 controller 二选一
+（S7 spike 定）；本机 WebView2 Runtime 157.0.4341.46 已装，发布时需检测并引导安装；
+ADR-002 / ADR-003 的**结论仍有效**（不自造 WebView、不做 JS 引擎宿主），
+只是现在有了"官方机制 + 隔离容器"这条可行路径。
+
+---
+

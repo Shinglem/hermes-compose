@@ -25,6 +25,7 @@
 | 06 | [roadmap](草案/06-roadmap.md) | P0–P6 分期与门槛 | 所有人 |
 | 07 | [decisions](草案/07-decisions.md) | ADR：决策、理由、替代方案、后果 | 所有人，改主意时必读 |
 | 08 | [data-contract](草案/08-data-contract.md) | WebSocket JSON-RPC + REST 的实际形状 | 数据层开发者 |
+| 09 | [refactor](草案/09-refactor.md) | **v0.6.0 结构性重构（活文档）**：现状实测问题、目标结构、阶段门槛、验收口径 | 开发者，动手前必读 |
 
 **最短路径**：00 → 03 → 与你任务相关的专题（渲染看 02+04，数据层看 03+08，验收看 05）。
 

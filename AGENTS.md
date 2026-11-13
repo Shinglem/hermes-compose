@@ -26,7 +26,7 @@
 |---|---|
 | 修改后端（`C:\ai\hermes\app` 下的 Python / gateway / dashboard） | 契约只读，改了会与官方客户端分叉 |
 | JS 插件宿主（QuickJS / J2V8 / 内嵌 React） | 前端插件返回 `ReactNode`，保留生态 = 自造 WebView；详见 `.design/草案/07-decisions.md` ADR-003 |
-| 文件树 / 内置代码编辑器 / diff 视图 | 跳转外部 VSCode / IDEA 打开，见 ADR-005 |
+| 文件树 / 内置代码编辑器 / diff 视图 | 跳转外部 VSCode / IDEA 打开，见 ADR-005（**不内嵌 VSCode**，理由见 ADR-064） |
 | 远程屏幕（noVNC / RFB） | 用 ToDesk / AweSun 等外部工具 |
 | 机器人聊天窗口 / 群聊窗口 | 本期只做"会话"主窗口；IM 风格聊天留作后续独立窗口 |
 | 视觉 1:1 复刻 | 用 Material 3 原生组件与配色，功能对等即可 |
@@ -41,16 +41,19 @@
 |---|---|
 | 语言 / 运行时 | Kotlin（最新稳定）+ **JDK 27（Temurin，带 jmods）**；基线从 JBR 换到官方 JDK 的原因见 `.design/详细设计/工程与代码/10-Windows触屏输入.md` §14 |
 | UI | Compose Multiplatform **1.12.x** + Material 3 |
-| 自适应布局 | `adaptive-layout:1.3.0`（`ListDetailPaneScaffold`，含 `extraPane`）+ `adaptive-navigation:1.3.0`（`rememberListDetailPaneScaffoldNavigator`）|
+| 自适应布局 | `adaptive-layout:1.3.0`（`ListDetailPaneScaffold`，含 `extraPane`）+ `adaptive-navigation:1.3.0`（`rememberListDetailPaneScaffoldNavigator`）—— **v0.6.0 起由 Decompose `ChildPanels` 取代，见 ADR-058 / ADR-060** |
+| 架构基座（v0.6.0） | **Decompose 3.6.1 + MVIKotlin 4.4.0 + Koin 4.2.2**（ADR-057）；分层 `component / ui / domain / data / core / platform / shell / di`（ADR-059）|
+| 桌面窗口壳（v0.6.0） | **Nucleus Tao 3.0 dev**（`nucleusApplication` + `DecoratedWindow`）+ `composenativetray`（ADR-062）；**只有 `shell/` 可 import Nucleus** |
 | 网络 | Ktor client（CIO 引擎）+ WebSockets 插件 |
 | 序列化 | kotlinx-serialization-json |
 | 时间 | kotlinx-datetime |
 | 本地偏好 | multiplatform-settings |
 | Markdown 渲染 | `:modules:markdown-one`（git submodule，Apache-2.0）—— 解析/块路由/高亮/mermaid/视口全在那边，本仓库只接线 |
 | 语法高亮 | markdown-one 内置（Highlights + 少数格式补正则），本仓库不再持有实现 |
-| 图片 / SVG | Coil 3（`coil-compose` `coil-svg` `coil-network-ktor`） |
+| 图片 / SVG | Coil 3（`coil-compose` `coil-svg` `coil-network-ktor`）—— 声明在 `modules/markdown-one`（v0.6.0 起 `composeApp` 不再重复声明） |
 | 终端 | BossTerm（JitPack 锁 tag）+ Pty4J |
 | 图标 | `material-icons-extended`（按需）+ 系统等宽字体 |
+| 内嵌槽位（v0.6.0） | `NativeView`（Nucleus Tao）：浏览器面板嵌自有 Chromium（ADR-063）、插件宿主用 WebView（ADR-064，只搭骨架） |
 
 依赖坐标与逐项对比见 `.design/草案/02-selection.md`；**新增依赖前必须先查注册表与许可证**
 （`search.maven.org` 按 group 查、`jitpack.io/api/builds` 查 ref、GitHub license API），
@@ -204,13 +207,14 @@ git -c http.proxy=http://127.0.0.1:7890 submodule update --init --recursive
 | `.design/草案/06-roadmap.md` | 分期计划与阶段门槛 |
 | `.design/草案/07-decisions.md` | 决策记录（ADR） |
 | `.design/草案/08-data-contract.md` | REST + WebSocket 契约要点 |
+| `.design/草案/09-refactor.md` | **v0.6.0 结构性重构（活文档）**：现状实测问题、目标结构、阶段 S0–S8 与退出条件、验收口径 |
 | `.ai/README.md` | 技能清单、来源与同步方式（唯一处） |
 | `.ai/skill/` | 按需加载的技能包（目录名 = 技能 ID，必须一级） |
 | `.design/详细设计/` | 落地设计（工程结构、依赖、Compose 约定、功能域、UI 视觉稿） |
 | `modules/markdown-one/` | Markdown 渲染库本体（submodule，Apache-2.0）：`README.md` 与 `docs/` 是它自己的文档 |
 | `modules/markdown-one/docs/api.md` | 渲染库的 API（`MarkdownText` / `MarkdownConfig` / `BlockAdapter` / 视口） |
 
-**工作前先读**：`00` → `03` → 与你任务相关的专题文档。
+**工作前先读**：`00` → `03` → 与你任务相关的专题文档。**v0.6.0 期间再加一篇 `09`**（重构活文档）。
 
 `.design/` 分两层：**`草案/`** 写「做什么、为什么」，**`详细设计/`** 写「怎么做」（如
 `详细设计/UI设计/`）。索引与写作规则见 `.design/README.md`；两层不重复同一内容。
@@ -268,6 +272,8 @@ New-Item -ItemType SymbolicLink -Path .github\skills -Target '../.ai/skill'
 | 单实例 / 启动时序 / 早期日志 | `.design/详细设计/工程与代码/08-单实例与启动时序.md` |
 | 内置 Hermes 后端 / payload / 运行时绿色化 | `.design/详细设计/工程与代码/06-本地后端与双模式.md`（payload 契约与双模式）· [`Shinglem/hermes-bundle`](https://github.com/Shinglem/hermes-bundle)（CI 构建流程与已知坑） |
 | RPC / REST 契约字段 | `.design/草案/08-data-contract.md` |
+| **v0.6.0 重构 / 迁 Nucleus Tao / 嵌入槽位** | `.design/草案/09-refactor.md`（活文档，含阶段状态与验收口径） |
+| **插件要在 WebView 里跑 / 不自研插件机制 / 不嵌 VSCode** | ADR-064（`.design/草案/07-decisions.md`） |
 
 ---
 
