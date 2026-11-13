@@ -9,6 +9,7 @@ import dev.shinglem.hermes.core.prefs.AppPreferences
 import dev.shinglem.hermes.core.result.Loadable
 import dev.shinglem.hermes.core.result.valueOrNull
 import dev.shinglem.hermes.core.time.SessionGroup
+import dev.shinglem.hermes.domain.model.SessionSummary
 import dev.shinglem.hermes.core.time.TimeFormat
 import dev.shinglem.hermes.core.transport.RpcJson
 import dev.shinglem.hermes.feature.chat.ChatRepository

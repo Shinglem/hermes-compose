@@ -50,8 +50,10 @@ import androidx.compose.ui.unit.dp
 import dev.shinglem.hermes.core.app.ProductInfo
 import dev.shinglem.hermes.core.result.Loadable
 import dev.shinglem.hermes.core.time.SessionGroup
+import dev.shinglem.hermes.core.time.pad2
 import dev.shinglem.hermes.core.time.TimeFormat
 import dev.shinglem.hermes.core.time.TimeLabel
+import dev.shinglem.hermes.domain.model.SessionSummary
 import dev.shinglem.hermes.resources.Res
 import dev.shinglem.hermes.resources.common_close
 import dev.shinglem.hermes.resources.sessions_archive
@@ -95,6 +97,7 @@ import dev.shinglem.hermes.resources.sessions_search_content_hint
 import dev.shinglem.hermes.resources.sessions_time_yesterday
 import dev.shinglem.hermes.resources.sessions_unpin
 import dev.shinglem.hermes.ui.component.EmptyState
+import dev.shinglem.hermes.ui.component.ConfirmDialog
 import dev.shinglem.hermes.ui.component.ErrorBanner
 import dev.shinglem.hermes.ui.component.SearchField
 import dev.shinglem.hermes.ui.icon.AppIcons
@@ -621,21 +624,14 @@ private fun ConfirmDeleteDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(Res.string.sessions_delete_title)) },
-        text = { Text(stringResource(Res.string.sessions_delete_body, sessionTitle)) },
-        confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text(
-                    stringResource(Res.string.sessions_delete_ok),
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(Res.string.sessions_delete_cancel)) }
-        },
+    ConfirmDialog(
+        title = stringResource(Res.string.sessions_delete_title),
+        message = stringResource(Res.string.sessions_delete_body, sessionTitle),
+        confirmText = stringResource(Res.string.sessions_delete_ok),
+        dismissText = stringResource(Res.string.sessions_delete_cancel),
+        danger = true,
+        onConfirm = onConfirm,
+        onDismiss = onDismiss,
     )
 }
 
@@ -645,16 +641,13 @@ private fun ConfirmArchiveDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(Res.string.sessions_archive_title)) },
-        text = { Text(stringResource(Res.string.sessions_archive_body, sessionTitle)) },
-        confirmButton = {
-            TextButton(onClick = onConfirm) { Text(stringResource(Res.string.sessions_archive_ok)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(Res.string.sessions_archive_cancel)) }
-        },
+    ConfirmDialog(
+        title = stringResource(Res.string.sessions_archive_title),
+        message = stringResource(Res.string.sessions_archive_body, sessionTitle),
+        confirmText = stringResource(Res.string.sessions_archive_ok),
+        dismissText = stringResource(Res.string.sessions_archive_cancel),
+        onConfirm = onConfirm,
+        onDismiss = onDismiss,
     )
 }
 
@@ -832,5 +825,3 @@ private fun TimeLabel.text(): String = when (this) {
     TimeLabel.Yesterday -> stringResource(Res.string.sessions_time_yesterday)
     is TimeLabel.Date -> "${month.pad2()}-${day.pad2()}"
 }
-
-private fun Int.pad2(): String = toString().padStart(2, '0')

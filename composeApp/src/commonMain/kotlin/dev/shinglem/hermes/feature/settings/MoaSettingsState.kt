@@ -7,7 +7,9 @@ import dev.shinglem.hermes.core.contract.MoaConfigUpdateDto
 import dev.shinglem.hermes.core.contract.MoaPresetDto
 import dev.shinglem.hermes.core.contract.MoaSlotDto
 import dev.shinglem.hermes.core.error.AppError
+import dev.shinglem.hermes.core.error.asAppError
 import dev.shinglem.hermes.core.error.toNotice
+import dev.shinglem.hermes.core.error.toUserNotice
 import dev.shinglem.hermes.core.log.Log
 import dev.shinglem.hermes.core.result.Loadable
 import dev.shinglem.hermes.core.result.valueOrNull
@@ -138,7 +140,7 @@ class MoaViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(config = Loadable.Failed(throwable.asMoaError())) }
+                _state.update { it.copy(config = Loadable.Failed(throwable.asAppError())) }
             }
         }
     }
@@ -279,7 +281,7 @@ class MoaViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, error = "保存失败：${throwable.describeMoaError()}") }
+                _state.update { it.copy(busyKey = null, error = "保存失败：${throwable.toUserNotice()}") }
             }
         }
     }
@@ -288,9 +290,3 @@ class MoaViewModel(
         _state.update { it.copy(notice = null, error = null) }
     }
 }
-
-private fun Throwable.asMoaError(): AppError =
-    this as? AppError ?: AppError.Unknown(message.orEmpty())
-
-private fun Throwable.describeMoaError(): String =
-    (this as? AppError)?.toNotice() ?: (message ?: "未知错误")

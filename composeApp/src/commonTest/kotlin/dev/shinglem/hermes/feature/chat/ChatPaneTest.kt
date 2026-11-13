@@ -22,7 +22,7 @@ import dev.shinglem.hermes.core.result.Loadable
 import dev.shinglem.hermes.core.time.TimeFormat
 import dev.shinglem.hermes.feature.composer.ComposerController
 import dev.shinglem.hermes.feature.composer.ComposerUiState
-import dev.shinglem.hermes.feature.session.SessionSummary
+import dev.shinglem.hermes.domain.model.SessionSummary
 import dev.shinglem.hermes.markdown.MarkdownText
 import dev.shinglem.hermes.ui.theme.HermesTheme
 import kotlin.math.abs

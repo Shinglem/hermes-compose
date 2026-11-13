@@ -61,6 +61,7 @@ kotlin {
             implementation(compose.material3)
             implementation(compose.materialIconsExtended)
             implementation(compose.components.resources)
+            implementation(compose.components.uiToolingPreview)
 
             implementation(libs.lifecycle.viewmodel.compose)
             implementation(libs.lifecycle.runtime.compose)
@@ -95,10 +96,6 @@ kotlin {
             implementation(libs.koin.compose)
             implementation(libs.kotlinx.collections.immutable)
             implementation(libs.filekit.dialogs.compose)
-
-            implementation(libs.coil.compose)
-            implementation(libs.coil.svg)
-            implementation(libs.coil.network.ktor3)
         }
 
         desktopMain.dependencies {

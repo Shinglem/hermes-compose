@@ -1643,7 +1643,8 @@ ADR-002 / ADR-003 的**结论仍有效**（不自造 WebView、不做 JS 引擎�
 | **`nucleusApplication` 单实例锁可关** | ✅ 通过（源码级） | `NucleusApplication.kt` 公开参数 `enableSingleInstance: Boolean = !ExecutableRuntime.isDev()`，传 `false` 即让位给自研 `CreateMutexW` |
 | Tao 空壳窗口 + 中文渲染 | ✅ 通过 | `:composeApp:taoSpike` 起窗口，`PrintWindow` 抓到完整中文界面（14 色非黑屏），进程 188 MB |
 | **AWT 工具类在 Tao 进程里可用** | ✅ 通过 | `Toolkit.systemClipboard` 写入读回一致 |
-| 微软拼音 / 触摸滚动 | ⏳ 待人工 | 需真人在窗口里操作（UIPI + 焦点抢占使自动化不可靠） |
+| 微软拼音（粗测） | ✅ 通过 | 用户在窗口内实测可输入（2026-11-13 反馈「IME 粗测正常」） |
+| 触摸 / 触摸板滚动 | ⚠️ **未能验证** | 用户环境无触屏设备。S6 该项记为「未验证 + 保留退路」，不算通过 |
 
 **三个与计划不符、必须记住的实施约束**（都是实测踩出来的）：
 

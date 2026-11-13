@@ -1,5 +1,7 @@
 package dev.shinglem.hermes.feature.session
 
+import dev.shinglem.hermes.domain.model.SessionSummary
+
 import dev.shinglem.hermes.core.contract.ClientPrompt
 import dev.shinglem.hermes.core.contract.RpcMethods
 import dev.shinglem.hermes.core.contract.SessionCreateResultDto
@@ -33,19 +35,6 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-
-/** 会话列表行（`session.list` 的领域模型）。 */
-data class SessionSummary(
-    val id: String,
-    val title: String,
-    val preview: String,
-    val startedAt: Instant,
-    val messageCount: Int,
-    val source: String,
-) {
-    val displayTitle: String
-        get() = title.ifBlank { preview.ifBlank { id } }
-}
 
 /** `session` 域的数据入口：只碰传输层，不 import 任何 Compose 类型。 */
 class SessionRepository(

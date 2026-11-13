@@ -9,6 +9,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import dev.shinglem.hermes.domain.model.SessionSummary
 
 class SessionRowsTest {
     private val zone = TimeZone.of("Asia/Shanghai")

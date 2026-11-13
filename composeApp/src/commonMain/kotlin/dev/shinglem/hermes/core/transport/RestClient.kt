@@ -4,9 +4,11 @@ import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.error.ErrorMapper
 import dev.shinglem.hermes.core.log.AppLogger
 import dev.shinglem.hermes.core.log.LogLevel
-import dev.shinglem.hermes.feature.session.SessionSummary
+import dev.shinglem.hermes.domain.model.SessionSummary
 import io.ktor.client.HttpClient
+import io.ktor.client.call.body
 import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.request
@@ -19,8 +21,11 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.encodeURLParameter
+import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.DeserializationStrategy
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -44,7 +49,38 @@ class RestClient(
 ) {
     private val http = HttpClient(CIO) {
         expectSuccess = false
+        // 装上 ContentNegotiation（v0.5.x 声明了依赖但从未 install，导致全仓库 54 处手写
+        // `(x as? JsonPrimitive)?.intOrNull`）。`ignoreUnknownKeys` 必须开：
+        // 后端新增字段时不能炸；`isLenient` 不开，保持契约严格。
+        install(ContentNegotiation) {
+            json(RestJson, ContentType.Application.Json)
+        }
     }
+
+    /**
+     * 反序列化直取：`getAs("/api/foo", FooListSerializer)`。
+     *
+     * 与 [get] 的区别：那个给的是 `JsonElement`（需要手写取值），这个是 DTO 直出。
+     * 新代码优先用它；老代码按阶段迁移（S3）。
+     *
+     * 用显式 serializer 而不是 `inline reified`：`commonMain` 里 `decodeFromJsonElement`
+     * 需要 `DeserializationStrategy`，而 inline reified 版本要把 `RestJson` 泄漏成
+     * `@PublishedApi`，反而增加公开面。
+     */
+    suspend fun <T> getAs(
+        path: String,
+        deserializer: DeserializationStrategy<T>,
+        timeoutMs: Long = Timeouts.DEFAULT_MS,
+    ): T = RestJson.decodeFromJsonElement(deserializer, get(path, timeoutMs))
+
+    /** 写请求 + 反序列化结果（无 body 的写请求传对应 DTO 的 serializer）。 */
+    suspend fun <T> sendAs(
+        method: RestMethod,
+        path: String,
+        deserializer: DeserializationStrategy<T>,
+        body: JsonObject? = null,
+        timeoutMs: Long = Timeouts.WRITE_MS,
+    ): T = RestJson.decodeFromJsonElement(deserializer, send(method, path, body, timeoutMs))
 
     suspend fun get(path: String, timeoutMs: Long = Timeouts.DEFAULT_MS): JsonElement {
         val target = targetProvider()
@@ -239,6 +275,17 @@ class RestClient(
 
         /** `/api/sessions` 的 `limit` 硬上限（上游 `Query(le=100)`），超过即 422。 */
         const val MAX_LIMIT = 100
+
+        /**
+         * REST 用的 JSON：与 `RpcJson` 同一套宽松策略（后端会加字段），
+         * `encodeDefaults = true` 保证写请求把零值也带上。
+         */
+        val RestJson: Json = Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = true
+            isLenient = false
+            explicitNulls = false
+        }
     }
 }
 

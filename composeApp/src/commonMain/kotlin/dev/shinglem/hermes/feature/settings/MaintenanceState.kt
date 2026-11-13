@@ -14,6 +14,7 @@ import dev.shinglem.hermes.core.contract.UsageAnalyticsDto
 import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.error.ErrorMapper
 import dev.shinglem.hermes.core.error.toNotice
+import dev.shinglem.hermes.core.error.toUserNotice
 import dev.shinglem.hermes.platform.appDataDir
 import dev.shinglem.hermes.platform.readLocalTextFile
 import dev.shinglem.hermes.platform.writeBytesToFile
@@ -216,7 +217,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _memory.update { it.copy(loading = false, error = throwable.notice("/api/memory")) }
+                _memory.update { it.copy(loading = false, error = throwable.toUserNotice("/api/memory")) }
             }
         }
     }
@@ -251,7 +252,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _memory.update { it.copy(configSaving = false, error = throwable.notice("/api/config")) }
+                _memory.update { it.copy(configSaving = false, error = throwable.toUserNotice("/api/config")) }
             }
         }
     }
@@ -286,7 +287,7 @@ class MaintenanceViewModel(
                 throw cancelled
             } catch (throwable: Throwable) {
                 _memory.update {
-                    it.copy(busy = null, error = throwable.notice("/api/memory/reset"))
+                    it.copy(busy = null, error = throwable.toUserNotice("/api/memory/reset"))
                 }
             }
         }
@@ -322,7 +323,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _memory.update { it.copy(fileLoading = false, error = throwable.notice("/api/fs/read-text")) }
+                _memory.update { it.copy(fileLoading = false, error = throwable.toUserNotice("/api/fs/read-text")) }
             }
         }
     }
@@ -354,7 +355,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _memory.update { it.copy(fileSaving = false, error = throwable.notice("/api/fs/write-text")) }
+                _memory.update { it.copy(fileSaving = false, error = throwable.toUserNotice("/api/fs/write-text")) }
             }
         }
     }
@@ -383,7 +384,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _ops.update { it.copy(loading = false, error = throwable.notice("/api/ops/checkpoints")) }
+                _ops.update { it.copy(loading = false, error = throwable.toUserNotice("/api/ops/checkpoints")) }
             }
         }
     }
@@ -427,7 +428,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _ops.update { it.copy(running = null, error = throwable.notice(action.label)) }
+                _ops.update { it.copy(running = null, error = throwable.toUserNotice(action.label)) }
             }
         }
     }
@@ -453,7 +454,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _ops.update { it.copy(error = throwable.notice("/api/curator/paused")) }
+                _ops.update { it.copy(error = throwable.toUserNotice("/api/curator/paused")) }
             }
         }
     }
@@ -483,7 +484,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _ops.update { it.copy(downloading = false, error = throwable.notice("/api/ops/backup/download")) }
+                _ops.update { it.copy(downloading = false, error = throwable.toUserNotice("/api/ops/backup/download")) }
             }
         }
     }
@@ -516,7 +517,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _ops.update { it.copy(importing = false, error = throwable.notice("/api/ops/import")) }
+                _ops.update { it.copy(importing = false, error = throwable.toUserNotice("/api/ops/import")) }
             }
         }
     }
@@ -539,7 +540,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _ops.update { it.copy(sharing = false, error = throwable.notice("/api/ops/debug-share")) }
+                _ops.update { it.copy(sharing = false, error = throwable.toUserNotice("/api/ops/debug-share")) }
             }
         }
     }
@@ -560,7 +561,7 @@ class MaintenanceViewModel(
                 throw cancelled
             } catch (throwable: Throwable) {
                 _credentials.update {
-                    it.copy(loading = false, error = throwable.notice("/api/credentials/pool"))
+                    it.copy(loading = false, error = throwable.toUserNotice("/api/credentials/pool"))
                 }
             }
         }
@@ -604,7 +605,7 @@ class MaintenanceViewModel(
                 throw cancelled
             } catch (throwable: Throwable) {
                 _credentials.update {
-                    it.copy(saving = false, error = throwable.notice("/api/credentials/pool"))
+                    it.copy(saving = false, error = throwable.toUserNotice("/api/credentials/pool"))
                 }
             }
         }
@@ -629,7 +630,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _credentials.update { it.copy(error = throwable.notice("/api/credentials/pool")) }
+                _credentials.update { it.copy(error = throwable.toUserNotice("/api/credentials/pool")) }
             }
         }
     }
@@ -651,7 +652,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _usage.update { it.copy(loading = false, error = throwable.notice("/api/analytics/usage")) }
+                _usage.update { it.copy(loading = false, error = throwable.toUserNotice("/api/analytics/usage")) }
             }
         }
     }
@@ -670,7 +671,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _sessions.update { it.copy(loading = false, error = throwable.notice("/api/sessions/stats")) }
+                _sessions.update { it.copy(loading = false, error = throwable.toUserNotice("/api/sessions/stats")) }
             }
         }
     }
@@ -702,7 +703,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _sessions.update { it.copy(busy = false, error = throwable.notice("/api/sessions/empty")) }
+                _sessions.update { it.copy(busy = false, error = throwable.toUserNotice("/api/sessions/empty")) }
             }
         }
     }
@@ -729,7 +730,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _sessions.update { it.copy(pruning = false, error = throwable.notice("/api/sessions/prune")) }
+                _sessions.update { it.copy(pruning = false, error = throwable.toUserNotice("/api/sessions/prune")) }
             }
         }
     }
@@ -755,7 +756,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _sessions.update { it.copy(pruning = false, error = throwable.notice("/api/sessions/prune")) }
+                _sessions.update { it.copy(pruning = false, error = throwable.toUserNotice("/api/sessions/prune")) }
             }
         }
     }
@@ -777,7 +778,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _integrations.update { it.copy(loading = false, error = throwable.notice("/api/ops/hooks")) }
+                _integrations.update { it.copy(loading = false, error = throwable.toUserNotice("/api/ops/hooks")) }
             }
         }
     }
@@ -822,7 +823,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _integrations.update { it.copy(busy = null, error = throwable.notice("/api/ops/hooks")) }
+                _integrations.update { it.copy(busy = null, error = throwable.toUserNotice("/api/ops/hooks")) }
             }
         }
     }
@@ -838,7 +839,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _integrations.update { it.copy(busy = null, error = throwable.notice("/api/ops/hooks")) }
+                _integrations.update { it.copy(busy = null, error = throwable.toUserNotice("/api/ops/hooks")) }
             }
         }
     }
@@ -854,7 +855,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _integrations.update { it.copy(busy = null, error = throwable.notice("/api/pairing/approve")) }
+                _integrations.update { it.copy(busy = null, error = throwable.toUserNotice("/api/pairing/approve")) }
             }
         }
     }
@@ -870,7 +871,7 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _integrations.update { it.copy(busy = null, error = throwable.notice("/api/pairing/revoke")) }
+                _integrations.update { it.copy(busy = null, error = throwable.toUserNotice("/api/pairing/revoke")) }
             }
         }
     }
@@ -897,15 +898,13 @@ class MaintenanceViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _sessions.update { it.copy(importing = false, error = throwable.notice("/api/sessions/import")) }
+                _sessions.update { it.copy(importing = false, error = throwable.toUserNotice("/api/sessions/import")) }
             }
         }
     }
 }
 
 /** 统一把异常换成可显示的中文提示；[AppError] 直接用它自己的文案。 */
-private fun Throwable.notice(operation: String): String =
-    (this as? AppError ?: ErrorMapper.from(this, operation)).toNotice()
 
 /** 从任意 JSON 文本里挑出 http(s) 链接（debug-share 的返回形状不固定）。 */
 internal fun collectHttpUrls(text: String): List<String> =

@@ -38,7 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import org.jetbrains.compose.resources.stringResource
-import dev.shinglem.hermes.feature.session.SessionSummary
+import dev.shinglem.hermes.domain.model.SessionSummary
 import dev.shinglem.hermes.resources.Res
 import dev.shinglem.hermes.resources.palette_empty
 import dev.shinglem.hermes.resources.palette_hint

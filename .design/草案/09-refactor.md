@@ -591,7 +591,7 @@ Windows 实现 = `SetParent` 转 `WS_CHILD` + `SetWindowPos` 定尺寸 + `SetWin
 | 阶段 | 内容 | 状态 | 退出条件 | 版本 |
 |---|---|---|---|---|
 | **S0** | 依赖与基座验证 | 🟡 **部分完成**（见下方「S0 实测记录」） | 编译 + 测试绿；4 项 spike 全通过并录 ADR | v0.6.0 |
-| **S1** | 清理违约与闲置 | ⏳ 未开始 | 编译 + 测试绿；依赖树里 coil 只剩 `markdown-one` 一份 | v0.6.0 |
+| **S1** | 清理违约与闲置 | ✅ **完成** | 编译 + 测试绿（578 全绿）；coil 只剩 `markdown-one` 一份 | v0.6.0 |
 | **S2** | 状态层基座（Component + Store 模板） | ⏳ 未开始 | `rg 'private var loaded = false'` 为 0；7 域能在纯 JVM 测 `dispatch` 并断言 state | v0.6.0 |
 | **S3** | 传输与契约收敛 | ⏳ 未开始 | 回归绿；`4001` 家族有单测钉住 | v0.6.0 |
 | **S4** | Chat 域重写 | ⏳ 未开始 | `ChatViewModel.kt` 删除；最长文件 ≤ 400 行；`SessionShadow`/`SessionSwitchPlan` 删除 | v0.6.0 |
@@ -860,6 +860,8 @@ component/chat/
 | 2026-11-13 | **范围切分**：v0.6.0 = **S0–S6 + S8**（完整对齐 v0.5.x）；**S7 + 编辑器槽位与选型 → v0.6.1**。基线更新为 305 文件 / 49,935 行 / 573 测试 / 16 个 androidx ViewModel / 11 个 >600 行文件。验收口径重排为 19 条（原 S7 两条移出）。开发分支 `feature/v0.6.0-refactor` | 用户要求 v0.6.0 完整实现 v0.5.x 全部功能，S7 与编辑器另立版本 |
 | 2026-11-13 | 新增落地与测试两篇：[13-重构落地设计](../详细设计/工程与代码/13-重构落地设计（v0.6.0）.md)、[14-测试计划](../详细设计/工程与代码/14-测试计划（v0.6.0）.md) | 计划本身要能被照着实施与验证 |
 | 2026-11-13 | **S0 实测完成（大部分）**：Essenty 2.7.1 兼容 ✅、压栈后 Store 仍推进 ✅、`nucleusApplication(enableSingleInstance=false)` 可关 ✅、Tao 窗口 + 中文渲染 + AWT 剪贴板共存 ✅；578 测试全绿。剩中文 IME 与触摸待人工。同时修正 S0 步骤：**不在本步移除 `adaptive-*`/`coil-*`**（会编译失败）、`mvikotlin-main` 必须进 `commonMain` | 实测发现原计划两处会直接失败 |
+| 2026-11-13 | **S1 完成**：`SessionSummary` 下沉 `domain/model`（core 不再依赖 feature）、删 coil 三依赖、`ContentNegotiation` 真装上 + `getAs/sendAs`、7 份 `Throwable.describe` 收敛成 `toUserNotice`/`asAppError`、`pad2` 提为 `core/time` 内部函数、3 个 `@Preview`、`ConfirmDialog` 迁 5 处（余 9 处是表单/详情型，随 S5 各页重写）。578 测试全绿 | S1 排期 |
+| 2026-11-13 | **调整阶段顺序：S1 之后先做 S6，再 S2–S5**。理由：① S6 只动 8 个文件、S2–S5 是 300+ 文件的量级 —— 用最小工验证最大风险；② S6 只碰 `shell/`，与 `component/`+`ui/` 正交，不返工；③ S6 之后 S2–S5 每步都能在真实产品壳里目视验证。**触摸仍无法验证**（用户环境限制），S6 该条记为"未验证 + 保留退路"，不计通过 | 用户提出、评估后采纳 |
 
 ---
 

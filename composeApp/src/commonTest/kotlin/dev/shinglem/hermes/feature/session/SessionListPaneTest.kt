@@ -10,6 +10,7 @@ import dev.shinglem.hermes.core.time.TimeFormat
 import dev.shinglem.hermes.ui.theme.HermesTheme
 import kotlin.test.Test
 import kotlin.time.Clock
+import dev.shinglem.hermes.domain.model.SessionSummary
 
 @OptIn(ExperimentalTestApi::class)
 class SessionListPaneTest {

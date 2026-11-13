@@ -5,7 +5,9 @@ import androidx.lifecycle.viewModelScope
 import dev.shinglem.hermes.core.contract.CustomEndpointDto
 import dev.shinglem.hermes.core.contract.CurrentModelDto
 import dev.shinglem.hermes.core.error.AppError
+import dev.shinglem.hermes.core.error.asAppError
 import dev.shinglem.hermes.core.error.toNotice
+import dev.shinglem.hermes.core.error.toUserNotice
 import dev.shinglem.hermes.core.log.Log
 import dev.shinglem.hermes.core.result.Loadable
 import dev.shinglem.hermes.core.result.valueOrNull
@@ -77,7 +79,7 @@ class CustomEndpointViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(endpoints = Loadable.Failed(throwable.asEndpointError())) }
+                _state.update { it.copy(endpoints = Loadable.Failed(throwable.asAppError())) }
             }
         }
     }
@@ -144,7 +146,7 @@ class CustomEndpointViewModel(
                 throw cancelled
             } catch (throwable: Throwable) {
                 _state.update {
-                    it.copy(validating = false, probe = "探测失败：${throwable.describeEndpointError()}", probeOk = false)
+                    it.copy(validating = false, probe = "探测失败：${throwable.toUserNotice()}", probeOk = false)
                 }
             }
         }
@@ -173,7 +175,7 @@ class CustomEndpointViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, error = "保存失败：${throwable.describeEndpointError()}") }
+                _state.update { it.copy(busyKey = null, error = "保存失败：${throwable.toUserNotice()}") }
             }
         }
     }
@@ -194,7 +196,7 @@ class CustomEndpointViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, error = "激活失败：${throwable.describeEndpointError()}") }
+                _state.update { it.copy(busyKey = null, error = "激活失败：${throwable.toUserNotice()}") }
             }
         }
     }
@@ -220,7 +222,7 @@ class CustomEndpointViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, error = "删除失败：${throwable.describeEndpointError()}") }
+                _state.update { it.copy(busyKey = null, error = "删除失败：${throwable.toUserNotice()}") }
             }
         }
     }
@@ -244,9 +246,3 @@ internal fun resolveProbeUrl(draft: EndpointDraft?, resolved: String?): Endpoint
         else -> draft.copy(baseUrl = target)
     }
 }
-
-private fun Throwable.asEndpointError(): AppError =
-    this as? AppError ?: AppError.Unknown(message.orEmpty())
-
-private fun Throwable.describeEndpointError(): String =
-    (this as? AppError)?.toNotice() ?: (message ?: "未知错误")

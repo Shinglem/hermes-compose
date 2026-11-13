@@ -6,7 +6,9 @@ import dev.shinglem.hermes.core.contract.AuxModelsDto
 import dev.shinglem.hermes.core.contract.AuxTaskDto
 import dev.shinglem.hermes.core.contract.ModelInfoAdminDto
 import dev.shinglem.hermes.core.error.AppError
+import dev.shinglem.hermes.core.error.asAppError
 import dev.shinglem.hermes.core.error.toNotice
+import dev.shinglem.hermes.core.error.toUserNotice
 import dev.shinglem.hermes.core.log.Log
 import dev.shinglem.hermes.core.result.Loadable
 import dev.shinglem.hermes.core.result.valueOrNull
@@ -187,7 +189,7 @@ class ModelSettingsViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, error = "保存失败：${throwable.describe()}") }
+                _state.update { it.copy(busyKey = null, error = "保存失败：${throwable.toUserNotice()}") }
             }
         }
     }
@@ -229,7 +231,7 @@ class ModelSettingsViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, error = "重置失败：${throwable.describe()}") }
+                _state.update { it.copy(busyKey = null, error = "重置失败：${throwable.toUserNotice()}") }
             }
         }
     }
@@ -304,7 +306,7 @@ class ModelSettingsViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, error = "保存失败：${throwable.describe()}") }
+                _state.update { it.copy(busyKey = null, error = "保存失败：${throwable.toUserNotice()}") }
             }
         }
     }
@@ -355,14 +357,8 @@ class ModelSettingsViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, error = "保存失败：${throwable.describe()}") }
+                _state.update { it.copy(busyKey = null, error = "保存失败：${throwable.toUserNotice()}") }
             }
         }
     }
 }
-
-private fun Throwable.asAppError(): AppError =
-    this as? AppError ?: AppError.Unknown(message.orEmpty())
-
-private fun Throwable.describe(): String =
-    (this as? AppError)?.toNotice() ?: (message ?: "未知错误")

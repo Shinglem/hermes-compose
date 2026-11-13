@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import dev.shinglem.hermes.core.contract.ProfileAdminDto
 import dev.shinglem.hermes.core.contract.ProfileSoulDto
 import dev.shinglem.hermes.core.error.AppError
+import dev.shinglem.hermes.core.error.toUserNotice
 import dev.shinglem.hermes.core.error.toNotice
 import dev.shinglem.hermes.core.log.Log
 import dev.shinglem.hermes.core.result.Loadable
@@ -113,7 +114,7 @@ class ProfilesViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, error = "保存 SOUL.md 失败：${throwable.describe()}") }
+                _state.update { it.copy(busyKey = null, error = "保存 SOUL.md 失败：${throwable.toUserNotice()}") }
             }
         }
     }
@@ -167,7 +168,7 @@ class ProfilesViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, error = "新建失败：${throwable.describe()}") }
+                _state.update { it.copy(busyKey = null, error = "新建失败：${throwable.toUserNotice()}") }
             }
         }
     }
@@ -186,7 +187,7 @@ class ProfilesViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, error = "删除失败：${throwable.describe()}") }
+                _state.update { it.copy(busyKey = null, error = "删除失败：${throwable.toUserNotice()}") }
             }
         }
     }
@@ -204,7 +205,7 @@ class ProfilesViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, error = "重命名失败：${throwable.describe()}") }
+                _state.update { it.copy(busyKey = null, error = "重命名失败：${throwable.toUserNotice()}") }
             }
         }
     }
@@ -223,7 +224,7 @@ class ProfilesViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, error = "导入失败：${throwable.describe()}") }
+                _state.update { it.copy(busyKey = null, error = "导入失败：${throwable.toUserNotice()}") }
             }
         }
     }
@@ -238,7 +239,7 @@ class ProfilesViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, error = "导出失败：${throwable.describe()}") }
+                _state.update { it.copy(busyKey = null, error = "导出失败：${throwable.toUserNotice()}") }
             }
         }
     }
@@ -265,9 +266,6 @@ class ProfilesViewModel(
         }
     }
 }
-
-private fun Throwable.describe(): String =
-    (this as? AppError)?.toNotice() ?: (message ?: "未知错误")
 
 /** 克隆来源下拉里的「不克隆」哨兵值。 */
 internal const val CLONE_NONE = "__none__"

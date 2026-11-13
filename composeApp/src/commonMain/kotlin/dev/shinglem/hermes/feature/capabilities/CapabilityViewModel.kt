@@ -1,6 +1,7 @@
 package dev.shinglem.hermes.feature.capabilities
 
 import dev.shinglem.hermes.core.error.toNotice
+import dev.shinglem.hermes.core.error.toUserNotice
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.shinglem.hermes.core.contract.CronJobCreate
@@ -139,7 +140,7 @@ class CapabilityViewModel(
                 throw cancelled
             } catch (throwable: Throwable) {
                 _state.update {
-                    it.copy(busyKey = null, notice = "安装失败：${throwable.describe()}", noticeIsError = true)
+                    it.copy(busyKey = null, notice = "安装失败：${throwable.toUserNotice()}", noticeIsError = true)
                 }
             }
         }
@@ -212,7 +213,7 @@ class CapabilityViewModel(
                     it.copy(
                         skills = Loadable.Ready(current),
                         busyKey = null,
-                        notice = "开关失败：${throwable.describe()}",
+                        notice = "开关失败：${throwable.toUserNotice()}",
                         noticeIsError = true,
                     )
                 }
@@ -238,7 +239,7 @@ class CapabilityViewModel(
                     it.copy(
                         toolsets = Loadable.Ready(current),
                         busyKey = null,
-                        notice = "开关失败：${throwable.describe()}",
+                        notice = "开关失败：${throwable.toUserNotice()}",
                         noticeIsError = true,
                     )
                 }
@@ -317,7 +318,7 @@ class CapabilityViewModel(
                     _state.update { it.copy(platforms = Loadable.Ready(fresh)) }
                 }
                 _state.update {
-                    it.copy(busyKey = null, notice = "保存失败：${throwable.describe()}", noticeIsError = true)
+                    it.copy(busyKey = null, notice = "保存失败：${throwable.toUserNotice()}", noticeIsError = true)
                 }
             }
         }
@@ -340,7 +341,7 @@ class CapabilityViewModel(
                 throw cancelled
             } catch (throwable: Throwable) {
                 _state.update {
-                    it.copy(busyKey = null, notice = "测试失败：${throwable.describe()}", noticeIsError = true)
+                    it.copy(busyKey = null, notice = "测试失败：${throwable.toUserNotice()}", noticeIsError = true)
                 }
             }
         }
@@ -368,7 +369,7 @@ class CapabilityViewModel(
                 throw cancelled
             } catch (throwable: Throwable) {
                 _state.update {
-                    it.copy(busyKey = null, notice = "创建失败：${throwable.describe()}", noticeIsError = true)
+                    it.copy(busyKey = null, notice = "创建失败：${throwable.toUserNotice()}", noticeIsError = true)
                 }
             }
         }
@@ -475,7 +476,7 @@ class CapabilityViewModel(
                 _state.update {
                     it.copy(
                         busyKey = null,
-                        notice = (if (editing == null) "创建失败：" else "更新失败：") + throwable.describe(),
+                        notice = (if (editing == null) "创建失败：" else "更新失败：") + throwable.toUserNotice(),
                         noticeIsError = true,
                     )
                 }
@@ -495,7 +496,7 @@ class CapabilityViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, notice = "操作失败：${throwable.describe()}", noticeIsError = true) }
+                _state.update { it.copy(busyKey = null, notice = "操作失败：${throwable.toUserNotice()}", noticeIsError = true) }
             }
         }
     }
@@ -509,7 +510,7 @@ class CapabilityViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, notice = "触发失败：${throwable.describe()}", noticeIsError = true) }
+                _state.update { it.copy(busyKey = null, notice = "触发失败：${throwable.toUserNotice()}", noticeIsError = true) }
             }
         }
     }
@@ -526,7 +527,7 @@ class CapabilityViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, notice = "删除失败：${throwable.describe()}", noticeIsError = true) }
+                _state.update { it.copy(busyKey = null, notice = "删除失败：${throwable.toUserNotice()}", noticeIsError = true) }
             }
         }
     }
@@ -580,5 +581,3 @@ class CapabilityViewModel(
 }
 
 /** 把任意异常收敛成一句提示（`AppError` 走它自己的映射）。 */
-private fun Throwable.describe(): String =
-    (this as? AppError)?.toNotice() ?: (message ?: "未知错误")

@@ -61,7 +61,7 @@ import dev.shinglem.hermes.platform.touchDragScroll
 import dev.shinglem.hermes.feature.composer.Composer
 import dev.shinglem.hermes.feature.composer.ComposerController
 import dev.shinglem.hermes.feature.composer.CompletionPopover
-import dev.shinglem.hermes.feature.session.SessionSummary
+import dev.shinglem.hermes.domain.model.SessionSummary
 import dev.shinglem.hermes.platform.Clipboard
 import dev.shinglem.hermes.resources.Res
 import dev.shinglem.hermes.resources.chat_branch_body
@@ -99,6 +99,7 @@ import dev.shinglem.hermes.resources.model_confirm_cancel
 import dev.shinglem.hermes.resources.model_confirm_ok
 import dev.shinglem.hermes.resources.model_confirm_title
 import dev.shinglem.hermes.ui.component.EmptyState
+import dev.shinglem.hermes.ui.component.ConfirmDialog
 import dev.shinglem.hermes.ui.component.ErrorBanner
 import dev.shinglem.hermes.ui.icon.AppIcons
 import kotlinx.coroutines.channels.Channel
@@ -480,73 +481,43 @@ fun ChatPane(
 
         // 贵模型确认：后端 `config.set` 返回 confirm_required 时才出现。
         state.modelConfirm?.let { confirm ->
-            AlertDialog(
-                onDismissRequest = onDismissModelConfirm,
-                title = { Text(stringResource(Res.string.model_confirm_title)) },
-                text = {
-                    Text(
-                        confirm.message.ifBlank {
-                            stringResource(Res.string.model_confirm_body, confirm.model)
-                        },
-                    )
+            ConfirmDialog(
+                title = stringResource(Res.string.model_confirm_title),
+                message = confirm.message.ifBlank {
+                    stringResource(Res.string.model_confirm_body, confirm.model)
                 },
-                confirmButton = {
-                    TextButton(onClick = onConfirmModelSwitch) {
-                        Text(stringResource(Res.string.model_confirm_ok))
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = onDismissModelConfirm) {
-                        Text(stringResource(Res.string.model_confirm_cancel))
-                    }
-                },
+                confirmText = stringResource(Res.string.model_confirm_ok),
+                dismissText = stringResource(Res.string.model_confirm_cancel),
+                onConfirm = onConfirmModelSwitch,
+                onDismiss = onDismissModelConfirm,
             )
         }
 
         // 重发：截断是破坏性的，必须二次确认（后端的 confirm_truncate 只认客户端声明）。
         state.rewind?.let { draft ->
-            AlertDialog(
-                onDismissRequest = onCancelRewind,
-                title = { Text(stringResource(Res.string.chat_rewind_title)) },
-                text = {
-                    Text(
-                        if (draft.emptyAfterTruncate) {
-                            stringResource(Res.string.chat_rewind_body_empty)
-                        } else {
-                            stringResource(Res.string.chat_rewind_body)
-                        },
-                    )
+            ConfirmDialog(
+                title = stringResource(Res.string.chat_rewind_title),
+                message = if (draft.emptyAfterTruncate) {
+                    stringResource(Res.string.chat_rewind_body_empty)
+                } else {
+                    stringResource(Res.string.chat_rewind_body)
                 },
-                confirmButton = {
-                    TextButton(onClick = onConfirmRewind) {
-                        Text(stringResource(Res.string.chat_rewind_ok))
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = onCancelRewind) {
-                        Text(stringResource(Res.string.chat_rewind_cancel))
-                    }
-                },
+                confirmText = stringResource(Res.string.chat_rewind_ok),
+                dismissText = stringResource(Res.string.chat_rewind_cancel),
+                onConfirm = onConfirmRewind,
+                onDismiss = onCancelRewind,
             )
         }
 
         state.branch?.let { draft ->
-            AlertDialog(
-                onDismissRequest = onCancelBranch,
-                title = { Text(stringResource(Res.string.chat_branch_title)) },
-                text = {
-                    Text(stringResource(Res.string.chat_branch_body, draft.count))
-                },
-                confirmButton = {
-                    TextButton(onClick = onConfirmBranch, enabled = !state.branching) {
-                        Text(stringResource(Res.string.chat_branch_ok))
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = onCancelBranch) {
-                        Text(stringResource(Res.string.chat_branch_cancel))
-                    }
-                },
+            ConfirmDialog(
+                title = stringResource(Res.string.chat_branch_title),
+                message = stringResource(Res.string.chat_branch_body, draft.count),
+                confirmText = stringResource(Res.string.chat_branch_ok),
+                dismissText = stringResource(Res.string.chat_branch_cancel),
+                confirmEnabled = !state.branching,
+                onConfirm = onConfirmBranch,
+                onDismiss = onCancelBranch,
             )
         }
     }

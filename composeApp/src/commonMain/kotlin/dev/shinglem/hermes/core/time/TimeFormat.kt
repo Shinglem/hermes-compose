@@ -17,6 +17,9 @@ sealed interface TimeLabel {
     data class Date(val month: Int, val day: Int) : TimeLabel
 }
 
+/** 两位补零（`7` → `"07"`）。时间格式化与列表时间标记共用，不要各写一份。 */
+internal fun Int.pad2(): String = toString().padStart(2, '0')
+
 object TimeFormat {
     /** 后端 `started_at` / `timestamp` 是 epoch 秒（float）。 */
     fun fromEpochSeconds(seconds: Double): Instant = Instant.fromEpochSeconds(seconds.toLong())
@@ -73,5 +76,4 @@ object TimeFormat {
         return (toDate.toEpochDays() - fromDate.toEpochDays()).toInt()
     }
 
-    private fun Int.pad2(): String = toString().padStart(2, '0')
 }

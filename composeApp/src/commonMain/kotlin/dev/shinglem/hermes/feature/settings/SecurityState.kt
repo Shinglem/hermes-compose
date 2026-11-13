@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.error.toNotice
+import dev.shinglem.hermes.core.error.toUserNotice
 import dev.shinglem.hermes.core.log.Log
 import dev.shinglem.hermes.core.result.Loadable
 import dev.shinglem.hermes.core.result.valueOrNull
@@ -98,7 +99,7 @@ class SecurityViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                _state.update { it.copy(busyKey = null, error = "保存失败：${throwable.describe()}") }
+                _state.update { it.copy(busyKey = null, error = "保存失败：${throwable.toUserNotice()}") }
             }
         }
     }
@@ -107,6 +108,3 @@ class SecurityViewModel(
         _state.update { it.copy(notice = null, error = null) }
     }
 }
-
-private fun Throwable.describe(): String =
-    (this as? AppError)?.toNotice() ?: (message ?: "未知错误")
