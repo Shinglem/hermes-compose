@@ -512,7 +512,19 @@ Nucleus **3.0 移除了全部 AWT 窗口后端**（`decorated-window-jni` / `-jb
 | 中文输入 | BasicTextField + 系统 IME | `TaoImeSession` 端到端验 |
 | 标题栏/主题 | M3 + `AppPalette` | `DecoratedWindow` 的原生标题栏要与暗色协调；必要时用自绘标题栏 |
 
-#### 关闭 `nucleusApplication` 内置单实例锁的判定方法
+#### 单实例：不采用 Nucleus（ADR-066）
+
+> **结论**：`enableSingleInstance = false`，自研 `SingleInstance`（`CreateMutexW` + 命名事件）**原样保留**。
+> 纯搬家到 `shell/singleinstance/`，逻辑一行不改。
+>
+> 原因（详见 ADR-066）：Nucleus 缺三条已定论的语义 ——
+> ① `--silent` 第二次触发**不唤醒**（Nucleus 无条件 `show()+toFront()+requestFocus()`）；
+> ② `--silent` 首启**不建主窗口**（无此开关）；
+> ③ 名字按 `<home>` 哈希**隔离两份便携包**（Nucleus 用 `AppIdProvider.appId()` 单一常量）。
+>
+> **待验**：`enableSingleInstance = false` 后 Nucleus 是否仍创建锁文件（不影响我们的判定即可共存）。
+
+#### 原判定方法（留档）
 
 S6 第一件事，不看它能关掉就**不要继续**：
 
@@ -811,7 +823,7 @@ component/chat/
 | **`ChildPanels` 是 experimental** | 已获准；**收在一层薄封装**（`ui/shell/PanelsHost.kt`），变 API 时只改一处 |
 | **Y 方案的立论基础未实测**：「back stack 里 Component 不销毁、继续跑」 | S0 第 3 步专门验证；不成立则整个 Y 的前提塌了，退回 X |
 | **Nucleus 3.0 无稳定版 + 单人主力** | ① 版本在 `libs.versions.toml` 钉死 dev 号；② 全部接触面收在 `shell/`，必要时 vendor / fork 自己打补丁；③ S0 第 4 步不过就整段推后 |
-| **`nucleusApplication` 的核内单实例锁与自研锁冲突** | S0 第 4 步单列验证项；两条都不可调则退回 Compose Desktop 窗口壳 |
+| ~~`nucleusApplication` 的核内单实例锁与自研锁冲突~~ | **已解除（ADR-066）**：`enableSingleInstance` 是公开参数，且决定**不采用** Nucleus 单实例；自研实现纯搬家，S6 这部分零风险 |
 | **Tao 触摸/IME 回归** | S0 第 4 步 + S6 第 8 步各验一次；保留 `Modifier.touchDragScroll` 退路 |
 | **Nucleus 许可证待核**（GitHub 识别 `NOASSERTION`） | 引入前读 LICENSE 原文；不合规则不引入（`composenativetray` 同批） |
 | **`NativeView` 子窗口在 resize/DPI 切换下裂** | **v0.6.1** 的验点；不通过则浏览器面板退 L0（CDP 像素流） |
@@ -862,6 +874,7 @@ component/chat/
 | 2026-11-13 | **S0 实测完成（大部分）**：Essenty 2.7.1 兼容 ✅、压栈后 Store 仍推进 ✅、`nucleusApplication(enableSingleInstance=false)` 可关 ✅、Tao 窗口 + 中文渲染 + AWT 剪贴板共存 ✅；578 测试全绿。剩中文 IME 与触摸待人工。同时修正 S0 步骤：**不在本步移除 `adaptive-*`/`coil-*`**（会编译失败）、`mvikotlin-main` 必须进 `commonMain` | 实测发现原计划两处会直接失败 |
 | 2026-11-13 | **S1 完成**：`SessionSummary` 下沉 `domain/model`（core 不再依赖 feature）、删 coil 三依赖、`ContentNegotiation` 真装上 + `getAs/sendAs`、7 份 `Throwable.describe` 收敛成 `toUserNotice`/`asAppError`、`pad2` 提为 `core/time` 内部函数、3 个 `@Preview`、`ConfirmDialog` 迁 5 处（余 9 处是表单/详情型，随 S5 各页重写）。578 测试全绿 | S1 排期 |
 | 2026-11-13 | **调整阶段顺序：S1 之后先做 S6，再 S2–S5**。理由：① S6 只动 8 个文件、S2–S5 是 300+ 文件的量级 —— 用最小工验证最大风险；② S6 只碰 `shell/`，与 `component/`+`ui/` 正交，不返工；③ S6 之后 S2–S5 每步都能在真实产品壳里目视验证。**触摸仍无法验证**（用户环境限制），S6 该条记为"未验证 + 保留退路"，不计通过 | 用户提出、评估后采纳 |
+| 2026-11-13 | **ADR-066：单实例与 `--silent` 保留自研实现**。读双方源码后确认 Nucleus 缺三条已定论语义（`--silent` 不唤醒 / `--silent` 不建主窗口 / 按 home 隔离便携包），且 `ObserveSingleInstanceRestore` 是 internal 无法从外部拦。因此 `enableSingleInstance = false`，S6 的单实例部分是**纯搬家**（工作量反而变小） | 用户提问「单实例和 silent 能否靠 Nucleus 实现」，逐条对比后否决 |
 
 ---
 

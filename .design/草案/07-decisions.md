@@ -1530,6 +1530,8 @@ Decompose `ChildPanels`（`Main` / `Details`，`mode = SINGLE | DUAL | TRIPLE`�
 结果是 AWT 依赖文件从 **10 个降到 3 个**，且 **`java.desktop` 仍需保留在运行时镜像里**
 —— 不要指望靠迁 Tao 裁掉它。
 
+> **单实例与 `--silent` 不采用 Nucleus 的机制** —— 见 ADR-066：`enableSingleInstance = false`，自研实现原样保留。
+
 **必须保住的能力（不许回归）**：
 
 | 能力 | 风险 | 判据 |
@@ -1660,6 +1662,46 @@ ADR-002 / ADR-003 的**结论仍有效**（不自造 WebView、不做 JS 引擎�
 
 **后果**：
 - S1–S5 可立即开工，不受 S6 的人工项阻塞。
-- S6 仍需在真机验中文 IME 与触摸；若不过，退路是保留 `Modifier.touchDragScroll` /
-  暂不迁窗口壳（v0.6.0 只交付 S0–S5 + S8）—— 但**可行性已经不存疑**。
+- 中文 IME 已粗测通过；**触摸无法验证**（用户无触屏设备），S6 该项记为「未验证 + 保留退路」。
 - `:composeApp:taoSpike` 与 `shell/spike/TaoSpikeMain.kt` 是**临时探针**，S6 完成后删除。
+
+---
+
+## ADR-066 · 单实例与 `--silent` 保留自研实现，`enableSingleInstance = false`
+
+**决策**：S6 迁 Tao 时**不采用** Nucleus 的单实例机制，`nucleusApplication` 传
+`enableSingleInstance = false`，自研 `SingleInstance`（`CreateMutexW` + 命名事件）原样保留，
+只从 `core/app/` 搬到 `shell/singleinstance/`（纯搬家，逻辑不改）。
+
+**理由**：读完双方实现后逐条对比，Nucleus 缺三条我们已定论的语义，每条都对应真实日常场景。
+
+| 能力 | 自研（`core/app/SingleInstance.kt`） | Nucleus（`SingleInstanceManager.kt`） | 差距 |
+|---|---|---|---|
+| 互斥机制 | `Local\` 命名内核对象（FFM `CreateMutexW`）；**句柄随进程回收，强杀无僵尸锁** | `FileChannel.tryLock()` 锁文件 + shutdown hook 删文件 | 都能判重；Nucleus 被强杀时 hook 不执行，靠 OS 释放锁 + `retryLock` 兜底 |
+| 唤醒方式 | 命名事件 `SetEvent` → 专用等待线程 | 写 restore-request 文件 → `WatchService` **常驻轮询线程** | 等价，但 Nucleus 多一个常驻线程 |
+| **`--silent` 第二次触发** | **直接退出，不唤醒**（`exitAsSecondInstance` 的 `silent` 分支，注释明写「用户正在用那一份，别把窗口抢到前台」） | 无条件 `SingleInstanceRestoreBus.fire()` → `ObserveSingleInstanceRestore` 执行 `show() + setMinimized(false) + toFront() + requestFocus()` | ❌ **开机自启会把正在用的窗口抢到前台** |
+| **`--silent` 首启** | `windowVisible = !silent` → 主窗口**不进入组合** | 无此概念，`DecoratedWindow` 一组合就显示 | ❌ 需自己在外层套 `if` |
+| 唤醒失败的反馈 | 送不到时弹「已在运行」对话框 | `exitProcess(0)` 静默 | ❌ 退步 |
+| 名字隔离 | 按 `<home>` **canonicalPath 哈希**（两份便携包各自跑，这是设计目标） | `AppIdProvider.appId()` 单一常量 | ❌ **两份便携包会互相拦截** |
+
+**为什么不用 Nucleus 的机制但有条件地参考它**：
+
+- `SingleInstanceManager.releaseForHandoff()` 这个能力我们**暂时用不上**（我们的重启交接走
+  `RestartHandover`，语义已定论），但它是好设计，将来若做热更新可参考。
+- `SingleInstanceRestoreEffect` 这类「无窗口托盘应用收到二次启动」的钩子，我们的
+  `requestActivate` 已覆盖同等能力。
+
+**代价与收益**：
+
+- 代价：S6 少了一次"删 130 行自研代码"的机会；`SingleInstance.kt` 继续由我们维护。
+- 收益：S6 **不需要写新代码**（纯搬家），`--silent` / 便携包隔离 / 唤醒反馈三条语义零风险。
+  这实际上让 S6 变小了。
+
+**S6 必须验的一条**：`enableSingleInstance = false` 之后，Nucleus 是否**仍创建锁文件**
+（`primePlatformIntegrations` 里有 reflection 调用 AUMID / autolaunch，需确认不含 SingleInstance）。
+若不创建 → 完全干净；若仍创建 → 确认它不会与我们的 mutex 打架（两个独立机制可以共存，
+只要 Nucleus 的锁不参与"是否第二实例"的判定）。
+
+**替代方案（否决）**：用 Nucleus 单实例 + 自己覆盖 `SingleInstanceRestoreEffect` 里
+"不抢前台"的判断 —— 但 `ObserveSingleInstanceRestore` 是 `internal` 且由 `DecoratedWindow`
+内部自动挂，**拦不住**；且 `AppIdProvider.appId()` 无法按 home 区分。两条都无法从外部修补。
