@@ -590,7 +590,7 @@ Windows 实现 = `SetParent` 转 `WS_CHILD` + `SetWindowPos` 定尺寸 + `SetWin
 
 | 阶段 | 内容 | 状态 | 退出条件 | 版本 |
 |---|---|---|---|---|
-| **S0** | 依赖与基座验证 | ⏳ 未开始 | 编译 + 测试绿；4 项 spike 全通过并录 ADR | v0.6.0 |
+| **S0** | 依赖与基座验证 | 🟡 **部分完成**（见下方「S0 实测记录」） | 编译 + 测试绿；4 项 spike 全通过并录 ADR | v0.6.0 |
 | **S1** | 清理违约与闲置 | ⏳ 未开始 | 编译 + 测试绿；依赖树里 coil 只剩 `markdown-one` 一份 | v0.6.0 |
 | **S2** | 状态层基座（Component + Store 模板） | ⏳ 未开始 | `rg 'private var loaded = false'` 为 0；7 域能在纯 JVM 测 `dispatch` 并断言 state | v0.6.0 |
 | **S3** | 传输与契约收敛 | ⏳ 未开始 | 回归绿；`4001` 家族有单测钉住 | v0.6.0 |
@@ -608,40 +608,54 @@ Windows 实现 = `SetParent` 转 `WS_CHILD` + `SetWindowPos` 定尺寸 + `SetWin
 
 ### S0 · 依赖与基座验证
 
+**状态（2026-11-13）**：`⏳ 进行中` —— 第 1、2、3 步与部分第 4 步已有**实测结论**（见下「S0 实测记录」）；
+第 4 步的**中文 IME** 与 **FileKit 提权对话框**仍需人工在真机点一遍。
+
 1. **加依赖**（`gradle/libs.versions.toml` + `composeApp/build.gradle.kts`）：
-   - 加 `decompose` + `extensions-compose` 3.6.1、`mvikotlin` + `-main` + `-extensions-coroutines` 4.4.0、
+   - 加 `decompose` + `extensions-compose` 3.6.2、`mvikotlin` + `-main` + `-extensions-coroutines` 4.4.0、
      `koin-*` 4.2.2、`kotlinx-collections-immutable` 0.5.2、`filekit-dialogs-compose` 0.17.0、
      `turbine` 1.2.1（testImplementation）
-   - 移除 `adaptive-layout` + `adaptive-navigation`
-   - **验 `./gradlew :composeApp:compileKotlinDesktop`**，重点看：
-     - Essenty 2.5.0（MVIKotlin 编译基线）→ 2.7.1（Decompose 要求）是否二进制兼容
-     - Compose foundation 1.9.3（Decompose 编译基线）→ 1.12.2 是否有 API 破坏
-     - **不兼容时**：调版本配对；都不行则**退回方案 X（Nav3）**，并在 ADR 记录
-2. **最小可运行 spike**（`Main.kt` + 一个空 Component）：
-   - `LifecycleRegistry` + `DefaultComponentContext` + `LifecycleController(lifecycle, windowState)`
-   - `ChildStack` 两层 + `ChildPanels`（`SINGLE`/`DUAL`）各渲染占位 Composable
-   - **验点**：改窗口宽度切 mode 时 panel 的 Lifecycle 正确变 RESUMED/CREATED；
-     返回键走 `BackHandler`；关窗时所有 Component 收到 `onDestroy`
-3. **Store 接线 spike**：一个 `Store` + `CoroutineExecutor` 里 `suspend delay` →
-   `store.state` 经 `mvikotlin-extensions-coroutines` 变 `StateFlow` → UI `collectAsState()`
-   - **验点**：`Store` 放 `instanceKeeper` 后，Composable 重组不重置状态；
-     Component 被压栈（无 UI）时 Store 仍在跑（**这是整个 Y 方案的立论基础**）
-4. **Tao 可行性 spike**（只验能不能站上去，不迁产品代码）：
-   - 空窗口 `nucleusApplication(Tao)` 起得来；`DecoratedWindow` 能显示
-   - **`nucleusApplication` 的内置单实例锁能否关掉**（见 §2.10 判定法）
-   - 微软拼音在 `BasicTextField` 里端到端可用（候选窗跟随 / 上屏 / 撤销）
-   - 触摸滚动可用（或明确退路）
-   - **AWT 工具类共存**：`Toolkit.systemClipboard` / `Desktop.browse` / `Robot` 在 Tao 进程里能调
-   - **不过就 S6/S7 整段推后**（见上「可切割」）
-5. `test_net`：给 `ChatRepository` / `SessionRepository` / `CapabilityRepository` /
-   `MaintenanceRepository` 抽 `interface`（实现类改名 `XxxRepositoryImpl`），供 Koin 绑定与 fake 注入
+   - **`mvikotlin-main` 必须放 `commonMain`**：核心 jar 只有接口，`DefaultStore` /
+     `DefaultStoreFactory` 在 `-main` 里（javap 实证）
+   - **不要在本步移除 `adaptive-*` / `coil-*`**：`AdaptiveListDetail.kt` 还在用前者（S5 才删），
+     后者属 S1 —— 本步只加不改
+   - **验 `./gradlew :composeApp:compileKotlinDesktop`**：已通过（见实测记录）
+2. **最小可运行 spike**（`ChildStack` + `ChildPanels`）
+   - 已落成 `commonTest/architecture/RefactorBaseSpikeTest.kt`（5 个用例全绿）
+3. **Store 接线 spike**
+   - 同上，`Store 放在 instanceKeeper 里，重复获取返回同一实例` 与
+     `Component 被压栈到后台后 Store 仍在推进` 两条即为其判据
+4. **Tao 可行性 spike**
+   - 已落成 `desktopMain/shell/spike/TaoSpikeMain.kt` + 临时 Gradle 任务 `:composeApp:taoSpike`
+   - 窗口起得来、中文渲染正常、AWT 剪贴板可用（已实测，见下）
+   - **剩下**：微软拼音端到端、触摸滚动、FileKit 提权对话框
+5. `test_net`：给 13 个 Repository 抽 `interface`（实现类改名 `XxxRepositoryImpl`）
 6. `di/Modules.kt`（`appModule` / `componentModule`），`Main.kt` `startKoin`；
    `AppContainer` 保留为非 Composable 侧门面、`close()` 顺序不动
 7. `commonTest` 加两个测试：`ModuleVerificationTest`（`verify()`）、
-   `ImportBoundaryTest`（`component/`+`domain/` 不 import Compose；`core/`+`domain/` 不 import
-   `component/`+`ui`+`shell`；只有 `shell/` 可 import `dev.nucleusframework.*`）
+   `ImportBoundaryTest`（R1–R4）
 8. **FileKit 三点验证**（不过就回退 `expect/actual`）：filter 行为 / 取消返回 `null` /
    提权进程里对话框能弹出
+
+### S0 实测记录（2026-11-13，本机）
+
+| # | 项 | 结论 | 证据 |
+|---|---|---|---|
+| 1 | 依赖可解析、可编译 | ✅ **通过** | `:composeApp:compileKotlinDesktop` BUILD SUCCESSFUL |
+| 2 | **Essenty 2.5.0 → 2.7.1 二进制兼容** | ✅ **通过** | `dependencyInsight` 显示 `mvikotlin-jvm:4.4.0` 的 `essenty 2.5.0 -> 2.7.1`（取高）；`RefactorBaseSpikeTest` 在真实 2.7.1 上跑通 `instanceKeeper.getStore` |
+| 3 | **压栈后 Store 仍推进**（Y 方案立论基础） | ✅ **通过** | `ChildStack` 压栈后：Main 实例 `assertSame` 不变、Store `assertSame` 不变、后台 `accept()` 仍生效；生命周期 `RESUMED → CREATED → RESUMED` |
+| 4a | **`nucleusApplication` 单实例锁可关** | ✅ **通过（源码级）** | `NucleusApplication.kt` 公开参数 `enableSingleInstance: Boolean = !ExecutableRuntime.isDev()` —— 传 `false` 即让位给自研 `CreateMutexW` |
+| 4b | Tao 空壳窗口能起、能渲染中文 | ✅ **通过** | `:composeApp:taoSpike` 起窗口，`PrintWindow` 抓到完整中文界面（14 色，非黑屏）；进程 188 MB |
+| 4c | **AWT 工具类在 Tao 进程里可用** | ✅ **通过** | 探针内 `Toolkit.systemClipboard` 写入读回一致（`clipboard ok=hermes-tao-probe`） |
+| 4d | 微软拼音在 Tao `BasicTextField` 里 | ⏳ **待人工** | 需真人在窗口里打「你好世界」；本机无自动化手段（UIPI + 焦点抢占限制） |
+| 4e | Tao 触摸滚动 | ⏳ **待人工** | 需触屏或触摸板手动试 |
+| 5 | 现有 578 个测试 | ✅ **全绿** | `tests=578 failures=0 errors=0`（573 原有 + 5 新增 spike） |
+
+**测试耗时基线**：`desktopTest --rerun` **64.7 秒**（v0.5.8 基线）→ 增量 48.7 秒 / 全量 90.8 秒（含编译）。
+
+**S0 结论**：**Y 方案（Decompose + MVIKotlin + Koin）与 Tao 路线均成立**。
+两个原本被列为"可能让整段推后"的阻塞项（Essenty 版本交叉、`nucleusApplication` 单实例锁）
+都已解除。剩下的人工项（中文 IME / 触摸）**只影响 S6 的体验验收，不影响 S1–S5 的开工**。
 
 ### S1 · 清理违约与闲置（低风险、高收益，与 S0 可并行）
 
@@ -845,6 +859,7 @@ component/chat/
 | 2026-11-13 | 初稿：合并 v0.6.0 重构计划（15 VM → Component + Store、Decompose/MVIKotlin/Koin）+ 桌面壳迁 Tao + 内嵌槽位 | 架构重排定稿；`NativeView` 是浏览器面板的唯一可行路径，而它要求 Tao |
 | 2026-11-13 | **范围切分**：v0.6.0 = **S0–S6 + S8**（完整对齐 v0.5.x）；**S7 + 编辑器槽位与选型 → v0.6.1**。基线更新为 305 文件 / 49,935 行 / 573 测试 / 16 个 androidx ViewModel / 11 个 >600 行文件。验收口径重排为 19 条（原 S7 两条移出）。开发分支 `feature/v0.6.0-refactor` | 用户要求 v0.6.0 完整实现 v0.5.x 全部功能，S7 与编辑器另立版本 |
 | 2026-11-13 | 新增落地与测试两篇：[13-重构落地设计](../详细设计/工程与代码/13-重构落地设计（v0.6.0）.md)、[14-测试计划](../详细设计/工程与代码/14-测试计划（v0.6.0）.md) | 计划本身要能被照着实施与验证 |
+| 2026-11-13 | **S0 实测完成（大部分）**：Essenty 2.7.1 兼容 ✅、压栈后 Store 仍推进 ✅、`nucleusApplication(enableSingleInstance=false)` 可关 ✅、Tao 窗口 + 中文渲染 + AWT 剪贴板共存 ✅；578 测试全绿。剩中文 IME 与触摸待人工。同时修正 S0 步骤：**不在本步移除 `adaptive-*`/`coil-*`**（会编译失败）、`mvikotlin-main` 必须进 `commonMain` | 实测发现原计划两处会直接失败 |
 
 ---
 

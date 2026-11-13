@@ -80,6 +80,22 @@ kotlin {
             implementation(libs.adaptive.layout)
             implementation(libs.adaptive.navigation)
 
+            // v0.6.0 架构基座（ADR-057）：S0 先只加依赖验证二进制兼容，
+            // 业务代码在 S2 起才迁。adaptive-* 与 coil-* 的移除分别在 S5 / S1，
+            // S0 移除会直接编译失败（AdaptiveListDetail.kt 还在用）。
+            implementation(libs.decompose)
+            implementation(libs.decompose.extensions.compose)
+            implementation(libs.mvikotlin)
+            implementation(libs.mvikotlin.extensions.coroutines)
+            // mvikotlin 核心 jar **只有接口**（Store / Executor / Reducer），
+            // DefaultStore 与 DefaultStoreFactory 在 "-main" 构件里 —— 生产代码必须依赖它，
+            // 不能只放在 commonTest（实证：javap 扫 mvikotlin-jvm-4.4.0.jar 无 DefaultStore）。
+            implementation(libs.mvikotlin.main)
+            implementation(libs.koin.core)
+            implementation(libs.koin.compose)
+            implementation(libs.kotlinx.collections.immutable)
+            implementation(libs.filekit.dialogs.compose)
+
             implementation(libs.coil.compose)
             implementation(libs.coil.svg)
             implementation(libs.coil.network.ktor3)
@@ -93,6 +109,12 @@ kotlin {
             // Windows 原生通知（WinRT toast + 按钮）：dll 在 jar 里，`--enable-native-access=ALL-UNNAMED` 已配。
             implementation(libs.nucleus.notification.windows)
 
+            // v0.6.0 桌面壳（ADR-062）：Tao 后端 + 托盘。
+            // 只有 `shell/` 允许 import（架构测试钉死），此处只是把 jar 放到 classpath。
+            implementation(libs.nucleus.application)
+            implementation(libs.nucleus.decorated.window.tao)
+            implementation(libs.composenativetray)
+
             // ViewModel 的 viewModelScope 依赖 Dispatchers.Main.immediate，desktop 默认没有
             implementation(libs.kotlinx.coroutines.swing)
         }
@@ -101,6 +123,10 @@ kotlin {
             implementation(kotlin("test"))
             // 显式坐标，避免 compose.uiTest 的 @ExperimentalComposeLibrary opt-in
             implementation(libs.compose.ui.test)
+            // Store.state / Store.labels 的发射序列断言（"多发/少发"只有 awaitItem 能抓）
+            implementation(libs.turbine)
+            // Koin 依赖图校验（checkModules / verify）与测试替身（declareMock）
+            implementation(libs.koin.test)
         }
 
         desktopTest.dependencies {
@@ -780,3 +806,26 @@ val syncReleasePayload by tasks.registering(Sync::class) {
     into(releaseTestDir.dir("hermes"))
 }
 
+
+// ============================================================================
+//  S0 spike（临时）：Tao 空壳探针。S6 迁完后删除。
+//  ---------------------------------------------------------------------------
+//  `nucleusApplication` 必须跑在 native event loop 的 main thread 上，所以用
+//  JavaExec 而不是普通 test。判据见 `shell/spike/TaoSpikeMain.kt` 的类文档。
+// ============================================================================
+tasks.register<JavaExec>("taoSpike") {
+    group = "verification"
+    description = "S0 spike：起一个 Nucleus Tao 空壳窗口，手工验中文输入 / AWT 共存 / 单实例开关"
+    mainClass.set("dev.shinglem.hermes.shell.spike.TaoSpikeMainKt")
+    dependsOn("desktopMainClasses")
+    val desktopMain = kotlin.targets.getByName("desktop").compilations.getByName("main")
+    classpath = files(desktopMain.output.classesDirs, desktopMain.runtimeDependencyFiles)
+    jvmArgs(
+        "--enable-native-access=ALL-UNNAMED",
+        "-Dfile.encoding=UTF-8",
+    )
+    // 与产品一致：用 hermes.rt.dir 指向的 JDK 27（Tao 的 native 库按这个基线验证）
+    hermesRtDir?.let { dir ->
+        setExecutable("$dir\\bin\\java.exe")
+    }
+}

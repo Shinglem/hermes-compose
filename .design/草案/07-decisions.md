@@ -1628,3 +1628,37 @@ ADR-002 / ADR-003 的**结论仍有效**（不自造 WebView、不做 JS 引擎�
 
 ---
 
+
+## ADR-065 · S0 基座实测结论：Decompose + MVIKotlin + Tao 全部成立
+
+**决策**：v0.6.0 的架构基座（ADR-057）与桌面壳（ADR-062）**通过 S0 验证，按原计划推进**。
+两个原本被列为"可能让整段推后"的阻塞项均已解除。
+
+**实测记录**（2026-11-13，分支 `feature/v0.6.0-refactor`）：
+
+| 项 | 结论 | 证据 |
+|---|---|---|
+| **Essenty 2.5.0 → 2.7.1 二进制兼容** | ✅ 通过 | `dependencyInsight` 显示 `essenty 2.5.0 -> 2.7.1`（Gradle 取高）；`RefactorBaseSpikeTest` 在真实 2.7.1 上跑通 `instanceKeeper.getStore` |
+| **压栈后 Store 仍推进**（Y 方案立论基础） | ✅ 通过 | `ChildStack` 压栈后 Main 实例与 Store 均 `assertSame` 不变；后台 `accept()` 仍生效；生命周期 `RESUMED → CREATED → RESUMED` |
+| **`nucleusApplication` 单实例锁可关** | ✅ 通过（源码级） | `NucleusApplication.kt` 公开参数 `enableSingleInstance: Boolean = !ExecutableRuntime.isDev()`，传 `false` 即让位给自研 `CreateMutexW` |
+| Tao 空壳窗口 + 中文渲染 | ✅ 通过 | `:composeApp:taoSpike` 起窗口，`PrintWindow` 抓到完整中文界面（14 色非黑屏），进程 188 MB |
+| **AWT 工具类在 Tao 进程里可用** | ✅ 通过 | `Toolkit.systemClipboard` 写入读回一致 |
+| 微软拼音 / 触摸滚动 | ⏳ 待人工 | 需真人在窗口里操作（UIPI + 焦点抢占使自动化不可靠） |
+
+**三个与计划不符、必须记住的实施约束**（都是实测踩出来的）：
+
+1. **`mvikotlin-main` 必须进 `commonMain`**。核心 jar（`mvikotlin-jvm`）**只有接口**
+   （`Store` / `Executor` / `Reducer` / `StoreFactory`），`DefaultStore` 与
+   `DefaultStoreFactory` 在 `-main` 构件里。只放 `commonTest` 会让生产代码无法创建 Store。
+2. **S0 不能移除 `adaptive-*` / `coil-*`**。`AdaptiveListDetail.kt` 仍在用前者（S5 才删该文件），
+   后者属 S1。原计划写"S0 移除"会直接编译失败。
+3. **Decompose 3.6.2 的 `childStack` 签名与旧文档不同**：参数是
+   `source`（不是 `navigation`），且**没有 `ChildStack.Source` 类型**；
+   receiver 的静态类型必须写 `ComponentContext`（写 `DefaultComponentContext` 会
+   "receiver type mismatch"，因为扩展签名是 `Ctx : GenericComponentContext<Ctx>`）。
+
+**后果**：
+- S1–S5 可立即开工，不受 S6 的人工项阻塞。
+- S6 仍需在真机验中文 IME 与触摸；若不过，退路是保留 `Modifier.touchDragScroll` /
+  暂不迁窗口壳（v0.6.0 只交付 S0–S5 + S8）—— 但**可行性已经不存疑**。
+- `:composeApp:taoSpike` 与 `shell/spike/TaoSpikeMain.kt` 是**临时探针**，S6 完成后删除。

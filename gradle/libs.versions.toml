@@ -46,6 +46,45 @@ nucleus = "2.5.18"
 adaptive = "1.3.0"
 coil = "3.6.3"
 
+# ============================================================================
+#  v0.6.0 架构基座（ADR-057）：Decompose + MVIKotlin + Koin
+#  ---------------------------------------------------------------------------
+#  版本核对：2026-11-13，repo1.maven.org maven-metadata.xml
+#    decompose 3.6.0 / 3.6.1 / 3.6.2（Apache-2.0）；3.6.2 发布于 2026-11-10
+#    mvikotlin 4.4.0（Apache-2.0）
+#    koin      4.2.2（Apache-2.0）
+#  · decompose 3.6.x 依赖 Essenty 2.7.1 + kotlinx-serialization-core 1.6.3 + kotlin-stdlib 2.3.21
+#    → 本项目取高：serialization 1.12.0 / kotlin 2.4.21（S0 已编译验证通过）
+#  · **已知版本交叉已验证**：mvikotlin 4.4.0 编译于 Essenty 2.5.0，decompose 要 2.7.1；
+#    Gradle 解析到 2.7.1，`RefactorBaseSpikeTest` 在真实 2.7.1 上跑通（5 个用例全绿）。
+#  · MVIKotlin 官方：与 decompose 是同一作者在 Essenty 之上的两层，互不排斥。
+#  · **坑**：mvikotlin 核心 jar 只有接口；DefaultStore / DefaultStoreFactory 在
+#    `mvikotlin-main` 里 → 生产代码必须依赖它（不能只放 commonTest）。
+# ============================================================================
+decompose = "3.6.2"
+mvikotlin = "4.4.0"
+koin      = "4.2.2"
+
+# 桌面窗口壳（ADR-062）：3.0 已删除全部 AWT 后端，只剩 Tao。
+# 只有 3.0.0-dev-* 可用，末版 202611061347（2026-11-06）。接受 dev 版。
+# 关键实证（读 `NucleusApplication.kt` 源码）：`nucleusApplication(enableSingleInstance = false)`
+# 是**公开参数**，默认 `!ExecutableRuntime.isDev()` —— 可以关掉，让位给自研 CreateMutexW。
+nucleus-app = "3.0.0-dev-202611061347"
+# 托盘：2.1.0 起与 `-app` 拆分，只引本体。与 Tao 3.0 的兼容性待 S6 实测。
+composenativetray = "2.1.7"
+
+# 不可变集合：State 里的 List/Map 换成 Immutable*，否则每次 state 变更整树重组
+# （现状 @Immutable 全仓仅 1 处）。0.5.x 有 copy 类方法重命名（add→adding 等，KEEP-0459），
+# 见技能 kotlin-tooling-immutable-collections-0-5-x-migration。
+kotlinx-collections-immutable = "0.5.2"
+
+# 文件选择对话框（MIT，Kotlin Foundation Grants 资助）：替代 5 个 expect/actual。
+# 0.17.0 仍是 pre-1.0；提权进程可用性待 S0 实测，不过就回退现有实现。
+filekit = "0.17.0"
+
+# 测试：验证 Store.state / Store.labels 的发射序列（"多发/少发"只有 awaitItem 能抓）。
+turbine = "1.2.1"
+
 # 终端：BossTerm 裁剪版以 git submodule + composite build 接入（modules/terminal-bossterm），
 # 不再从这里声明坐标；PTY 由它内部的 pty4j 负责。
 
@@ -98,6 +137,24 @@ coil-network-ktor3 = { module = "io.coil-kt.coil3:coil-network-ktor3", version.r
 
 # --- Compose UI Test（显式坐标，避免 compose.uiTest 的实验性 opt-in）---
 compose-ui-test = { module = "org.jetbrains.compose.ui:ui-test", version.ref = "compose" }
+
+# --- v0.6.0 架构基座（ADR-057；版本核对 2026-11-13，repo1.maven.org）---
+decompose                  = { module = "com.arkivanov.decompose:decompose", version.ref = "decompose" }
+decompose-extensions-compose = { module = "com.arkivanov.decompose:extensions-compose", version.ref = "decompose" }
+mvikotlin                  = { module = "com.arkivanov.mvikotlin:mvikotlin", version.ref = "mvikotlin" }
+mvikotlin-main             = { module = "com.arkivanov.mvikotlin:mvikotlin-main", version.ref = "mvikotlin" }
+mvikotlin-extensions-coroutines = { module = "com.arkivanov.mvikotlin:mvikotlin-extensions-coroutines", version.ref = "mvikotlin" }
+koin-core                  = { module = "io.insert-koin:koin-core", version.ref = "koin" }
+koin-compose               = { module = "io.insert-koin:koin-compose", version.ref = "koin" }
+koin-test                  = { module = "io.insert-koin:koin-test", version.ref = "koin" }
+kotlinx-collections-immutable = { module = "org.jetbrains.kotlinx:kotlinx-collections-immutable", version.ref = "kotlinx-collections-immutable" }
+filekit-dialogs-compose    = { module = "io.github.vinceglb:filekit-dialogs-compose", version.ref = "filekit" }
+turbine                    = { module = "app.cash.turbine:turbine", version.ref = "turbine" }
+
+# --- 桌面窗口壳（ADR-062；仅 desktopMain 用，且只有 shell/ 可引用）---
+nucleus-application        = { module = "dev.nucleusframework:nucleus.nucleus-application", version.ref = "nucleus-app" }
+nucleus-decorated-window-tao = { module = "dev.nucleusframework:nucleus.decorated-window-tao", version.ref = "nucleus-app" }
+composenativetray          = { module = "dev.nucleusframework:composenativetray", version.ref = "composenativetray" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
