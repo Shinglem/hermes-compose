@@ -285,6 +285,10 @@ New-Item -ItemType SymbolicLink -Path .github\skills -Target '../.ai/skill'
 1. **改完立刻编**：先 `./gradlew :composeApp:compileKotlinDesktop`，再 `./gradlew :composeApp:desktopTest`。
    报错只看**第一条**（后面多为连带错误）。同一文件多处编辑后，用 `grep` 复核关键符号
    **只出现一次** —— 重复插入的声明、多余的逗号都只在编译时才暴露，别等发版前才发现。
+   **改代码前先停掉正在跑的应用**：`:composeApp:run` 开着时改源码，Gradle 增量编译会在后台重写
+   `build/classes`，运行中的 JVM 按需加载时读到半成品 → 界面弹出 `NoClassDefFoundError` 的
+   Fatal Error 窗。这不是代码 bug（同一次 `compileKotlinDesktop` 是成功的），但会让人误判。
+   已崩过就 `clean` + **`--rerun-tasks`** 重编（`clean` 后仍可能 `FROM-CACHE` 拉到旧产物）。
 2. **系统集成问题先取证，再改代码**：自启 / 单实例 / 提权 / 托盘的故障，先枚举**系统真实状态**
    （`schtasks /Query /XML`、进程 `MainWindowHandle`、`logs/startup.log`），确认根因在系统还是代码。
    见技能 [`dev-windows-integration-debug`](.ai/skill/dev-windows-integration-debug/SKILL.md)。

@@ -1026,8 +1026,13 @@ component/chat/
 12. `Store.labels` 的发射序列用 **Turbine `awaitItem()`** 断言（每个含 Label 的 Store 至少 1 例）
 13. `rg 'expect (suspend )?fun pick'` 与 `rg 'pickSaveFile|pickExecutableFile'` 为 0（FileKit 接管）
 14. **真机过一遍 0.5.5 的 5 条修复**（切模型 / 思考块跟随 / 滚动吸附 / 会话切换 / 审批通知）不回归
-15. **真机六项**：单实例（含 `--silent` 激活）/ 提权重启 / 开机自启 / 托盘常驻 /
-    触摸滚动 / 中文 IME 全过
+15. **真机六项** —— 逐项状态（2026-11-15）：
+    - ✅ **单实例**：起第二个实例（`pid=14864`）走完 `runas` 提权后**没有留下窗口**，只剩原 `pid=40964`；Nucleus 锁判定生效
+    - ✅ **提权重启**：`startup.log` 完整记录 `pid=25520 elevated=false` → `relaunch via runas` → `pid=40964 elevated=true`
+    - ⬜ **开机自启**：本机 `configured=OFF`、任务未安装（`autostart task=... installed=false`）—— 不是回归，是这台没开
+    - 🟡 **托盘常驻**：托盘区可见绿色方块图标，但需人工确认右键菜单与"关窗口最小化到托盘"行为
+    - ❌ **触摸滚动**：无触摸设备，无法验证
+    - ❌ **中文 IME 完整链路**：注入的按键会被 IME 吞掉（技能 §1 已记录），无法脚本化验证
 16. **通知栈零改动**：`ShortcutScan` / `ShortcutAumidWriter` / `ProcessAumid` /
     `NativeNotifications.desktop.kt` 的公开行为不变（仅允许搬家，逻辑不改）。
     ✅ **已机械验证**（2026-11-15）：四个文件与搬家前（`e5732e7^`）逐行对比，**去掉 package/import 后完全一致**

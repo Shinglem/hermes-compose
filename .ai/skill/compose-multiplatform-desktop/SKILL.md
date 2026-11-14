@@ -62,6 +62,7 @@ metadata:
 | 弹出 `AlertDialog` 被终端内容遮住半截 | `SwingPanel` 是 heavyweight 组件，**永远画在 Compose 之上**；换成独立窗口的 `Dialog` 也一样被遮（实测两者都不行） | 先把 Swing 组件移出合成树（收起面板 / 切走页面）再弹框，关闭后恢复；或者在 Swing 侧用 `JOptionPane`。**根因修法**：把该区域改成 Compose 原生渲染（本项目 ADR-054 之后，两处绕法都已删除） |
 | 想用 `-Dcompose.layers.type=WINDOW` 把 Popup/Dialog 变独立窗口绕开遮挡 | **实测在 JBR 25 + CMP 1.12.2 上 app 直接 `EXCEPTION_ACCESS_VIOLATION` 崩溃**（官方也列了 Linux 渲染 #4437、显示闪烁 #4475、父窗 resize 裁剪 #4484 三个已知问题）；另一个 flag `-Dcompose.swing.render.on.graphics=true`（`ComposeFeatureFlags.useSwingGraphicsInComposePanel`）官方注明**对 `ComposeWindow`/`ComposeDialog` 无效**，只作用于嵌在 Swing 里的 `ComposePanel` | 别指望这两个 flag。要真正在互操作组件之上弹东西，只有 desktop 专属 `DialogWindow`（独立 `JDialog`）或 Swing 的 `JOptionPane`；官方立场见 compose-multiplatform#1521（"限制来自架构，看起来不可行"）与 Swing 集成教程的前提条件「应用里没有 popup / tooltip / context menu」 |
 | 设置页这类"一个大 `when` 分支"的详情面板参数爆炸 | 十几页的回调全平铺在同一个 `@Composable` 签名里，改动一次要碰三处 | 按页把回调打包成 `data class XxxPageCallbacks(val onFoo: ... = {})`，用默认值保持向后兼容 |
+| 开发中 `:composeApp:run` 还开着，改完源码再点界面 → `NoClassDefFoundError: dev/…` 弹 Fatal Error 窗 | **stale class**：Gradle 增量编译在后台重写 `build/classes`，运行中的 JVM 按需加载 class 时读到半成品（新文件还没落盘，或旧 class 已被替换）。**与代码正确性无关** —— 同一次 `compileKotlinDesktop` 是成功的 | 先 `Stop-Process` 掉应用再改代码；已崩过就 `clean` + `--rerun-tasks` 重编（**`--rerun-tasks` 必须加**：`clean` 后仍可能 `FROM-CACHE` 拉到旧产物）。**判据**：崩溃栈类名指向刚动过的模块，但 `git status` 干净、`compileKotlinDesktop` 通过 → 就是它 |
 
 ## 从 Electron / Web 客户端迁移：先量后算
 
