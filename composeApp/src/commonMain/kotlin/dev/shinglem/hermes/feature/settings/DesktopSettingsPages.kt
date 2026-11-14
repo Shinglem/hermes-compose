@@ -32,7 +32,7 @@ import androidx.compose.ui.unit.dp
 import dev.shinglem.hermes.core.app.OfficialDesktopLauncher
 import dev.shinglem.hermes.core.app.ProductInfo
 import dev.shinglem.hermes.feature.shell.AppShortcut
-import dev.shinglem.hermes.platform.NativeNotifications
+import dev.shinglem.hermes.shell.notification.NativeNotifications
 import dev.shinglem.hermes.platform.clientVersion
 import dev.shinglem.hermes.ui.component.ErrorBanner
 

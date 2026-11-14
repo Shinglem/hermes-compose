@@ -1,4 +1,4 @@
-package dev.shinglem.hermes.platform
+package dev.shinglem.hermes.shell.notification
 
 import dev.shinglem.hermes.core.log.Log
 import java.lang.foreign.Arena

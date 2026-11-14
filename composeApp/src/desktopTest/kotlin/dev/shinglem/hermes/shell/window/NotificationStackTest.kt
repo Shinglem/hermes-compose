@@ -1,4 +1,4 @@
-package dev.shinglem.hermes.ui.notification
+package dev.shinglem.hermes.shell.window
 
 import kotlin.test.Test
 import kotlin.test.assertEquals

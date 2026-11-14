@@ -26,8 +26,8 @@ import androidx.compose.material3.MaterialTheme
 import dev.shinglem.hermes.core.app.AutostartInfo
 import dev.shinglem.hermes.core.config.AppOptionsHolder
 import dev.shinglem.hermes.shell.window.rememberHermesTitleBarStyle
-import dev.shinglem.hermes.ui.notification.NotificationOverlay
-import dev.shinglem.hermes.ui.notification.WorkArea
+import dev.shinglem.hermes.shell.window.NotificationOverlay
+import dev.shinglem.hermes.shell.window.WorkArea
 import dev.shinglem.hermes.ui.theme.HermesTheme
 import dev.shinglem.hermes.core.app.NativeMessageBox
 import dev.shinglem.hermes.core.app.Elevation
@@ -53,7 +53,7 @@ import dev.shinglem.hermes.feature.terminal.TerminalContent
 import dev.shinglem.hermes.platform.AppFocus
 import dev.shinglem.hermes.platform.SystemNotifications
 import dev.shinglem.hermes.platform.TerminalQuoteBridge
-import dev.shinglem.hermes.platform.NativeNotifications
+import dev.shinglem.hermes.shell.notification.NativeNotifications
 import dev.shinglem.hermes.platform.appDataDir
 import dev.shinglem.hermes.resources.Res
 import dev.shinglem.hermes.resources.icon

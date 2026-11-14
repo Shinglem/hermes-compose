@@ -1,4 +1,4 @@
-package dev.shinglem.hermes.platform
+package dev.shinglem.hermes.shell.notification
 
 import dev.nucleusframework.notification.windows.DismissalReason
 import dev.nucleusframework.notification.windows.ShortcutPolicy
@@ -7,6 +7,8 @@ import dev.nucleusframework.notification.windows.ToastNotificationListener
 import dev.nucleusframework.notification.windows.WindowsNotificationCenter
 import dev.nucleusframework.notification.windows.toast
 import dev.shinglem.hermes.core.app.ProductInfo
+import dev.shinglem.hermes.platform.NotificationAction
+import dev.shinglem.hermes.platform.appDataDir
 import dev.shinglem.hermes.core.log.Log
 import java.io.File
 import java.security.MessageDigest

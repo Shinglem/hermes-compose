@@ -1,5 +1,7 @@
-package dev.shinglem.hermes.ui.notification
+package dev.shinglem.hermes.shell.window
 
+import dev.shinglem.hermes.ui.notification.NOTIFICATION_CARD_WIDTH
+import dev.shinglem.hermes.ui.notification.NOTIFICATION_SHADOW_MARGIN
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue

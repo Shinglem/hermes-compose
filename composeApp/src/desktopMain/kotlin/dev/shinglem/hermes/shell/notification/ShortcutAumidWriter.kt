@@ -1,4 +1,4 @@
-package dev.shinglem.hermes.platform
+package dev.shinglem.hermes.shell.notification
 
 import java.io.File
 import java.util.Base64

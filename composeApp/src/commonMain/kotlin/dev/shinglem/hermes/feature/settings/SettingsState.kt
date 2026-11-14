@@ -9,7 +9,7 @@ import dev.shinglem.hermes.core.config.SettingsStore
 import dev.shinglem.hermes.core.config.setJsonAt
 import dev.shinglem.hermes.core.log.Log
 import dev.shinglem.hermes.core.prefs.AppPreferences
-import dev.shinglem.hermes.platform.NativeNotifications
+import dev.shinglem.hermes.shell.notification.NativeNotifications
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

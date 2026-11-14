@@ -1,5 +1,7 @@
 package dev.shinglem.hermes.platform
 
+import dev.shinglem.hermes.shell.notification.NativeNotifications
+
 
 /**
  * 桌面通知。

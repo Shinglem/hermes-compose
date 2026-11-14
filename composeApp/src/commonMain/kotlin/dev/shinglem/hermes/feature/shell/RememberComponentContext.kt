@@ -1,4 +1,4 @@
-package dev.shinglem.hermes.component
+package dev.shinglem.hermes.feature.shell
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect

@@ -1,4 +1,4 @@
-package dev.shinglem.hermes.ui.notification
+package dev.shinglem.hermes.shell.window
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
@@ -19,6 +19,10 @@ import dev.shinglem.hermes.core.config.ThemeMode
 import dev.shinglem.hermes.core.config.ThemeStyle
 import dev.shinglem.hermes.platform.NotificationInbox
 import dev.shinglem.hermes.platform.NotificationRequest
+import dev.shinglem.hermes.ui.notification.NotificationCard
+import dev.shinglem.hermes.ui.notification.NOTIFICATION_CARD_WIDTH
+import dev.shinglem.hermes.ui.notification.NOTIFICATION_SHADOW_MARGIN
+import dev.shinglem.hermes.ui.notification.notificationCardHeight
 import dev.shinglem.hermes.ui.theme.HermesTheme
 import dev.nucleusframework.application.DecoratedWindow
 import kotlinx.coroutines.delay

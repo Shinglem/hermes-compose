@@ -64,7 +64,7 @@ import dev.shinglem.hermes.feature.composer.ComposerViewModel
 import dev.shinglem.hermes.feature.composer.ModelPill
 import dev.shinglem.hermes.feature.composer.ReasoningPill
 import com.arkivanov.decompose.ComponentContext
-import dev.shinglem.hermes.component.rememberDefaultComponentContext
+
 import dev.shinglem.hermes.component.chat.ChatEffect
 import dev.shinglem.hermes.component.chat.ChatIntent
 import dev.shinglem.hermes.component.chat.DefaultChatComponent
