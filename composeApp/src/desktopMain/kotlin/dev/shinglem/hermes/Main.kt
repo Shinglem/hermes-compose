@@ -28,8 +28,8 @@ import dev.shinglem.hermes.core.config.AppOptionsHolder
 import dev.shinglem.hermes.shell.window.rememberHermesTitleBarStyle
 import dev.shinglem.hermes.ui.notification.NotificationOverlay
 import dev.shinglem.hermes.ui.notification.WorkArea
-import dev.shinglem.hermes.ui.notification.taoWorkArea
 import dev.shinglem.hermes.ui.theme.HermesTheme
+import dev.shinglem.hermes.core.app.NativeMessageBox
 import dev.shinglem.hermes.core.app.Elevation
 import dev.shinglem.hermes.core.app.ElevationRelaunch
 import dev.shinglem.hermes.core.app.ProductInfo
@@ -60,7 +60,6 @@ import dev.shinglem.hermes.terminal.terminalSelectedText
 import dev.shinglem.hermes.terminal.terminalTailText
 import java.io.File
 import kotlinx.coroutines.launch
-import javax.swing.JOptionPane
 import kotlin.system.exitProcess
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.jetbrains.compose.resources.painterResource
@@ -117,10 +116,8 @@ fun main(args: Array<String>) {
     // BossTerm 的默认存储是 `~/.bossterm`（settings / 字体缓存 / 会话快照）。统一改到我们的数据目录，
     // 别在用户家目录留下第二个配置文件夹；终端设置本身由 state.json 注入，不走这个文件。
     System.setProperty("bossterm.settings.dir", File(appDataDir, "terminal").absolutePath)
-    // 托盘菜单曾是 Swing `JPopupMenu`，必须跟着系统外观走才与截图里的系统菜单一致；
-    // S6 换成 `composenativetray`（原生 Win32 菜单）之后不需要 LAF 了。
-    // 只剩 `showFatal` 里的 `JOptionPane`，它用默认外观即可 —— 那是配置解析失败时的兜底，
-    // 此时连 Compose 都没起来，换成自绘对话框反而多一层失败点。
+    // LAF 与 `JOptionPane` 都已移除（ADR-075）：托盘菜单换成 `composenativetray` 的原生菜单，
+    // 致命错误弹窗换成 Win32 `MessageBoxW`。业务代码不再引用 `java.desktop`。
     val silent = isSilent(args)
     // 极早期日志：配置解析失败也要留痕（`--silent` 下 showFatal 只写 stderr，javaw 没有控制台）。
     val startup = StartupLog(startupHome())
@@ -276,13 +273,10 @@ fun main(args: Array<String>) {
 
         // 通知窗：与主窗口平级（`nucleusApplication` 作用域），托盘模式下主窗口不显示也能弹。
         //
-        // 几何来源有个先有鸡还是先有蛋的问题：算工作区需要 `TaoWindow` 句柄，而它只在
-        // `DecoratedWindow` 作用域里拿得到（`NucleusWindow.unsafe.taoWindow`）；通知窗本身
-        // 又不能拿到主窗口的 scope。做法：主窗口在组合时把 `TaoMonitors` 出来的工作区写进
-        // 这个 state，通知窗读它。主窗口没组合之前（`--silent` 首帧）退回 AWT 兜底 ——
-        // 那一小段时间里通常还没有任何通知要画。
-        val workArea = remember { mutableStateOf<WorkArea?>(null) }
-        NotificationOverlay(workArea = { workArea.value ?: awtWorkAreaFallback() })
+        // 几何直接问 Tao 的原生显示器信息（`TaoMonitors` 不需要窗口句柄 —— 见
+        // `taoWorkAreaOrNull` 的注释）。早期实现在这里靠主窗口回写 + AWT 兜底，两者都不必要。
+        val workArea = remember { mutableStateOf(taoWorkAreaOrNull()) }
+        NotificationOverlay(workArea = { workArea.value ?: WorkArea(0f, 0f, 1920f, 1080f) })
 
         // 托盘：`composenativetray` 的原生桥（解决 CMP-1936 中文菜单乱码）。
         // 点图标先 `consumePendingAction()` 再决定显示/退出（沿用旧顺序）。
@@ -322,20 +316,10 @@ fun main(args: Array<String>) {
             icon = appIcon,
             minimumSize = DpSize(windowConfig.minWidth.dp, windowConfig.minHeight.dp),
         ) {
-            // 通知窗的几何来源（ADR-073）：Tao 的原生显示器信息优先。
-            // 这里显式写回，供 `NotificationOverlay` 读；同时也把 `AppFocus` 的兜底挂上。
+            // `AppFocus` 的兜底（S6 收尾）：旧实现查 AWT `Window.getWindows()`，而 Tao 进程里
+            // 没有 AWT 窗口 → 恒判"不在前台"→ 每条通知都弹。这里改挂到 Nucleus 的窗口焦点。
             LaunchedEffect(nucleusWindow) {
                 AppFocus.attachProbe { nucleusWindow.isFocused }
-                // 失败不能静默：退回 AWT 兜底后通知位置可能在高 DPI 下算错，没有日志就只能靠猜。
-                val area = runCatching {
-                    nucleusWindow.unsafe.taoWindow?.let { taoWorkArea(it) }
-                }.onFailure {
-                    Log.warn("notification geometry: Tao monitors unavailable, fall back to AWT (${it.message})")
-                }.getOrNull()
-                workArea.value = area
-                if (area != null) {
-                    Log.info("notification geometry: workArea=${area.left},${area.top} ${area.width}x${area.height}dp")
-                }
             }
             // 窗口内容整体包在应用主题里 —— 标题栏也必须跟着主题走。
             // Tao 的 `TitleBar` 不读 `MaterialTheme`，靠 `LocalTitleBarStyle` 取色；把主题开在
@@ -384,25 +368,29 @@ fun main(args: Array<String>) {
 }
 
 /**
- * 主窗口还没组合时的兜底（`--silent` 首帧）。
+ * 通知窗的屏幕工作区。
  *
- * 这一段保留 AWT 是有意的：`NucleusWindow` 句柄要等 `DecoratedWindow` 组合才有，
- * 而这时可能已经收到通知（开机自启后立刻后台跑完一轮）。用 AWT 只是读几何，
- * 不涉及任何窗口模型，风险可控；拿到句柄后就换成 Tao 的数据源。
+ * 直接用 Tao 的原生显示器信息（`TaoMonitors`），**不需要**窗口句柄 —— 读字节码确认
+ * Windows 分支只调 `nativeGetMonitors()`，`taoWindow` 参数默认就是 `null`；
+ * 实测 `TaoMonitors.all(null)` 在 `nucleusApplication` 之外也能拿到正确结果
+ * （`monitorProbe`：work=IntRect(0,38,2560,1392) scale=1.0）。
+ *
+ * 早期实现这里用的是 AWT 的 `GraphicsEnvironment` + `Toolkit.getScreenInsets`，
+ * 那是业务代码里最后一处"为了一个纯查询去初始化桌面集成层"的调用（ADR-075）。
  */
-private fun awtWorkAreaFallback(): WorkArea = runCatching {
-    val environment = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()
-    val device = environment.defaultScreenDevice
-    val bounds = device.defaultConfiguration.bounds
-    val insets = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(device.defaultConfiguration)
-    val scale = device.defaultConfiguration.defaultTransform.scaleX.toFloat().takeIf { it > 0f } ?: 1f
+private fun taoWorkAreaOrNull(): WorkArea? = runCatching {
+    val monitor = dev.nucleusframework.window.tao.TaoMonitors.primary(null)
+    val px = monitor.workAreaPx
+    val scale = monitor.scaleFactor.takeIf { it > 0f } ?: 1f
     WorkArea(
-        left = (bounds.x + insets.left) / scale,
-        top = (bounds.y + insets.top) / scale,
-        width = (bounds.width - insets.left - insets.right) / scale,
-        height = (bounds.height - insets.top - insets.bottom) / scale,
+        left = px.left / scale,
+        top = px.top / scale,
+        width = px.width / scale,
+        height = px.height / scale,
     )
-}.getOrDefault(WorkArea(0f, 0f, 1920f, 1080f))
+}.onFailure {
+    Log.warn("notification geometry: Tao monitors unavailable (${it.message})")
+}.getOrNull()
 
 /** 位置还没定下来（`PlatformDefault` 且窗口未上屏）时不记，免得把 0,0 写进 state.json。 */
 private fun WindowState.toBounds(): WindowBounds? {
@@ -416,15 +404,14 @@ private fun WindowState.toBounds(): WindowBounds? {
     )
 }
 
-/** 配置/装配阶段既没有日志、也没有窗口，只能用 Swing 的原生对话框。 */
+/** 配置/装配阶段既没有日志、也没有窗口，只能用原生对话框。 */
 private fun showFatal(title: String, message: String, silent: Boolean) {
     // 先落 stderr 再弹框：对话框是阻塞的，反过来会让自动化测试永远读不到原因。
     System.err.println("[$title] $message")
     // 静默启动（开机自启）时不该弹模态框卡住会话。
     if (silent || System.getenv(ConfigEnvNames.NO_GUI_DIALOG) == "1") return
-    runCatching {
-        JOptionPane.showMessageDialog(null, message, title, JOptionPane.ERROR_MESSAGE)
-    }
+    // 原生 `MessageBoxW`：不初始化 AWT/Swing，Compose 没起来时也能弹（ADR-075）。
+    NativeMessageBox.error(title, message)
 }
 
 /** 配置错误与启动期错误的退出码要能区分（便于脚本判断失败原因）。 */

@@ -804,36 +804,9 @@ val syncReleasePayload by tasks.registering(Sync::class) {
 }
 
 
-// ============================================================================
-//  S0 spike（临时）：Tao 空壳探针。S6 迁完后删除。
-//  ---------------------------------------------------------------------------
-//  `nucleusApplication` 必须跑在 native event loop 的 main thread 上，所以用
-//  JavaExec 而不是普通 test。判据见 `shell/spike/TaoSpikeMain.kt` 的类文档。
-// ============================================================================
-tasks.register<JavaExec>("taoSpike") {
-    group = "verification"
-    description = "S0 spike：起一个 Nucleus Tao 空壳窗口，手工验中文输入 / AWT 共存 / 单实例开关"
-    mainClass.set("dev.shinglem.hermes.shell.spike.TaoSpikeMainKt")
-    dependsOn("desktopMainClasses")
-    val desktopMain = kotlin.targets.getByName("desktop").compilations.getByName("main")
-    classpath = files(desktopMain.output.classesDirs, desktopMain.runtimeDependencyFiles)
-    jvmArgs(
-        "--enable-native-access=ALL-UNNAMED",
-        "-Dfile.encoding=UTF-8",
-    )
-    // 与产品一致：用 hermes.rt.dir 指向的 JDK 27（Tao 的 native 库按这个基线验证）
-    hermesRtDir?.let { dir ->
-        setExecutable("$dir\\bin\\java.exe")
-    }
-}
 
-// ============================================================================
-//  S6 前置探针（临时）：Tao 进程里 AWT 屏幕 API 是否可用。
-//  ---------------------------------------------------------------------------
-//  独立进程 + 写文件，不依赖 Compose 渲染 —— 放进 remember{} 里会导致窗口白屏，
-//  那本身就说明这些调用在 Tao 主线程上可能阻塞。
-//  结果：%TEMP%/hermes-awt-probe.txt 与 stdout。
-// ============================================================================
+
+
 // 线程模型探针（ADR-072）：验 UI 线程到底是 `Dispatchers.Main` 还是 `Dispatchers.Swing`。
 // ---------------------------------------------------------------------------
 //  S6 迁 Nucleus Tao 后 `MainDispatcherFactory` 的仲裁结果变了：Tao 的 factory
@@ -852,18 +825,6 @@ tasks.register<JavaExec>("taoSwingProbe") {
     jvmArgs("--enable-native-access=ALL-UNNAMED", "-Dfile.encoding=UTF-8")
     hermesRtDir?.let { dir -> setExecutable("$dir\\bin\\java.exe") }
 }
-
-tasks.register<JavaExec>("taoAwtProbe") {
-    group = "verification"
-    description = "S6 探针：验 AWT 的 GraphicsEnvironment / Toolkit / MouseInfo 在 Tao 运行时是否可用"
-    mainClass.set("dev.shinglem.hermes.shell.spike.AwtScreenProbe")
-    dependsOn("desktopMainClasses")
-    val desktopMain = kotlin.targets.getByName("desktop").compilations.getByName("main")
-    classpath = files(desktopMain.output.classesDirs, desktopMain.runtimeDependencyFiles)
-    jvmArgs("--enable-native-access=ALL-UNNAMED", "-Dfile.encoding=UTF-8")
-    hermesRtDir?.let { dir -> setExecutable("$dir\\bin\\java.exe") }
-}
-
 // FileKit 能力探针（S0 第 8 项欠账）：验它在 Tao 进程里的平台实现与线程行为。
 tasks.register<JavaExec>("fileKitProbe") {
     group = "verification"
@@ -889,3 +850,19 @@ tasks.register<JavaExec>("monitorProbe") {
     jvmArgs("--enable-native-access=ALL-UNNAMED", "-Dfile.encoding=UTF-8")
     hermesRtDir?.let { dir -> setExecutable("$dir\\bin\\java.exe") }
 }
+
+
+// 验收探针：直接调生产 Clipboard 实现（不依赖 UI 焦点，ADR-075）。
+tasks.register<JavaExec>("clipboardAcceptance") {
+    group = "verification"
+    description = "验收：生产 Clipboard 实现读写系统剪贴板（文本 + 图片→PNG）"
+    mainClass.set("dev.shinglem.hermes.shell.spike.ClipboardAcceptanceMainKt")
+    dependsOn("desktopMainClasses")
+    val desktopMain = kotlin.targets.getByName("desktop").compilations.getByName("main")
+    classpath = files(desktopMain.output.classesDirs, desktopMain.runtimeDependencyFiles)
+    workingDir = layout.projectDirectory.asFile
+    jvmArgs("--enable-native-access=ALL-UNNAMED", "-Dfile.encoding=UTF-8")
+    hermesRtDir?.let { dir -> setExecutable("$dir\\bin\\java.exe") }
+}
+
+

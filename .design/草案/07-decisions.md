@@ -2355,3 +2355,72 @@ FileKit 的 Windows 实现是挂起函数 + COM，不占用调用线程。
 **"换成 X 的 API"要先确认 X 的底层是什么。** Compose 的 desktop clipboard 看起来是
 "原生 API"，实际只是 AWT 的一层壳 —— 不动字节码就判断"换过去能去掉 AWT"是错的。
 判据永远是 `javap` / 反编译，不是包名。
+
+---
+
+## ADR-075 · 业务代码彻底脱离 AWT：剪贴板/错误弹窗/屏幕几何全部原生化
+
+**结论先说**：`jdeps` 对发布 jar 的字节码分析里，`java.desktop` 引用**降到 0**。
+这是本项目第一次做到"业务代码不含任何 AWT/Swing/ImageIO 依赖"。
+
+### 三项改造
+
+| 项 | 原来 | 现在 | 实测 |
+|---|---|---|---|
+| 剪贴板 | `java.awt.Toolkit.systemClipboard` | **Win32 FFM**（`OpenClipboard` 等） | 文本读写 ✅ / 图片→PNG ✅ |
+| 致命错误弹窗 | `javax.swing.JOptionPane` | **Win32 `MessageBoxW`** | 中文标题+正文+图标 ✅ |
+| 通知窗屏幕几何 | AWT `GraphicsEnvironment` + `Toolkit.getScreenInsets` | **`TaoMonitors.primary(null)`** | 与 AWT 数值完全一致 ✅ |
+
+### 关键判断：Compose 的 ClipboardManager 不能替代
+
+读 `ui-desktop` 字节码确认：`AwtPlatformClipboard` / `AwtClipboardManager` 底层就是
+`java.awt.datatransfer.Clipboard`，且公开 `getAwtClipboard` / `getAsAwtTransferable`。
+**换 Compose API 只是换个入口，AWT 一个字节都不会少**；而且它只有文本，没有
+`hasImage` / 图片读取（`Compose` 的 `ClipEntry` 在 desktop 上要求 `nativeClipEntry`
+是 `Transferable`，绕不开）。
+
+### 关键判断：PNG 编码器不用自己写
+
+**Skiko（Skia）本来就是 Compose Desktop 的传递依赖**，已在 classpath：
+`Image.encodeToData(EncodedImageFormat.PNG)` 就是完整的 PNG 编码器。
+用 `ImageIO` 反而会引回 `java.desktop`（它是 `java.desktop` 模块的一部分）。
+
+2560×1440 全屏位图实测：读取 11 ms + 重排/编码 216 ms，一次性开销可接受。
+
+### 探针实测数据（`clipboardAcceptance` / `taoSwingProbe` / `monitorProbe`）
+
+```
+# Win32 剪贴板在 Tao 的 main 线程
+[open] ok=true lastError=0
+[hasImage] true
+[saveImageToTemp] bytes=832 elapsed=196ms pngHeader=89,50,4e,47,d,a,1a,a isPng=true
+[setText->getText] same=true
+# 与 AWT 互操作
+[read-back-awt] same=true ; [awt-write->win32-read] true
+```
+
+### 实现要点（踩过的坑）
+
+1. **`CF_DIB` 不是文件格式**：它是 `BITMAPINFO` + 裸像素。没有文件头、行可能自底向上、
+   24 位行尾按 4 字节对齐、24 位没有 alpha。这四点全错的表现都是"图是花的"。
+2. **alpha 全 0 要补成不透明**：截图工具常把 alpha 写成 0，不补的话导出的 PNG 整张透明
+   （用户看到"粘贴后一片空白"）。
+3. **`System.Windows.Forms.Clipboard.SetImage` 放的不是 `CF_DIB`**：它只注册 .NET 私有
+   格式（`Bitmap` / `System.Drawing.Bitmap`）。拿它验证会得到**假的"不支持"**
+   —— 我第一轮就踩了这个坑。
+4. **`setText` 会 `EmptyClipboard()`**：验收必须先验图片再验文本，否则把待验的图清掉。
+5. **每个公开方法自成一对 Open/Close**：剪贴板是每线程打开的，不能跨线程持有句柄。
+6. **`MessageBoxW` 的 NUL 终止**：Kotlin 里 `"$title`u0000"` 是**字面量**（反引号内不转义），
+   必须写 `title + "\u0000"` —— 否则标题栏会真的显示 "配置错误`u0000"。
+
+### 清理
+
+删掉三个已完成使命的探针（`AwtScreenProbe` / `TaoSpikeMain` / `ClipboardProbeMain`）。
+保留 `taoSwingProbe`（线程模型）、`fileKitProbe`（平台实现选择）、`monitorProbe`（显示器几何）、
+`clipboardAcceptance`（生产剪贴板验收）—— 这四个都是"换依赖/换壳时值得重跑"的判据。
+
+### 教训
+
+**"能不能换"要用 `jdeps` 与反编译证明，不能用包名推断。**
+`java.desktop` 在 `runtimeModules` 里仍然**必须保留** —— Compose/Skiko 自身依赖它
+（字体、`BufferedImage`、窗口层），只是业务代码不再直接引用。这两件事经常被混为一谈。

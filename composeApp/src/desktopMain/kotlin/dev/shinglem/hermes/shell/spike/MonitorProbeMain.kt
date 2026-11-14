@@ -10,13 +10,11 @@ import java.io.File
 import kotlin.system.exitProcess
 
 /**
- * 探针：Nucleus 在 **Windows** 上能不能给出显示器几何。
+ * 探针：`TaoMonitors.all()` **不需要** `TaoWindow` 也能拿到显示器信息？
  *
- * 若可用，`NotificationOverlay` 就不用再依赖 AWT 的 `GraphicsEnvironment`
- * （那是 ADR-067 保留的最后一个窗口层 AWT 依赖）。
- *
- * `NativeTaoWindowsDecoBridge` 是 internal，所以走公开路径：
- * `NucleusWindow.unsafe.taoWindow` → `TaoMonitors.all(...)`。
+ * 若成立，`Main` 里那段"首帧 AWT 兜底"就是多余依赖 —— 那是最后一个还能去掉的 AWT 窗口层调用。
+ * 读字节码看到 Windows 分支根本不读 `taoWindow` 参数、`all$default` 的默认值是 null，
+ * 这里实测确认。
  */
 fun main() {
     val out = File("build/monitor-probe.txt")
@@ -30,7 +28,18 @@ fun main() {
         }
     }
 
-    record("=== monitor geometry probe ===")
+    record("=== TaoMonitors without TaoWindow probe ===")
+    // 一、完全不在 nucleusApplication 里（最早期）
+    record(
+        "[early] all(null)=" + runCatching {
+            TaoMonitors.all(null).joinToString("; ") { "work=${it.workAreaPx} scale=${it.scaleFactor}" }
+        }.getOrElse { "THROWS: ${it::class.java.name}: ${it.message}" },
+    )
+    record(
+        "[early] primary(null)=" + runCatching {
+            TaoMonitors.primary(null).let { "work=${it.workAreaPx} scale=${it.scaleFactor}" }
+        }.getOrElse { "THROWS: $it" },
+    )
 
     nucleusApplication(enableSingleInstance = false, initializeFileKit = false) {
         DecoratedWindow(
@@ -39,41 +48,28 @@ fun main() {
             title = "Monitor Probe",
         ) {
             LaunchedEffect(Unit) {
-                val taoWindow = nucleusWindow.unsafe.taoWindow
-                record("[tao] window=${taoWindow}")
-
                 record(
-                    "[tao] monitors=" + runCatching {
-                        TaoMonitors.all(taoWindow).joinToString("; ") {
-                            "id=${it.id} name=${it.name} bounds=${it.boundsPx} work=${it.workAreaPx} " +
-                                "scale=${it.scaleFactor} primary=${it.isPrimary}"
+                    "[inside] all(null)=" + runCatching {
+                        TaoMonitors.all(null).joinToString("; ") { "work=${it.workAreaPx}" }
+                    }.getOrElse { "THROWS: $it" },
+                )
+                record(
+                    "[inside] all(tao)=" + runCatching {
+                        TaoMonitors.all(nucleusWindow.unsafe.taoWindow).joinToString("; ") {
+                            "work=${it.workAreaPx}"
                         }
-                    }.getOrElse { "THROWS: ${it::class.java.name}: ${it.message}" },
-                )
-                record(
-                    "[tao] primary=" + runCatching {
-                        val p = TaoMonitors.primary(taoWindow)
-                        "work=${p.workAreaPx} scale=${p.scaleFactor}"
                     }.getOrElse { "THROWS: $it" },
                 )
                 record(
-                    "[tao] forWindow=" + runCatching {
-                        val m = TaoMonitors.forWindow(taoWindow)
-                        "work=${m.workAreaPx}"
-                    }.getOrElse { "THROWS: $it" },
-                )
-
-                // 对照：AWT 现在给出的值
-                record(
-                    "[awt] default bounds=" + runCatching {
-                        val d = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice
-                        "${d.defaultConfiguration.bounds} scale=${d.defaultConfiguration.defaultTransform.scaleX}"
+                    "[inside] synthetic-fallback=" + runCatching {
+                        // 没有窗口时的合成显示器（依赖 primaryMonitorWorkAreaPx，需要窗口）
+                        TaoMonitors.primary(null).workAreaPx
                     }.getOrElse { "THROWS: $it" },
                 )
                 record("=== done ===")
                 exitProcess(0)
             }
-            Text("monitor probe")
+            Text("probe")
         }
     }
 }
