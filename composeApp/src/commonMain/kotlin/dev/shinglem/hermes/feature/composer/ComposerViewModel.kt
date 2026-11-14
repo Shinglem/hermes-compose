@@ -8,7 +8,7 @@ import dev.shinglem.hermes.core.log.Log
 import dev.shinglem.hermes.platform.Clipboard
 import dev.shinglem.hermes.platform.isImagePath
 import dev.shinglem.hermes.platform.isSubmittableImagePath
-import dev.shinglem.hermes.platform.pickFiles
+import dev.shinglem.hermes.platform.chooseFiles
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -256,7 +256,7 @@ class ComposerViewModel(
     /** 打开系统文件选择器，选中后按扩展名分派到图片或普通文件。 */
     suspend fun pickAndAttach() {
         val picked = try {
-            pickFiles(title = "选择要附加的文件", imagesOnly = false)
+            chooseFiles(title = "选择要附加的文件", imagesOnly = false)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (throwable: Throwable) {

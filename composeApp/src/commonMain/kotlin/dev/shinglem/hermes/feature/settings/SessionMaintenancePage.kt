@@ -26,7 +26,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import dev.shinglem.hermes.feature.editors.pickJsonFile
+import dev.shinglem.hermes.platform.chooseJson
 import kotlinx.coroutines.launch
 
 /**
@@ -170,7 +170,7 @@ fun SessionMaintenancePage(
         OutlinedButton(
             onClick = {
                 scope.launch {
-                    pickJsonFile()?.let(onImportFile)
+                    chooseJson()?.let(onImportFile)
                 }
             },
             enabled = !state.importing,

@@ -17,7 +17,7 @@ import kotlin.time.Instant
  * `session` / `message_count` / `messages`。`session` 我们填 `null` —— 客户端手上只有投影后的
  * 条目，没有原始 session 行；保留这个键是为了让下游脚本的字段判断保持一致。
  *
- * 这里只做纯文本拼装，落盘交给 `pickSaveFile` + `writeTextFile`（平台层）。
+ * 这里只做纯文本拼装，落盘交给 `chooseSavePath` + `writeTextFile`（平台层）。
  */
 object SessionExport {
     fun jsonFileName(title: String?, sessionId: String): String =

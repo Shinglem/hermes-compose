@@ -51,8 +51,8 @@ import dev.shinglem.hermes.feature.settings.CLONE_NONE
 import dev.shinglem.hermes.feature.settings.DEFAULT_PROFILE
 import dev.shinglem.hermes.feature.settings.isProfileNameValid
 import dev.shinglem.hermes.feature.settings.slugifyProfileName
-import dev.shinglem.hermes.platform.pickFile
-import dev.shinglem.hermes.platform.pickSaveFile
+import dev.shinglem.hermes.platform.chooseFile
+import dev.shinglem.hermes.platform.chooseSavePath
 import dev.shinglem.hermes.ui.component.NavRow
 import kotlinx.coroutines.launch
 
@@ -120,7 +120,7 @@ private fun ProfilesPage(
             onCreate = onStartCreate,
             onImport = {
                 scope.launch {
-                    pickFile("选择档案归档（.tar.gz / .tgz）")?.let(onImport)
+                    chooseFile("选择档案归档（.tar.gz / .tgz）")?.let(onImport)
                 }
             },
         )
@@ -136,7 +136,7 @@ private fun ProfilesPage(
                 onRename = onRename,
                 onExport = { name ->
                     scope.launch {
-                        pickSaveFile("导出档案", "$name.tar.gz")?.let { path -> onExport(name, path) }
+                        chooseSavePath("导出档案", "$name.tar.gz")?.let { path -> onExport(name, path) }
                     }
                 },
                 onRequestDelete = { confirmDelete = it },

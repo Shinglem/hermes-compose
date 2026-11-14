@@ -32,7 +32,7 @@ import dev.shinglem.hermes.core.config.EditorAction
 import dev.shinglem.hermes.core.config.EditorActionKind
 import dev.shinglem.hermes.core.config.EditorProfile
 import dev.shinglem.hermes.core.config.EditorsOptions
-import dev.shinglem.hermes.feature.editors.pickExecutableFile
+import dev.shinglem.hermes.platform.chooseExecutable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -198,7 +198,7 @@ private fun EditorEditDialog(
                     OutlinedButton(
                         onClick = {
                             scope.launch {
-                                pickExecutableFile()?.let { picked -> profile = profile.copy(exePath = picked) }
+                                chooseExecutable()?.let { picked -> profile = profile.copy(exePath = picked) }
                             }
                         },
                     ) { Text("浏览…") }

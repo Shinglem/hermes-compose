@@ -14,7 +14,7 @@ import dev.shinglem.hermes.core.time.TimeFormat
 import dev.shinglem.hermes.core.transport.RpcJson
 import dev.shinglem.hermes.feature.chat.ChatRepository
 import dev.shinglem.hermes.feature.chat.projectChat
-import dev.shinglem.hermes.platform.pickSaveFile
+import dev.shinglem.hermes.platform.chooseSavePath
 import dev.shinglem.hermes.platform.writeTextFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -611,7 +611,7 @@ class SessionListViewModel(
                 } else {
                     SessionExport.jsonFileName(title, sessionId)
                 }
-                val target = pickSaveFile(title = "导出会话", defaultName = defaultName)
+                val target = chooseSavePath(title = "导出会话", defaultName = defaultName)
                 if (target == null) {
                     _state.update { it.copy(exporting = false) }
                     return@launch

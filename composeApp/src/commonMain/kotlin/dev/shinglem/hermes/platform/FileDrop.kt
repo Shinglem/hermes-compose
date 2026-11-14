@@ -20,15 +20,6 @@ expect fun rememberFileDropTarget(
     onHover: (hovering: Boolean) -> Unit,
 ): DragAndDropTarget
 
-/** 系统文件选择器（多选）。用户取消返回空列表。 */
-expect suspend fun pickFiles(title: String, imagesOnly: Boolean): List<String>
-
-/** 系统文件选择器（单选）。用户取消返回 `null`。 */
-expect suspend fun pickFile(title: String): String?
-
-/** 系统保存对话框。用户取消返回 `null`。 */
-expect suspend fun pickSaveFile(title: String, defaultName: String): String?
-
 /** 按扩展名判断是否图片 —— 与后端 `image.attach` 的判定口径保持一致。 */
 val IMAGE_EXTENSIONS: Set<String> = setOf(
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "heic",
