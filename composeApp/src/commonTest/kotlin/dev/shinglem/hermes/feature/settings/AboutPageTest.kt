@@ -1,5 +1,6 @@
 package dev.shinglem.hermes.feature.settings
 
+import dev.shinglem.hermes.component.updater.UpdaterState as UpdateState
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithText

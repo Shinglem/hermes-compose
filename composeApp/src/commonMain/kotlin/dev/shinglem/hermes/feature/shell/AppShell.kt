@@ -87,7 +87,9 @@ import dev.shinglem.hermes.feature.settings.SettingsDetailPane
 import dev.shinglem.hermes.feature.settings.SettingsNavPane
 import dev.shinglem.hermes.feature.settings.SettingsPage
 import dev.shinglem.hermes.feature.settings.SettingsViewModel
-import dev.shinglem.hermes.feature.settings.UpdaterViewModel
+import dev.shinglem.hermes.component.updater.DefaultUpdaterComponent
+import dev.shinglem.hermes.component.updater.RestUpdaterGateway
+import dev.shinglem.hermes.component.updater.UpdaterIntent
 import dev.shinglem.hermes.feature.subagent.SubagentPanel
 import dev.shinglem.hermes.feature.subagent.SubagentViewModel
 import dev.shinglem.hermes.platform.AppFocus
@@ -193,8 +195,11 @@ fun AppShell(
             chatComponent.runtimeId?.let { SubagentViewModel.RuntimeContext(chatComponent.profile, it) }
         }
     }
-    val updaterViewModel: UpdaterViewModel = viewModel {
-        UpdaterViewModel(container.restClient)
+    val updaterComponent = remember(context) {
+        DefaultUpdaterComponent(
+            componentContext = context,
+            gateway = RestUpdaterGateway(container.restClient),
+        )
     }
     // 维护页组：S2 起由 Component 持有（内部仍是原 MaintenanceViewModel 的状态机，
     // 只是 scope 由 Component 管 —— 见 DefaultMaintenanceComponent 的类注释）。
@@ -301,7 +306,7 @@ fun AppShell(
     val capabilityState by capabilityViewModel.state.collectAsStateWithLifecycle()
     val settingsState by settingsViewModel.state.collectAsStateWithLifecycle()
     val subagentState by subagentViewModel.state.collectAsStateWithLifecycle()
-    val updateState by updaterViewModel.state.collectAsStateWithLifecycle()
+    val updateState by updaterComponent.state.collectAsStateWithLifecycle()
     val terminalState by container.terminalViewModel.state.collectAsStateWithLifecycle()
     val terminalSettings by container.terminalViewModel.settings.collectAsStateWithLifecycle()
     val maintenanceScopeKey by maintenance.profileKey.collectAsStateWithLifecycle()
@@ -697,7 +702,7 @@ fun AppShell(
                     CommandItem("check-update", "检查后端更新", null, AppIcons.Update) {
                         shellViewModel.openSettings()
                         settingsViewModel.select(SettingsPage.About)
-                        updaterViewModel.check()
+                        updaterComponent.onIntent(UpdaterIntent.Check())
                     },
                 )
             }
@@ -798,7 +803,7 @@ fun AppShell(
                                 editors = settingsState.editors,
                                 onEditorsSave = settingsViewModel::setEditors,
                                 updateState = updateState,
-                                onCheckUpdate = { updaterViewModel.check() },
+                                onCheckUpdate = { updaterComponent.onIntent(UpdaterIntent.Check()) },
                                 backendVersion = shellState.health?.version.orEmpty(),
                                 dataDir = appDataDir,
                                 logDir = container.config.app.log.dir,

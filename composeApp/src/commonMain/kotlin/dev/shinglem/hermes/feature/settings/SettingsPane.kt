@@ -1,6 +1,7 @@
 package dev.shinglem.hermes.feature.settings
 
 import androidx.compose.foundation.clickable
+import dev.shinglem.hermes.component.updater.UpdaterState as UpdateState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
