@@ -74,27 +74,20 @@ class ChatViewModel(
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
+    /**
+     * 会话运行时身份的唯一持有者（S8：原 `runtimeIds` / `generations` / `revisions` /
+     * `lastEventAt` / `cwds` / `dirtyKeys` 六个平行 map）。
+     *
+     * 它们**永远同生同灭**（resume 时一起写、重连时一起清），分成六个 map 时漏写一处就是
+     * `4001 stale_generation` 家族（CHANGELOG 0.5.4 / 0.5.5 连续两版都在修）。
+     * 合成值对象后反向索引也只有 [SessionRuntimeStore.byRuntimeId] 一个维护点。
+     */
+    private val runtimes = SessionRuntimeStore()
+
     /** 已读过的 transcript（含向上翻页的结果）；切回不重复请求。 */
     private val cache = mutableMapOf<SessionKey, LoadedTranscript>()
 
     private data class LoadedTranscript(val rows: List<ChatRow>, val hasMore: Boolean)
-
-    /** (profile, storedId) → runtime id（`session.resume` 的返回值）。 */
-    private val runtimeIds = mutableMapOf<SessionKey, String>()
-
-    /**
-     * (profile, storedId) → `execution_generation`。
-     *
-     * canonical gateway 把它当"这一轮的执行身份"：`session.interrupt` / `session.steer` /
-     * `approval.respond` 都是**必填**（缺了就是 `4001 invalid_params`）。每次 resume 刷新。
-     */
-    private val generations = mutableMapOf<SessionKey, Int?>()
-
-    /** (profile, storedId) → `revision`：`session.mutate` 的 `expected_revision`。 */
-    private val revisions = mutableMapOf<SessionKey, Int?>()
-
-    /** (profile, storedId) → 最近一次收到该会话事件的时间（看门狗据此判断静默）。 */
-    private val lastEventAt = mutableMapOf<SessionKey, Long>()
 
     /**
      * (profile, storedId) → 该会话的模型。
@@ -114,14 +107,8 @@ class ChatViewModel(
         val reasoningEffort: String?,
     )
 
-    /** (profile, storedId) → 会话工作目录，供 composer 的 `@` 补全使用。 */
-    private val cwds = mutableMapOf<SessionKey, String?>()
-
     /** 切走时保存的会话状态（含流式段落），切回先恢复，避免"内容消失 / 看起来卡死"。 */
     private val savedStates = mutableMapOf<SessionKey, ChatState>()
-
-    /** 切走期间有新内容或已完成一轮：切回必须重读一次 transcript。 */
-    private val dirtyKeys = mutableSetOf<SessionKey>()
 
     /** 已经弹过系统通知的审批（补拉 / 重连会重复拿到同一条）。 */
     private val notifiedApprovals = mutableSetOf<String>()
@@ -172,10 +159,10 @@ class ChatViewModel(
                     ReconnectDecision.Reset -> wasConnected = false
                     ReconnectDecision.ReResume -> {
                         wasConnected = true
-                        runtimeIds.clear()
-                        generations.clear()
-                        revisions.clear()
-                        lastEventAt.clear()
+                        // 只清"与连接绑定"的字段：runtimeId / cwd / dirty 都是会话事实，与连接无关。
+                        // 迁移前这里是 runtimeIds.clear() + 三个 map.clear() —— 把 runtimeId 也清掉
+                        // 会让事件反查失效（ADR 里记过这条）。
+                        runtimes.clearConnectionScoped()
                         val key = _state.value.key
                         if (key == null) {
                             // 还没选会话：连接是新的，但仍要留下明确的 marker，
@@ -212,12 +199,12 @@ class ChatViewModel(
         backgroundJob?.cancel()
         if (_state.value.key != key) dismissedTasks.clear()
         // 已经有 runtime 的会话（切走再切回）不会再 resume，审批 / 后台任务 / 用量要靠这里恢复。
-        runtimeIds[key]?.let { runtimeId ->
+        runtimes[key]?.runtimeId?.let { runtimeId ->
             refreshPendingApprovals(key, runtimeId)
             startBackgroundPolling(key, runtimeId)
             refreshUsage(key, runtimeId)
         }
-        val stale = dirtyKeys.remove(key)
+        val stale = runtimes[key]?.dirty?.also { if (it) runtimes.markDirty(key, false) } ?: false
         // 决策表见 SessionSwitchPlan：快照 → 缓存 → 真读，force 时跳过前两步。
         when (switchPlanFor(key, force = force, stale = stale)) {
             SessionSwitchPlan.KEEP -> return
@@ -550,7 +537,7 @@ class ChatViewModel(
             _state.update { it.copy(steering = true, sendError = null) }
             try {
                 val runtimeId = ensureRuntime(key)
-                val status = repository.steer(key.profile, runtimeId, text, generations[key])
+                val status = repository.steer(key.profile, runtimeId, text, runtimes[key]?.fence)
                 Log.info("session.steer accepted status=$status")
                 _state.update { state -> state.appendLocalUser(nextLocalId("user"), text) }
                 emit(ChatEffect.SessionPersisted)
@@ -652,7 +639,7 @@ class ChatViewModel(
             val busy = (throwable as? AppError.Server)?.code == BUSY_CODE
             if (!busy) throw throwable
             Log.info("rewind hit busy session; interrupting then retrying")
-            repository.interrupt(key.profile, runtimeId, generations[key])
+            repository.interrupt(key.profile, runtimeId, runtimes[key]?.fence)
             waitUntilIdle()
             val rewound = repository.rewindTo(key.profile, runtimeId, rowId, fence(key))
             adoptFence(key, rewound.revision, rewound.generation)
@@ -734,7 +721,7 @@ class ChatViewModel(
     /** 刷新上下文占用（每轮结束调一次，不要放进流式路径）。 */
     fun refreshUsage() {
         val key = _state.value.key ?: return
-        val runtimeId = runtimeIds[key] ?: return
+        val runtimeId = runtimes[key]?.runtimeId ?: return
         refreshUsage(key, runtimeId)
     }
 
@@ -779,7 +766,7 @@ class ChatViewModel(
     /** 点开用量条时才拉明细（`session.context_breakdown`）。 */
     fun loadUsageDetail() {
         val key = _state.value.key ?: return
-        val runtimeId = runtimeIds[key] ?: return
+        val runtimeId = runtimes[key]?.runtimeId ?: return
         scope.launch {
             try {
                 val detail = repository.loadContextBreakdown(key.profile, runtimeId)
@@ -813,11 +800,11 @@ class ChatViewModel(
     /** 停止生成；收尾由 `message.complete(status=interrupted)` 带回。 */
     fun stop() {
         val key = _state.value.key ?: return
-        val runtimeId = runtimeIds[key] ?: return
+        val runtimeId = runtimes[key]?.runtimeId ?: return
         scope.launch {
             _state.update { it.copy(stopping = true) }
             try {
-                repository.interrupt(key.profile, runtimeId, generations[key])
+                repository.interrupt(key.profile, runtimeId, runtimes[key]?.fence)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
@@ -888,8 +875,8 @@ class ChatViewModel(
         // 现查 `_state.value.key` / `generations[当前会话]` 拿到的是另一个会话的值，
         // 后端回 4001 stale_generation（实测：切会话后点通知必报）。
         val key = pending.sessionKey ?: _state.value.key ?: return
-        val runtimeId = pending.runtimeSessionId ?: runtimeIds[key] ?: return
-        val generation = pending.executionGeneration ?: generations[key]
+        val runtimeId = pending.runtimeSessionId ?: runtimes[key]?.runtimeId ?: return
+        val generation = pending.executionGeneration ?: runtimes[key]?.fence
         forgetPendingRequest(requestId)
         scope.launch {
             try {
@@ -969,7 +956,7 @@ class ChatViewModel(
     /** 终止一个后台任务；结果通过下一轮轮询体现（后端返回的快照只用于判定状态）。 */
     fun killBackgroundTask(processId: String) {
         val key = _state.value.key ?: return
-        val runtimeId = runtimeIds[key] ?: return
+        val runtimeId = runtimes[key]?.runtimeId ?: return
         if (_state.value.killingTaskId != null) return
         _state.update { it.copy(killingTaskId = processId) }
         scope.launch {
@@ -1111,8 +1098,8 @@ class ChatViewModel(
             runtimeSessionId = ensureRuntime(key),
             provider = provider,
             model = model,
-            revision = revisions[key],
-            executionGeneration = generations[key],
+            revision = runtimes[key]?.revision,
+            executionGeneration = runtimes[key]?.fence,
             confirmToken = confirmToken,
         )
     }
@@ -1132,10 +1119,17 @@ class ChatViewModel(
     /** 只刷新 fence：不重跑 [ensureRuntime] 的整套副作用（轮询 / 审批补拉 / 用量刷新）。 */
     private suspend fun refreshFence(key: SessionKey) {
         val resumed = repository.resumeSession(key.profile, key.sessionId)
-        runtimeIds[key] = resumed.runtimeId
-        resumed.cwd?.let { cwds[key] = it }
-        generations[key] = resumed.executionGeneration
-        revisions[key] = resumed.revision
+        runtimes.put(
+            SessionRuntime(
+                key = key,
+                runtimeId = resumed.runtimeId,
+                fence = resumed.executionGeneration,
+                revision = resumed.revision,
+                cwd = resumed.cwd ?: runtimes[key]?.cwd,
+                dirty = runtimes[key]?.dirty ?: false,
+                lastEventAt = runtimes[key]?.lastEventAt ?: 0L,
+            ),
+        )
     }
 
     /** 守卫确认框点了"继续"：把后端下发的 token 原样带回。 */
@@ -1173,8 +1167,8 @@ class ChatViewModel(
                         key.profile,
                         ensureRuntime(key),
                         effort,
-                        revisions[key],
-                        generations[key],
+                        runtimes[key]?.revision,
+                        runtimes[key]?.fence,
                     )
                 }
                 adoptFence(key, outcome.revision, outcome.executionGeneration)
@@ -1291,7 +1285,7 @@ class ChatViewModel(
             if (_state.value.key != key) return@launch
             cache[key] = loaded
             publish(key, loaded)
-            runtimeIds[key]?.let { refreshUsage(key, it) }
+            runtimes[key]?.runtimeId?.let { refreshUsage(key, it) }
         }
     }
 
@@ -1303,7 +1297,7 @@ class ChatViewModel(
      * best-effort：失败只记日志，发消息时还会再试一次。
      */
     private fun resumeInBackground(key: SessionKey) {
-        if (runtimeIds[key] != null) {
+        if (runtimes[key] != null) {
             // runtime 可复用，但模型可能还没读到（#16）：补一次 profile 默认。
             // 这里不 force resume —— 那会重新注册 live session，代价远大于收益。
             if (sessionModels[key] == null) {
@@ -1323,15 +1317,22 @@ class ChatViewModel(
     }
 
     private suspend fun ensureRuntime(key: SessionKey, force: Boolean = false): String {
-        if (!force) runtimeIds[key]?.let { return it }
+        if (!force) runtimes[key]?.runtimeId?.let { return it }
         val resumed = repository.resumeSession(key.profile, key.sessionId)
-        runtimeIds[key] = resumed.runtimeId
-        cwds[key] = resumed.cwd
         // canonical gateway 的「执行代」与 mutation revision：interrupt / steer / approval.respond
         // 都要求带 `execution_generation`，session.mutate 要求 `expected_revision`。
         // 两者都随每一轮推进，所以每次 resume 都刷新一遍。
-        generations[key] = resumed.executionGeneration
-        revisions[key] = resumed.revision
+        runtimes.put(
+            SessionRuntime(
+                key = key,
+                runtimeId = resumed.runtimeId,
+                fence = resumed.executionGeneration,
+                revision = resumed.revision,
+                cwd = resumed.cwd,
+                dirty = runtimes[key]?.dirty ?: false,
+                lastEventAt = runtimes[key]?.lastEventAt ?: 0L,
+            ),
+        )
         // resume 的 info 就带着当前模型/推理强度：先记进按 key 的 map（状态被整块替换也不丢），
         // 再刷新界面。期间切走了就别写 —— 那是另一个会话的 pill。
         rememberSessionModel(key, resumed.model, resumed.provider, resumed.reasoningEffort)
@@ -1360,8 +1361,9 @@ class ChatViewModel(
      * `execution_generation`）都会变；不写回就等于下一次编辑带着过期的 fence 去撞 4001。
      */
     private fun adoptFence(key: SessionKey, revision: Int?, generation: Int?) {
-        revision?.let { revisions[key] = it }
-        generation?.let { generations[key] = it }
+        runtimes.update(key) {
+            it.copy(revision = revision ?: it.revision, fence = generation ?: it.fence)
+        }
     }
 
     /**
@@ -1384,7 +1386,7 @@ class ChatViewModel(
 
     /** 当前会话的 fence 快照（`session.mutate` / 控制类调用统一从这里取）。 */
     private fun fence(key: SessionKey): SessionFence =
-        SessionFence(revision = revisions[key], generation = generations[key])
+        SessionFence(revision = runtimes[key]?.revision, generation = runtimes[key]?.fence)
 
     /**
      * 把 `session.resume` 快照里还没应答的**审批 / 澄清**补成卡片。
@@ -1422,7 +1424,7 @@ class ChatViewModel(
      * 0.23.0 的 gateway 路线只发事件、不发 server→client 请求帧，只做后者卡片永远不弹。
      */
     private fun adoptOnePrompt(key: SessionKey, prompt: ResumedPrompt, runtimeId: String?): Int {
-        val sessionId = runtimeId ?: runtimeIds[key]
+        val sessionId = runtimeId ?: runtimes[key]?.runtimeId
         return when (prompt.kind) {
             "approval" -> {
                 if (_state.value.pendingApprovals.any { it.requestId == prompt.promptId }) return 0
@@ -1435,7 +1437,7 @@ class ChatViewModel(
                     // 没有请求帧可回，只能走 `approval.respond`。
                     fromRequest = false,
                     sessionKey = key,
-                    executionGeneration = prompt.executionGeneration ?: generations[key],
+                    executionGeneration = prompt.executionGeneration ?: runtimes[key]?.fence,
                 )
                 _state.update { it.copy(pendingApprovals = it.pendingApprovals + approval) }
                 // 切回该会话后快照会把它补成真正的卡片，跨会话登记表里的那条就过期了。
@@ -1459,7 +1461,7 @@ class ChatViewModel(
                     runtimeSessionId = sessionId,
                     sessionKey = key,
                     promptId = prompt.promptId,
-                    executionGeneration = prompt.executionGeneration ?: generations[key],
+                    executionGeneration = prompt.executionGeneration ?: runtimes[key]?.fence,
                 )
                 _state.update { it.copy(pendingClarify = it.pendingClarify + clarify) }
                 emit(ChatEffect.ClarifyRequested(clarify, key))
@@ -1498,7 +1500,7 @@ class ChatViewModel(
                     runtimeSessionId = runtimeId,
                     fromRequest = false,
                     sessionKey = otherKey,
-                    executionGeneration = prompt.executionGeneration ?: generations[otherKey],
+                    executionGeneration = prompt.executionGeneration ?: runtimes[otherKey]?.fence,
                 )
                 crossSessionApprovals[approval.requestId] = approval
                 if (notifiedApprovals.add(approval.requestId)) {
@@ -1522,7 +1524,7 @@ class ChatViewModel(
                     runtimeSessionId = runtimeId,
                     sessionKey = otherKey,
                     promptId = prompt.promptId,
-                    executionGeneration = prompt.executionGeneration ?: generations[otherKey],
+                    executionGeneration = prompt.executionGeneration ?: runtimes[otherKey]?.fence,
                 )
                 crossSessionClarify[clarify.requestId] = clarify
                 Log.info("pending clarify for other session ${otherKey.sessionId}: ${prompt.promptId}")
@@ -1535,8 +1537,8 @@ class ChatViewModel(
 
     override fun runtimeInfo(): RuntimeHandle? {
         val key = _state.value.key ?: return null
-        val runtimeId = runtimeIds[key] ?: return null
-        return RuntimeHandle(runtimeId, cwds[key])
+        val runtimeId = runtimes[key]?.runtimeId ?: return null
+        return RuntimeHandle(runtimeId, runtimes[key]?.cwd)
     }
 
     override suspend fun ensureRuntime(): RuntimeHandle? {
@@ -1549,7 +1551,7 @@ class ChatViewModel(
             Log.info("composer resume failed: ${throwable.message}")
             return null
         }
-        return RuntimeHandle(runtimeId, cwds[key])
+        return RuntimeHandle(runtimeId, runtimes[key]?.cwd)
     }
 
     private suspend fun handleGatewayEvent(event: GatewayEvent) {
@@ -1557,14 +1559,14 @@ class ChatViewModel(
         // 不更新的话，"停止 / 纠偏 / 审批"会拿着上一代的凭据去撞 `4001 stale_generation`。
         event.executionGeneration?.let { gen ->
             event.sessionId
-                ?.let { sid -> runtimeIds.entries.firstOrNull { it.value == sid }?.key }
-                ?.let { owner -> generations[owner] = gen }
+                ?.let { sid -> runtimes.byRuntimeId(sid) }
+                ?.let { owner -> runtimes.update(owner) { it.copy(fence = gen) } }
         }
         // 看门狗按"最近一次该会话的事件"判断是否静默。
         event.sessionId
-            ?.let { sid -> runtimeIds.entries.firstOrNull { it.value == sid }?.key }
+            ?.let { sid -> runtimes.byRuntimeId(sid) }
             ?.let { owner ->
-                lastEventAt[owner] = Clock.System.now().toEpochMilliseconds()
+                runtimes.touch(owner, Clock.System.now().toEpochMilliseconds())
                 // 事件恢复了就撤掉看门狗留下的"后端仍在执行"提示（#18），
                 // 否则它会把已经重新流动的一轮继续描述成"静默中"。
                 if (owner == _state.value.key) {
@@ -1580,20 +1582,20 @@ class ChatViewModel(
         val key = _state.value.key ?: return
         // 别的会话 / 别的 profile：只标记"有新内容"，切回时补拉；绝不写当前 UI。
         val otherKey = event.sessionId
-            ?.let { sid -> runtimeIds.entries.firstOrNull { it.value == sid }?.key }
+            ?.let { sid -> runtimes.byRuntimeId(sid) }
             ?.takeIf { it != key }
         if (otherKey != null) {
             // 「后端在等人」不是"这个会话有新内容"：用户此刻可能在别的会话里，
             // 也必须弹提醒，否则要切回来才知道（实测：切走后就再也不弹）。
             notifyCrossSessionPending(otherKey, event)
             if (isContentEvent(event.type)) {
-                dirtyKeys += otherKey
+                runtimes.markDirty(otherKey)
                 trackShadow(otherKey, event)
                 Log.debug("chat event tracked ${event.type} for ${otherKey.sessionId}")
             }
             return
         }
-        val runtimeId = runtimeIds[key] ?: return
+        val runtimeId = runtimes[key]?.runtimeId ?: return
         // 认不出归属的事件（sessionId 为空，或不是本端已知的 runtime）按原规则过滤。
         if (event.sessionId != null && event.sessionId != runtimeId) {
             // 重连时会清空 runtimeIds，别的会话的 runtime 映射随之丢失 —— 这时它的审批事件
@@ -1827,7 +1829,7 @@ class ChatViewModel(
         // 告诉后端卡片已上屏：它的超时时钟从这里才开始算（先前的时钟只在等客户端上屏）。
         acknowledgeApproval(
             requestId = request.requestId,
-            runtimeId = request.runtimeSessionId ?: _state.value.key?.let { runtimeIds[it] },
+            runtimeId = request.runtimeSessionId ?: _state.value.key?.let { runtimes[it]?.runtimeId },
         )
         val choice = try {
             // 后端自己的审批超时是 300s；这里必须比它长，否则会在后端还在等的时候先替用户拒绝。
@@ -1900,7 +1902,7 @@ class ChatViewModel(
             ?: return
         val promptId = pending.promptId ?: return
         val key = pending.sessionKey ?: _state.value.key ?: return
-        val runtimeId = pending.runtimeSessionId ?: runtimeIds[key] ?: return
+        val runtimeId = pending.runtimeSessionId ?: runtimes[key]?.runtimeId ?: return
         forgetPendingRequest(requestId)
         scope.launch {
             try {
@@ -1909,7 +1911,7 @@ class ChatViewModel(
                     runtimeSessionId = runtimeId,
                     promptId = promptId,
                     answer = clarifyAnswer(answers),
-                    executionGeneration = pending.executionGeneration ?: generations[key],
+                    executionGeneration = pending.executionGeneration ?: runtimes[key]?.fence,
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -1957,7 +1959,7 @@ class ChatViewModel(
         scope.launch {
             delay(TURN_SILENCE_TIMEOUT_MS)
             if (_state.value.key != key || _state.value.streaming == null) return@launch
-            val silentFor = Clock.System.now().toEpochMilliseconds() - (lastEventAt[key] ?: 0L)
+            val silentFor = Clock.System.now().toEpochMilliseconds() - (runtimes[key]?.lastEventAt ?: 0L)
             if (silentFor < TURN_SILENCE_TIMEOUT_MS) return@launch
             Log.info("turn watchdog: ${silentFor}ms 静默，开始对账")
             val resumed = runCatching { repository.resumeSession(key.profile, key.sessionId) }.getOrNull()
@@ -2004,8 +2006,8 @@ class ChatViewModel(
     private fun keyFor(runtimeSessionId: String?): SessionKey? {
         val current = _state.value.key
         if (runtimeSessionId == null) return current
-        if (current != null && runtimeIds[current] == runtimeSessionId) return current
-        return runtimeIds.entries.firstOrNull { it.value == runtimeSessionId }?.key ?: current
+        if (current != null && runtimes[current]?.runtimeId == runtimeSessionId) return current
+        return runtimes.byRuntimeId(runtimeSessionId) ?: current
     }
 
     private fun acknowledgeApproval(requestId: String, runtimeId: String?) {

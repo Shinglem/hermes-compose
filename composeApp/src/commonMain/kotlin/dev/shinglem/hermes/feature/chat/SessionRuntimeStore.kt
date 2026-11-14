@@ -1,4 +1,4 @@
-package dev.shinglem.hermes.component.chat
+package dev.shinglem.hermes.feature.chat
 
 import androidx.compose.runtime.Immutable
 import dev.shinglem.hermes.feature.chat.SessionKey
@@ -21,7 +21,14 @@ import kotlinx.collections.immutable.persistentMapOf
 @Immutable
 data class SessionRuntime(
     val key: SessionKey,
-    val runtimeId: String,
+    /**
+     * 当前连接上的 runtime session id；**null = 还没有活 runtime**（刚建、或刚重连）。
+     *
+     * 为什么允许 null：重连后旧 runtime id 在新连接上无效，必须清掉才能让
+     * `ensureRuntime` 真的重新 `session.resume`（保住它会让调用短路、订阅永远不重建）。
+     * 但会话本身（cwd / dirty）与连接无关，所以要保留条目。
+     */
+    val runtimeId: String? = null,
     /** `session.resume` 的 `execution_generation`。 */
     val fence: Int? = null,
     /** `session.mutate` 的 `expected_revision`。 */
@@ -78,7 +85,7 @@ internal class SessionRuntimeStore {
             if (byRuntime[stale] == runtime.key) byRuntime = byRuntime.removing(stale)
         }
         runtimes = runtimes.putting(runtime.key, runtime)
-        byRuntime = byRuntime.putting(runtime.runtimeId, runtime.key)
+        runtime.runtimeId?.let { byRuntime = byRuntime.putting(it, runtime.key) }
     }
 
     /** 原地更新（不存在则忽略）。**不**碰反向索引 —— runtimeId 不该在这里变。 */
@@ -89,7 +96,7 @@ internal class SessionRuntimeStore {
 
     fun remove(key: SessionKey) {
         val current = runtimes[key] ?: return
-        byRuntime = byRuntime.removing(current.runtimeId)
+        current.runtimeId?.let { if (byRuntime[it] == key) byRuntime = byRuntime.removing(it) }
         runtimes = runtimes.removing(key)
     }
 
@@ -106,17 +113,23 @@ internal class SessionRuntimeStore {
     }
 
     /**
-     * 只清"与连接绑定"的字段（fence / revision / lastEventAt），保留 key、runtimeId 与 cwd。
+     * 只清"与连接绑定"的字段（runtimeId / fence / revision / lastEventAt），保留 key、cwd 与 dirty。
      *
-     * 这是迁移前 `generations.clear() + revisions.clear() + lastEventAt.clear()` 三行的语义：
-     * 重连后旧的 fence 在新连接上无效，但会话本身还开着、cwd 也没变。
+     * **runtimeId 必须一起清**：它在旧连接上无效，留着会让 `ensureRuntime` 直接短路返回旧 id，
+     * 于是重连后既不重新 `session.resume`、也不重建订阅（实测表现：重连后审批/clarify 永远收不到）。
+     * 迁移前那四行里 `runtimeIds.clear()` 是对的；错的是把 `dirty` 也一起清掉。
+     * 条目本身要留着 —— cwd 与 dirty 是与连接无关的会话事实。
      */
     fun clearConnectionScoped() {
         var next = persistentMapOf<SessionKey, SessionRuntime>()
         for ((key, runtime) in runtimes) {
-            next = next.putting(key, runtime.copy(fence = null, revision = null, lastEventAt = 0L))
+            next = next.putting(
+                key,
+                runtime.copy(runtimeId = null, fence = null, revision = null, lastEventAt = 0L),
+            )
         }
         runtimes = next
+        byRuntime = persistentMapOf()
     }
 
     fun markDirty(key: SessionKey, dirty: Boolean = true) {

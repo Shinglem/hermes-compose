@@ -1,4 +1,4 @@
-package dev.shinglem.hermes.component.chat
+package dev.shinglem.hermes.feature.chat
 
 import dev.shinglem.hermes.feature.chat.SessionKey
 import kotlin.test.Test
@@ -13,8 +13,9 @@ import kotlin.test.assertTrue
  * 重点断三条 —— 它们都是迁移前**手写 map 时踩过**的问题：
  * 1. **反向索引必须随 runtimeId 一起更新**：换 runtimeId（重连后必然发生）时旧 id
  *    必须摘掉，否则旧 id 会一直指向这个会话，事件被错误归属；
- * 2. **重连只清"连接作用域"的字段**（fence / revision / lastEventAt），
- *    `key` / `runtimeId` / `cwd` / `dirty` 必须留着；
+ * 2. **重连只清"连接作用域"的字段**（runtimeId / fence / revision / lastEventAt），
+ *    `key` / `cwd` / `dirty` 必须留着 —— runtimeId 不清的话，`ensureRuntime` 会短路返回
+ *    旧 id，重连后既不重新 resume、也不重建订阅（审批 / clarify 永远收不到）；
  * 3. **`dirty` 不能被重连清掉**：那是"切走期间有新内容"的事实，清了就永远不补拉。
  */
 class SessionRuntimeStoreTest {
@@ -116,28 +117,29 @@ class SessionRuntimeStoreTest {
     }
 
     /**
-     * 重连：只清 fence / revision / lastEventAt，保留 key / runtimeId / cwd / dirty。
+     * 重连：清 runtimeId / fence / revision / lastEventAt，保留 key / cwd / dirty。
      *
-     * 迁移前这四行是 `runtimeIds.clear() + generations.clear() + revisions.clear() +
-     * lastEventAt.clear()` —— 其中 `runtimeIds.clear()` 其实是错的（会话还开着，
-     * 清了之后 `open()` 里的 `runtimeIds[key]?.let { refreshPendingApprovals(...) }` 就不生效）。
-     * 这里把正确语义钉住。
+     * **runtimeId 必须清**：它在旧连接上无效；留着会让 `ensureRuntime(key)`（非 force）
+     * 直接短路返回旧 id，于是重连后既不重新 `session.resume`、也不重建订阅 ——
+     * 表现就是"重连后审批 / clarify 再也收不到，只能手动刷新"。
+     * 但条目本身要留：cwd 与 dirty 是与连接无关的会话事实。
      */
     @Test
-    fun `重连只清连接作用域字段`() {
+    fun `重连清掉 runtimeId 但保留会话事实`() {
         val store = SessionRuntimeStore()
         store.put(runtime("s1", runtimeId = "rt1", fence = 7, cwd = "/tmp/x", dirty = true))
 
         store.clearConnectionScoped()
 
         val after = store[key("s1")]
-        assertNotNull(after, "重连不该丢掉会话本身")
-        assertEquals("rt1", after.runtimeId, "runtimeId 要留着：后面 resume 会刷新它")
+        assertNotNull(after, "重连不该丢掉会话本身（cwd / dirty 是连接无关的事实）")
+        assertNull(after.runtimeId, "runtimeId 必须清：否则 ensureRuntime 短路，重连后不再 resume")
         assertEquals("/tmp/x", after.cwd, "cwd 与连接无关")
         assertTrue(after.dirty, "dirty 是内容事实，不能被重连清掉，否则永远不补拉")
         assertNull(after.fence, "fence 绑在旧连接上，必须清")
         assertNull(after.revision)
         assertEquals(0L, after.lastEventAt)
+        assertNull(store.byRuntimeId("rt1"), "旧 runtimeId 的反向索引也要摘掉")
     }
 
     @Test
