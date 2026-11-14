@@ -124,119 +124,82 @@ fun SettingsDetailPane(
 ) {
     // 过渡期解构：函数体里 200+ 处直接引用这些局部名。
     // 全部改成 scope.xxx 是纯机械改名，留到 S8；这里先让签名达标（38 → 3 参数）。
-    val state = scope.state
-    val onEdit = scope.onEdit
-    val onSave = scope.onSave
-    val onRestart = scope.onRestart
-    val onDismissSaved = scope.onDismissSaved
-    val terminalSettings = scope.terminalSettings
-    val onTerminalSettingsChange = scope.onTerminalSettingsChange
-    val providerKeys = scope.providerKeys
-    val customEndpoints = scope.customEndpoints
-    val profiles = scope.profiles
-    val modelSettings = scope.modelSettings
-    val moa = scope.moa
-    val security = scope.security
-    val officialDesktop = scope.officialDesktop
-    val autostart = scope.autostart
-    val orphanTasks = scope.orphanTasks
-    val onDeleteOrphanTask = scope.onDeleteOrphanTask
-    val notificationsEnabled = scope.notificationsEnabled
-    val onNotificationsToggle = scope.onNotificationsToggle
-    val nativeNotifications = scope.nativeNotifications
-    val onNativeNotificationsToggle = scope.onNativeNotificationsToggle
-    val browserHeaded = scope.browserHeaded
-    val onBrowserHeadedToggle = scope.onBrowserHeadedToggle
-    val browserArgs = scope.browserArgs
-    val onBrowserArgsChange = scope.onBrowserArgsChange
-    val editors = scope.editors
-    val onEditorsSave = scope.onEditorsSave
-    val updateState = scope.updateState
-    val onCheckUpdate = scope.onCheckUpdate
-    val backendVersion = scope.backendVersion
-    val dataDir = scope.dataDir
-    val logDir = scope.logDir
-    val maintenance = scope.maintenance
-    val backendAdmin = scope.backendAdmin
-    val profileChoices = scope.profileChoices
-    val onSelectScopeProfile = scope.onSelectScopeProfile
-    val modifier = scope.modifier
-    val maintenanceMemory by maintenance.memory.collectAsState()
-    val maintenanceOps by maintenance.ops.collectAsState()
-    val maintenanceCredentials by maintenance.credentials.collectAsState()
-    val maintenanceUsage by maintenance.usage.collectAsState()
-    val maintenanceSessions by maintenance.sessions.collectAsState()
-    val maintenanceProfile by maintenance.profileKey.collectAsState()
-    val maintenanceIntegrations by maintenance.integrations.collectAsState()
+    val maintenanceMemory by scope.maintenance.memory.collectAsState()
+    val maintenanceOps by scope.maintenance.ops.collectAsState()
+    val maintenanceCredentials by scope.maintenance.credentials.collectAsState()
+    val maintenanceUsage by scope.maintenance.usage.collectAsState()
+    val maintenanceSessions by scope.maintenance.sessions.collectAsState()
+    val maintenanceProfile by scope.maintenance.profileKey.collectAsState()
+    val maintenanceIntegrations by scope.maintenance.integrations.collectAsState()
 
-    val scopeProfile = if (profileChoices.isEmpty()) {
+    val scopeProfile = if (scope.profileChoices.isEmpty()) {
         null
     } else {
         ProfileScope(
-            choices = profileChoices,
+            choices = scope.profileChoices,
             activeKey = maintenanceProfile ?: DEFAULT_PROFILE_KEY,
-            onSelect = onSelectScopeProfile,
+            onSelect = scope.onSelectScopeProfile,
         )
     }
 
     // 设置页各域的一次性提示（Toast）统一走这里的 Snackbar：
     // 6 个 Component 各自 publish，但它们的 UI 页面从来没接过 effects —— 结果是
-    // "保存成功"只有 state 里的 notice，切走再回来就没了。这里收一次，全局生效。
+    // "保存成功"只有 scope.state 里的 notice，切走再回来就没了。这里收一次，全局生效。
     val snackbarHostState = remember { SnackbarHostState() }
     val toastScope = rememberCoroutineScope()
-    LaunchedEffect(security, profiles, providerKeys, moa, modelSettings, customEndpoints) {
+    LaunchedEffect(scope.security, scope.profiles, scope.providerKeys, scope.moa, scope.modelSettings, scope.customEndpoints) {
         launch {
-            security?.effects?.collect { effect ->
+            scope.security?.effects?.collect { effect ->
                 if (effect is SecurityEffect.Toast) toastScope.launch { snackbarHostState.showSnackbar(effect.text) }
             }
         }
         launch {
-            profiles?.effects?.collect { effect ->
+            scope.profiles?.effects?.collect { effect ->
                 if (effect is ProfilesEffect.Toast) toastScope.launch { snackbarHostState.showSnackbar(effect.text) }
             }
         }
         launch {
-            providerKeys?.effects?.collect { effect ->
+            scope.providerKeys?.effects?.collect { effect ->
                 if (effect is ProviderKeysEffect.Toast) toastScope.launch { snackbarHostState.showSnackbar(effect.text) }
             }
         }
         launch {
-            moa?.effects?.collect { effect ->
+            scope.moa?.effects?.collect { effect ->
                 if (effect is MoaEffect.Toast) toastScope.launch { snackbarHostState.showSnackbar(effect.text) }
             }
         }
         launch {
-            modelSettings?.effects?.collect { effect ->
+            scope.modelSettings?.effects?.collect { effect ->
                 if (effect is ModelSettingsEffect.Toast) toastScope.launch { snackbarHostState.showSnackbar(effect.text) }
             }
         }
         launch {
-            customEndpoints?.effects?.collect { effect ->
+            scope.customEndpoints?.effects?.collect { effect ->
                 if (effect is CustomEndpointEffect.Toast) toastScope.launch { snackbarHostState.showSnackbar(effect.text) }
             }
         }
     }
 
-    Box(modifier) {
-    when (state.selected) {
+    Box(scope.modifier) {
+    when (scope.state.selected) {
         SettingsPage.Memory -> {
             MemoryPage(
                 state = maintenanceMemory,
                 profileKey = maintenanceProfile,
                 profileScope = scopeProfile,
-                onRefresh = maintenance::refreshMemory,
-                onAskReset = maintenance::askResetMemory,
-                onConfirmReset = maintenance::confirmResetMemory,
-                onDismissReset = maintenance::dismissResetMemory,
-                onConfigEdit = maintenance::editMemoryConfig,
-                onConfigSave = maintenance::saveMemoryConfig,
-                onConfigDiscard = maintenance::discardMemoryConfig,
-                onOpenFile = maintenance::openMemoryFile,
-                onFileEdit = maintenance::editMemoryFileText,
-                onFileSave = maintenance::saveMemoryFile,
-                onFileClose = maintenance::closeMemoryFile,
-                onDismissStatus = maintenance::dismissMemoryNotice,
-                modifier = modifier,
+                onRefresh = scope.maintenance::refreshMemory,
+                onAskReset = scope.maintenance::askResetMemory,
+                onConfirmReset = scope.maintenance::confirmResetMemory,
+                onDismissReset = scope.maintenance::dismissResetMemory,
+                onConfigEdit = scope.maintenance::editMemoryConfig,
+                onConfigSave = scope.maintenance::saveMemoryConfig,
+                onConfigDiscard = scope.maintenance::discardMemoryConfig,
+                onOpenFile = scope.maintenance::openMemoryFile,
+                onFileEdit = scope.maintenance::editMemoryFileText,
+                onFileSave = scope.maintenance::saveMemoryFile,
+                onFileClose = scope.maintenance::closeMemoryFile,
+                onDismissStatus = scope.maintenance::dismissMemoryNotice,
+                modifier = scope.modifier,
             )
             return
         }
@@ -246,19 +209,19 @@ fun SettingsDetailPane(
                 state = maintenanceOps,
                 profileKey = maintenanceProfile,
                 profileScope = scopeProfile,
-                onRefresh = maintenance::refreshOps,
-                onRun = maintenance::runAction,
-                onAskPrune = maintenance::askPruneCheckpoints,
-                onConfirmPrune = maintenance::confirmPruneCheckpoints,
-                onDismissPrune = maintenance::dismissPruneCheckpoints,
-                onToggleCuratorPaused = maintenance::toggleCuratorPaused,
-                onDownloadBackup = maintenance::downloadBackup,
-                onImportArchiveChange = maintenance::editImportArchive,
-                onImportBackup = maintenance::importBackup,
-                onDebugShare = maintenance::runDebugShare,
-                onDismissDebugUrls = maintenance::dismissDebugUrls,
-                onDismissStatus = maintenance::dismissOpsNotice,
-                modifier = modifier,
+                onRefresh = scope.maintenance::refreshOps,
+                onRun = scope.maintenance::runAction,
+                onAskPrune = scope.maintenance::askPruneCheckpoints,
+                onConfirmPrune = scope.maintenance::confirmPruneCheckpoints,
+                onDismissPrune = scope.maintenance::dismissPruneCheckpoints,
+                onToggleCuratorPaused = scope.maintenance::toggleCuratorPaused,
+                onDownloadBackup = scope.maintenance::downloadBackup,
+                onImportArchiveChange = scope.maintenance::editImportArchive,
+                onImportBackup = scope.maintenance::importBackup,
+                onDebugShare = scope.maintenance::runDebugShare,
+                onDismissDebugUrls = scope.maintenance::dismissDebugUrls,
+                onDismissStatus = scope.maintenance::dismissOpsNotice,
+                modifier = scope.modifier,
             )
             return
         }
@@ -268,8 +231,8 @@ fun SettingsDetailPane(
                 state = maintenanceUsage,
                 profileKey = maintenanceProfile,
                 profileScope = scopeProfile,
-                onRefresh = maintenance::refreshUsage,
-                modifier = modifier,
+                onRefresh = scope.maintenance::refreshUsage,
+                modifier = scope.modifier,
             )
             return
         }
@@ -279,17 +242,17 @@ fun SettingsDetailPane(
                 state = maintenanceSessions,
                 profileKey = maintenanceProfile,
                 profileScope = scopeProfile,
-                onRefresh = maintenance::refreshSessionMaintenance,
-                onAskDeleteEmpty = maintenance::askDeleteEmptySessions,
-                onConfirmDeleteEmpty = maintenance::confirmDeleteEmptySessions,
-                onDismissDeleteEmpty = maintenance::dismissDeleteEmptySessions,
-                onPruneDaysChange = maintenance::editPruneDays,
-                onPreviewPrune = maintenance::previewPrune,
-                onConfirmPrune = maintenance::confirmPrune,
-                onDismissPruneReport = maintenance::dismissPruneReport,
-                onImportFile = maintenance::importSessionsFromFile,
-                onDismissStatus = maintenance::dismissSessionNotice,
-                modifier = modifier,
+                onRefresh = scope.maintenance::refreshSessionMaintenance,
+                onAskDeleteEmpty = scope.maintenance::askDeleteEmptySessions,
+                onConfirmDeleteEmpty = scope.maintenance::confirmDeleteEmptySessions,
+                onDismissDeleteEmpty = scope.maintenance::dismissDeleteEmptySessions,
+                onPruneDaysChange = scope.maintenance::editPruneDays,
+                onPreviewPrune = scope.maintenance::previewPrune,
+                onConfirmPrune = scope.maintenance::confirmPrune,
+                onDismissPruneReport = scope.maintenance::dismissPruneReport,
+                onImportFile = scope.maintenance::importSessionsFromFile,
+                onDismissStatus = scope.maintenance::dismissSessionNotice,
+                modifier = scope.modifier,
             )
             return
         }
@@ -298,16 +261,16 @@ fun SettingsDetailPane(
                 state = maintenanceCredentials,
                 profileKey = maintenanceProfile,
                 profileScope = scopeProfile,
-                onRefresh = maintenance::refreshCredentials,
-                onProviderChange = maintenance::editCredentialProvider,
-                onKeyChange = maintenance::editCredentialKey,
-                onLabelChange = maintenance::editCredentialLabel,
-                onAdd = maintenance::addCredential,
-                onAskDelete = maintenance::askDeleteCredential,
-                onConfirmDelete = maintenance::confirmDeleteCredential,
-                onDismissDelete = maintenance::dismissDeleteCredential,
-                onDismissStatus = maintenance::dismissCredentialNotice,
-                modifier = modifier,
+                onRefresh = scope.maintenance::refreshCredentials,
+                onProviderChange = scope.maintenance::editCredentialProvider,
+                onKeyChange = scope.maintenance::editCredentialKey,
+                onLabelChange = scope.maintenance::editCredentialLabel,
+                onAdd = scope.maintenance::addCredential,
+                onAskDelete = scope.maintenance::askDeleteCredential,
+                onConfirmDelete = scope.maintenance::confirmDeleteCredential,
+                onDismissDelete = scope.maintenance::dismissDeleteCredential,
+                onDismissStatus = scope.maintenance::dismissCredentialNotice,
+                modifier = scope.modifier,
             )
             return
         }
@@ -316,70 +279,70 @@ fun SettingsDetailPane(
             IntegrationsPage(
                 state = maintenanceIntegrations,
                 profileScope = scopeProfile,
-                onRefresh = maintenance::refreshIntegrations,
-                onEventChange = maintenance::editHookEvent,
-                onCommandChange = maintenance::editHookCommand,
-                onMatcherChange = maintenance::editHookMatcher,
-                onAddHook = maintenance::addHook,
-                onDeleteHook = maintenance::deleteHook,
-                onApprove = maintenance::approvePairing,
-                onRevoke = maintenance::revokePairing,
-                onDismissStatus = maintenance::dismissIntegrationNotice,
-                modifier = modifier,
+                onRefresh = scope.maintenance::refreshIntegrations,
+                onEventChange = scope.maintenance::editHookEvent,
+                onCommandChange = scope.maintenance::editHookCommand,
+                onMatcherChange = scope.maintenance::editHookMatcher,
+                onAddHook = scope.maintenance::addHook,
+                onDeleteHook = scope.maintenance::deleteHook,
+                onApprove = scope.maintenance::approvePairing,
+                onRevoke = scope.maintenance::revokePairing,
+                onDismissStatus = scope.maintenance::dismissIntegrationNotice,
+                modifier = scope.modifier,
             )
             return
         }
 
         SettingsPage.Notifications -> {
             NotificationsPage(
-                enabled = notificationsEnabled,
-                onToggle = onNotificationsToggle,
-                nativeEnabled = nativeNotifications,
-                onNativeToggle = onNativeNotificationsToggle,
-                modifier = modifier,
+                enabled = scope.notificationsEnabled,
+                onToggle = scope.onNotificationsToggle,
+                nativeEnabled = scope.nativeNotifications,
+                onNativeToggle = scope.onNativeNotificationsToggle,
+                modifier = scope.modifier,
             )
             return
         }
 
         SettingsPage.Shortcuts -> {
-            ShortcutsPage(modifier = modifier)
+            ShortcutsPage(modifier = scope.modifier)
             return
         }
 
         SettingsPage.Browser -> {
             BrowserPage(
-                headed = browserHeaded,
-                onHeadedToggle = onBrowserHeadedToggle,
-                args = browserArgs,
-                onArgsChange = onBrowserArgsChange,
-                modifier = modifier,
+                headed = scope.browserHeaded,
+                onHeadedToggle = scope.onBrowserHeadedToggle,
+                args = scope.browserArgs,
+                onArgsChange = scope.onBrowserArgsChange,
+                modifier = scope.modifier,
             )
             return
         }
 
         SettingsPage.Backend -> {
             // 后端管理页需要真实的 provider / transport：没注入时不画假界面。
-            backendAdmin?.let { BackendPage(component = it, modifier = modifier) }
+            scope.backendAdmin?.let { BackendPage(component = it, modifier = scope.modifier) }
             return
         }
 
         SettingsPage.Editors -> {
             EditorsPage(
-                editors = editors,
-                onSave = onEditorsSave,
-                modifier = modifier,
+                editors = scope.editors,
+                onSave = scope.onEditorsSave,
+                modifier = scope.modifier,
             )
             return
         }
 
         SettingsPage.About -> {
             AboutPage(
-                backendVersion = backendVersion,
-                dataDir = dataDir,
-                logDir = logDir,
-                update = updateState,
-                onCheckUpdate = onCheckUpdate,
-                modifier = modifier,
+                backendVersion = scope.backendVersion,
+                dataDir = scope.dataDir,
+                logDir = scope.logDir,
+                update = scope.updateState,
+                onCheckUpdate = scope.onCheckUpdate,
+                modifier = scope.modifier,
             )
             return
         }
@@ -387,48 +350,48 @@ fun SettingsDetailPane(
         else -> Unit
     }
 
-    if (state.selected == SettingsPage.Debug) {
-        DebugPage(launcher = officialDesktop, modifier = modifier)
+    if (scope.state.selected == SettingsPage.Debug) {
+        DebugPage(launcher = scope.officialDesktop, modifier = scope.modifier)
         return
     }
-    if (state.selected == SettingsPage.Approvals || state.selected == SettingsPage.Privacy ||
-        state.selected == SettingsPage.Checkpoints
+    if (scope.state.selected == SettingsPage.Approvals || scope.state.selected == SettingsPage.Privacy ||
+        scope.state.selected == SettingsPage.Checkpoints
     ) {
-        val tab = when (state.selected) {
+        val tab = when (scope.state.selected) {
             SettingsPage.Approvals -> SecurityTab.APPROVALS
             SettingsPage.Privacy -> SecurityTab.PRIVACY
             else -> SecurityTab.CHECKPOINTS
         }
-        val subject = security
+        val subject = scope.security
         if (subject == null) {
             Text(
                 "安全设置暂不可用（缺少组件）",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
-                modifier = modifier.padding(20.dp),
+                modifier = scope.modifier.padding(20.dp),
             )
         } else {
-            SecurityContent(component = subject, tab = tab, modifier = modifier)
+            SecurityContent(component = subject, tab = tab, modifier = scope.modifier)
         }
         return
     }
     // 模型三页（主 / 辅助 / 备用）共用一份 Component 状态：它们的"钉一个"动作
     // 都取同一个"当前选择"，拆开就得跨 Store 同步。
-    if (state.selected == SettingsPage.MainModel || state.selected == SettingsPage.AuxModels ||
-        state.selected == SettingsPage.FallbackModels
+    if (scope.state.selected == SettingsPage.MainModel || scope.state.selected == SettingsPage.AuxModels ||
+        scope.state.selected == SettingsPage.FallbackModels
     ) {
-        val subject = modelSettings
+        val subject = scope.modelSettings
         if (subject == null) {
             Text(
                 "模型设置暂不可用（缺少组件）",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
-                modifier = modifier.padding(20.dp),
+                modifier = scope.modifier.padding(20.dp),
             )
             return
         }
         val ms by subject.state.collectAsState()
-        when (state.selected) {
+        when (scope.state.selected) {
             SettingsPage.MainModel -> MainModelPage(
                 state = ms,
                 onProvider = { subject.onIntent(ModelSettingsIntent.SelectProvider(it)) },
@@ -439,7 +402,7 @@ fun SettingsDetailPane(
                 onConfirmPending = { subject.onIntent(ModelSettingsIntent.ConfirmPending) },
                 onDismissPending = { subject.onIntent(ModelSettingsIntent.DismissPending) },
                 onReloadCatalog = { subject.onIntent(ModelSettingsIntent.ReloadCatalog) },
-                modifier = modifier,
+                modifier = scope.modifier,
             )
 
             SettingsPage.AuxModels -> AuxModelPage(
@@ -447,7 +410,7 @@ fun SettingsDetailPane(
                 onAssign = { subject.onIntent(ModelSettingsIntent.AssignAuxTask(it)) },
                 onReset = { subject.onIntent(ModelSettingsIntent.ResetAux) },
                 onRefresh = { subject.onIntent(ModelSettingsIntent.ReloadAux) },
-                modifier = modifier,
+                modifier = scope.modifier,
             )
 
             else -> FallbackModelPage(
@@ -456,84 +419,84 @@ fun SettingsDetailPane(
                 onRemove = { subject.onIntent(ModelSettingsIntent.RemoveFallback(it)) },
                 onSave = { subject.onIntent(ModelSettingsIntent.SaveFallback) },
                 onRefresh = { subject.onIntent(ModelSettingsIntent.ReloadFallback) },
-                modifier = modifier,
+                modifier = scope.modifier,
             )
         }
         return
     }
-    if (state.selected == SettingsPage.MoaModels) {
-        val subject = moa
+    if (scope.state.selected == SettingsPage.MoaModels) {
+        val subject = scope.moa
         if (subject == null) {
             Text(
                 "MoA 设置暂不可用（缺少组件）",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
-                modifier = modifier.padding(20.dp),
+                modifier = scope.modifier.padding(20.dp),
             )
         } else {
-            val catalog = modelSettings
+            val catalog = scope.modelSettings
         MoaContent(
             component = subject,
             modelState = catalog?.state?.value ?: dev.shinglem.hermes.component.settings.ModelSettingsState(),
-            modifier = modifier,
+            modifier = scope.modifier,
         )
         }
         return
     }
-    if (state.selected == SettingsPage.Profiles) {
-        val subject = profiles
+    if (scope.state.selected == SettingsPage.Profiles) {
+        val subject = scope.profiles
         if (subject == null) {
             Text(
                 "配置档案暂不可用（缺少组件）",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
-                modifier = modifier.padding(20.dp),
+                modifier = scope.modifier.padding(20.dp),
             )
         } else {
-            ProfilesContent(component = subject, modifier = modifier)
+            ProfilesContent(component = subject, modifier = scope.modifier)
         }
         return
     }
-    if (state.selected == SettingsPage.ProviderKeys) {
-        val subject = providerKeys
+    if (scope.state.selected == SettingsPage.ProviderKeys) {
+        val subject = scope.providerKeys
         if (subject == null) {
             Text(
                 "提供方密钥暂不可用（缺少组件）",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
-                modifier = modifier.padding(20.dp),
+                modifier = scope.modifier.padding(20.dp),
             )
         } else {
-            ProviderKeysContent(component = subject, modifier = modifier)
+            ProviderKeysContent(component = subject, modifier = scope.modifier)
         }
         return
     }
-    if (state.selected == SettingsPage.CustomEndpoints) {
-        val subject = customEndpoints
+    if (scope.state.selected == SettingsPage.CustomEndpoints) {
+        val subject = scope.customEndpoints
         if (subject == null) {
             Text(
                 "自定义端点暂不可用（缺少组件）",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
-                modifier = modifier.padding(20.dp),
+                modifier = scope.modifier.padding(20.dp),
             )
         } else {
-            CustomEndpointContent(component = subject, modifier = modifier)
+            CustomEndpointContent(component = subject, modifier = scope.modifier)
         }
         return
     }
-    if (state.selected == SettingsPage.TerminalAppearance) {
+    if (scope.state.selected == SettingsPage.TerminalAppearance) {
         TerminalSettingsPage(
-            settings = terminalSettings,
-            onChange = onTerminalSettingsChange,
-            modifier = modifier.fillMaxWidth(),
+            settings = scope.terminalSettings,
+            onChange = scope.onTerminalSettingsChange,
+            modifier = scope.modifier.fillMaxWidth(),
         )
         return
     }
 
-    val group = state.currentGroup ?: return
+    val group = scope.state.currentGroup ?: return
 
-    Column(modifier = modifier.fillMaxWidth()) {
+    Column(modifier = scope.modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -555,25 +518,25 @@ fun SettingsDetailPane(
             Spacer(Modifier.height(16.dp))
 
             group.fields.forEach { field ->
-                FieldRow(field = field, value = state.values[field.key].orEmpty(), onEdit = onEdit)
+                FieldRow(field = field, value = scope.state.values[field.key].orEmpty(), onEdit = scope.onEdit)
                 if (field.key == SettingsCatalog.KEY_AUTOSTART) {
-                    autostartHint(autostart)?.let { hint ->
+                    autostartHint(scope.autostart)?.let { hint ->
                         Text(
                             hint,
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (autostart.pending) {
+                            color = if (scope.autostart.pending) {
                                 MaterialTheme.colorScheme.error
                             } else {
                                 MaterialTheme.colorScheme.onSurfaceVariant
                             },
                         )
                     }
-                    if (orphanTasks.isNotEmpty()) {
+                    if (scope.orphanTasks.isNotEmpty()) {
                         Spacer(Modifier.height(6.dp))
                         OrphanTaskList(
-                            tasks = orphanTasks,
-                            canDelete = autostart.elevated,
-                            onDelete = onDeleteOrphanTask,
+                            tasks = scope.orphanTasks,
+                            canDelete = scope.autostart.elevated,
+                            onDelete = scope.onDeleteOrphanTask,
                         )
                     }
                 }
@@ -587,10 +550,10 @@ fun SettingsDetailPane(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                state.error?.let { message ->
+                scope.state.error?.let { message ->
                     Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
-                state.saved?.let { saved ->
+                scope.state.saved?.let { saved ->
                     Text(
                         if (saved.restartRequired) {
                             "已保存到 custom 覆盖层，重启客户端后生效"
@@ -599,17 +562,17 @@ fun SettingsDetailPane(
                         },
                         color = MaterialTheme.colorScheme.primary,
                         style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.clickable(onClick = onDismissSaved),
+                        modifier = Modifier.clickable(onClick = scope.onDismissSaved),
                     )
                 }
             }
-            if (state.saved?.restartRequired == true) {
-                OutlinedButton(onClick = onRestart, enabled = !state.restarting) {
-                    Text(if (state.restarting) "正在重启…" else "重启客户端")
+            if (scope.state.saved?.restartRequired == true) {
+                OutlinedButton(onClick = scope.onRestart, enabled = !scope.state.restarting) {
+                    Text(if (scope.state.restarting) "正在重启…" else "重启客户端")
                 }
                 Spacer(Modifier.width(8.dp))
             }
-            Button(onClick = onSave, enabled = !state.restarting) { Text("保存") }
+            Button(onClick = scope.onSave, enabled = !scope.state.restarting) { Text("保存") }
         }
     }
         SnackbarHost(
