@@ -12,6 +12,7 @@ import dev.shinglem.hermes.platform.isImagePath
 import dev.shinglem.hermes.platform.isSubmittableImagePath
 import dev.shinglem.hermes.platform.pickFiles
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,7 +44,15 @@ class ComposerViewModel(
     private val repository: ComposerRepository,
     private val sessions: ComposerSessionContext,
     private val preferences: AppPreferences,
-) : ViewModel() {
+    /**
+     * 协程作用域（S5：从 `viewModelScope` 改成注入）。
+     *
+     * 必须传**单线程** dispatcher：本类持有 `completionJob` / `draftJob` / 历史游标等
+     * 非线程安全状态，靠"全部代码路径在同一条线程"做隐式互斥
+     * （与 `ChatViewModel` 同一条约束，见 `platform/UiDispatcher`）。
+     */
+    private val scope: CoroutineScope,
+) {
     private val _state = MutableStateFlow(ComposerUiState())
     val state: StateFlow<ComposerUiState> = _state.asStateFlow()
 
@@ -373,7 +382,7 @@ class ComposerViewModel(
             return
         }
         val cached = sessions.runtimeInfo()
-        completionJob = viewModelScope.launch {
+        completionJob = scope.launch {
             if (!immediate) delay(COMPLETION_DEBOUNCE_MS)
             // 补全想拿到会话 cwd（列项目文件）；没有就 resume 一次，失败也能继续（退回默认目录）。
             val runtime = cached ?: sessions.ensureRuntime()
@@ -432,7 +441,7 @@ class ComposerViewModel(
     private fun scheduleDraft(text: String) {
         draftJob?.cancel()
         val sessionId = draftSessionId ?: return
-        draftJob = viewModelScope.launch {
+        draftJob = scope.launch {
             delay(DRAFT_DEBOUNCE_MS)
             preferences.setDraft(sessionId, text)
         }
@@ -449,9 +458,14 @@ class ComposerViewModel(
         return true
     }
 
-    override fun onCleared() {
+    /**
+     * 释放（S5：去掉 `ViewModel` 继承后由 Component 的 `Holder.onDestroy` 调）。
+     *
+     * **必须显式调**：迁移前是 `onCleared()` 由框架自动触发，现在没有那个钩子了。
+     * 先 flush 草稿再取消 scope —— 反过来的话挂起的写入会被取消，用户输入丢失。
+     */
+    fun dispose() {
         flushDraft()
-        super.onCleared()
     }
 
     private companion object {

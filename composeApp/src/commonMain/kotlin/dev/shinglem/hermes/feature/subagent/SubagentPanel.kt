@@ -66,7 +66,7 @@ import dev.shinglem.hermes.ui.icon.AppIcons
  */
 @Composable
 fun SubagentPanel(
-    state: SubagentState,
+    state: dev.shinglem.hermes.component.subagent.SubagentState,
     onClose: () -> Unit,
     onRefresh: () -> Unit,
     onLoadTail: (String) -> Unit,
@@ -203,7 +203,7 @@ fun SubagentPanel(
 
 @Composable
 private fun SubagentCard(
-    entry: SubagentEntry,
+    entry: dev.shinglem.hermes.component.subagent.SubagentItem,
     steering: Boolean,
     onLoadTail: () -> Unit,
     onSteer: (String) -> Unit,
@@ -226,7 +226,7 @@ private fun SubagentCard(
                     modifier = Modifier
                         .size(8.dp)
                         .background(
-                            if (entry.status == SubagentViewModel.STATUS_RUNNING) {
+                            if (entry.status == dev.shinglem.hermes.component.subagent.SubagentState.STATUS_RUNNING) {
                                 MaterialTheme.colorScheme.primary
                             } else {
                                 MaterialTheme.colorScheme.outline
@@ -289,7 +289,7 @@ private fun SubagentCard(
                         ),
                     )
                 }
-                if (entry.status == SubagentViewModel.STATUS_RUNNING) {
+                if (entry.status == dev.shinglem.hermes.component.subagent.SubagentState.STATUS_RUNNING) {
                     TextButton(onClick = onInterrupt) {
                         Text(
                             text = stringResource(Res.string.subagent_interrupt),

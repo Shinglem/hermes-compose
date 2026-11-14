@@ -54,6 +54,8 @@ import dev.shinglem.hermes.feature.chat.SessionKey
 import dev.shinglem.hermes.feature.editors.EditorLaunchContext
 import dev.shinglem.hermes.feature.editors.LocalEditorLaunchContext
 import dev.shinglem.hermes.feature.composer.ComposerController
+import dev.shinglem.hermes.component.composer.ComposerComponent
+import dev.shinglem.hermes.component.composer.DefaultComposerComponent
 import dev.shinglem.hermes.feature.composer.ComposerViewModel
 import dev.shinglem.hermes.feature.composer.ModelPill
 import dev.shinglem.hermes.feature.composer.ReasoningPill
@@ -99,7 +101,9 @@ import dev.shinglem.hermes.component.updater.DefaultUpdaterComponent
 import dev.shinglem.hermes.component.updater.RestUpdaterGateway
 import dev.shinglem.hermes.component.updater.UpdaterIntent
 import dev.shinglem.hermes.feature.subagent.SubagentPanel
-import dev.shinglem.hermes.feature.subagent.SubagentViewModel
+import dev.shinglem.hermes.component.subagent.DefaultSubagentComponent
+import dev.shinglem.hermes.component.subagent.RpcSubagentGateway
+import dev.shinglem.hermes.component.subagent.SubagentIntent
 import dev.shinglem.hermes.platform.AppFocus
 import dev.shinglem.hermes.platform.NotificationAction
 import dev.shinglem.hermes.platform.SystemNotifications
@@ -185,15 +189,19 @@ fun AppShell(
             executorContext = UiDispatcher.context,
         )
     }
-    val composerViewModel: ComposerViewModel = viewModel {
-        ComposerViewModel(
+    // Composer：S5 起由 Component 持有（**过渡形态** —— 内部仍是 ComposerViewModel，
+    // 只是 scope 从 viewModelScope 换成注入的 UI 线程 scope，见 DefaultComposerComponent 的类注释）。
+    val composerComponent: ComposerComponent = remember(context) {
+        DefaultComposerComponent(
+            componentContext = context,
             repository = container.composerRepository,
             // Composer 的 `@` / `/` 补全要用 chat 的运行时（profile + runtimeId），
-            // 走 `ComposerSessionContext` 接口。S5 落 RootComponent 后改为注入 Component。
+            // 走 `ComposerSessionContext` 接口。
             sessions = chatComponent.model,
             preferences = container.preferences,
         )
     }
+    val composerViewModel: ComposerViewModel = composerComponent.model
     val backendComponent = remember(context) {
         DefaultBackendComponent(
             componentContext = context,
@@ -211,10 +219,15 @@ fun AppShell(
             debugAvailable = container.officialDesktop != null,
         )
     }
-    val subagentViewModel: SubagentViewModel = viewModel {
-        SubagentViewModel(container.gateway) {
-            chatComponent.runtimeId?.let { SubagentViewModel.RuntimeContext(chatComponent.profile, it) }
-        }
+    val subagentComponent: dev.shinglem.hermes.component.subagent.SubagentComponent = remember(context) {
+        DefaultSubagentComponent(
+            componentContext = context,
+            gateway = RpcSubagentGateway(container.gateway) {
+                chatComponent.runtimeId?.let {
+                    dev.shinglem.hermes.component.subagent.RuntimeRef(chatComponent.profile, it)
+                }
+            },
+        )
     }
     val updaterComponent = remember(context) {
         DefaultUpdaterComponent(
@@ -328,7 +341,8 @@ fun AppShell(
     val composerState by composerViewModel.state.collectAsStateWithLifecycle()
     val capabilityState by capabilityViewModel.state.collectAsStateWithLifecycle()
     val settingsState by settingsViewModel.state.collectAsStateWithLifecycle()
-    val subagentState by subagentViewModel.state.collectAsStateWithLifecycle()
+    val subagentState by subagentComponent.state.collectAsStateWithLifecycle()
+    // UI 层仍按旧形状消费（SubagentEntry → SubagentItem 只是改名）。
     val updateState by updaterComponent.state.collectAsStateWithLifecycle()
     val terminalState by container.terminalViewModel.state.collectAsStateWithLifecycle()
     val terminalSettings by container.terminalViewModel.settings.collectAsStateWithLifecycle()
@@ -718,7 +732,7 @@ fun AppShell(
                 }
                 add(
                     CommandItem("subagents", "子代理面板", null, AppIcons.Subagent) {
-                        subagentViewModel.open()
+                        subagentComponent.onIntent(SubagentIntent.Open)
                     },
                 )
                 add(
@@ -742,12 +756,12 @@ fun AppShell(
         if (subagentState.open) {
             SubagentPanel(
                 state = subagentState,
-                onClose = subagentViewModel::close,
-                onRefresh = subagentViewModel::refresh,
-                onLoadTail = subagentViewModel::loadTail,
-                onSteer = subagentViewModel::steer,
-                onInterrupt = subagentViewModel::interrupt,
-                onDismissNotice = subagentViewModel::dismissNotice,
+                onClose = { subagentComponent.onIntent(SubagentIntent.Close) },
+                onRefresh = { subagentComponent.onIntent(SubagentIntent.Refresh) },
+                onLoadTail = { id -> subagentComponent.onIntent(SubagentIntent.LoadTail(id)) },
+                onSteer = { id, text -> subagentComponent.onIntent(SubagentIntent.Steer(id, text)) },
+                onInterrupt = { id -> subagentComponent.onIntent(SubagentIntent.Interrupt(id)) },
+                onDismissNotice = { subagentComponent.onIntent(SubagentIntent.DismissNotice) },
             )
         }
         Row(
@@ -979,7 +993,7 @@ fun AppShell(
                                 onCancelBranch = { chatComponent.onIntent(ChatIntent.CancelBranch) },
                                 onShowUsageDetail = { chatComponent.onIntent(ChatIntent.LoadUsageDetail) },
                                 onDismissUsageError = { chatComponent.onIntent(ChatIntent.DismissUsageError) },
-                                onOpenSubagents = { subagentViewModel.open() },
+                                onOpenSubagents = { subagentComponent.onIntent(SubagentIntent.Open) },
                                 onKillBackgroundTask = { id -> chatComponent.onIntent(ChatIntent.KillBackgroundTask(id)) },
                                 onSteerQueued = { id -> chatComponent.onIntent(ChatIntent.SteerQueued(id)) },
                                 onCancelQueued = { id -> chatComponent.onIntent(ChatIntent.CancelQueued(id)) },
