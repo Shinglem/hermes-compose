@@ -8,6 +8,7 @@ import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.result.Loadable
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import app.cash.turbine.test
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -180,5 +181,41 @@ class ProviderKeysComponentTest {
 
         subject.onIntent(ProviderKeysIntent.SetQuery("绝不存在的键"))
         assertEquals(0, subject.state.value.groups().sumOf { it.entries.size })
+    }
+
+    /**
+     * 一次性事件（MVIKotlin `Label` → `effects`）的发射序列。
+     *
+     * 验收口径 #12 要求用 **Turbine** 断言而不是"发完再读一个变量"：
+     * `labelsAsFlow()` 走 `Channel(BUFFERED)` + `receiveAsFlow()`，用普通 `collect` 收集
+     * 需要自己处理先后与取消，而 `awaitItem()` 才能可靠区分"多发 / 少发 / 乱序"。
+     */
+    @Test
+    fun `保存成功弹一次 Toast`() = runTest {
+        val gateway = FakeGateway()
+        val subject = component(gateway)
+        subject.onIntent(ProviderKeysIntent.Appear())
+        subject.onIntent(ProviderKeysIntent.Edit("OPENAI_API_KEY", "sk-test"))
+
+        subject.effects.test {
+            subject.onIntent(ProviderKeysIntent.Save("OPENAI_API_KEY"))
+            assertEquals("OPENAI_API_KEY 已保存", (awaitItem() as ProviderKeysEffect.Toast).text)
+            expectNoEvents()
+        }
+    }
+
+    /** 失败路径**不该**发 Toast（错误走 state 的 `saveError`，不弹一次性事件）。 */
+    @Test
+    fun `保存失败不弹 Toast`() = runTest {
+        val gateway = FakeGateway(failWrite = AppError.Unknown("nope"))
+        val subject = component(gateway)
+        subject.onIntent(ProviderKeysIntent.Appear())
+        subject.onIntent(ProviderKeysIntent.Edit("OPENAI_API_KEY", "sk-test"))
+
+        subject.effects.test {
+            subject.onIntent(ProviderKeysIntent.Save("OPENAI_API_KEY"))
+            expectNoEvents()
+        }
+        assertNotNull(subject.state.value.error)
     }
 }

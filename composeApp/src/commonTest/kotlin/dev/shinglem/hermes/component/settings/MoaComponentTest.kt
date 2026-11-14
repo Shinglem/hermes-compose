@@ -11,6 +11,7 @@ import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.result.Loadable
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import app.cash.turbine.test
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -247,5 +248,20 @@ class MoaComponentTest {
         val subject = component(gateway)
         subject.onConnectedChanged(true)
         assertTrue(subject.state.value.config is Loadable.Failed)
+    }
+
+    /** 一次性事件（Label → effects）的发射序列用 Turbine 断言（验收 #12）。 */
+    @Test
+    fun `保存成功弹一次 Toast`() = runTest {
+        val gateway = FakeGateway(config = config())
+        val subject = component(gateway)
+        subject.onConnectedChanged(true)
+        subject.onIntent(MoaIntent.AddPreset)
+
+        subject.effects.test {
+            subject.onIntent(MoaIntent.Save)
+            assertEquals("MoA 配置已保存", (awaitItem() as MoaEffect.Toast).text)
+            expectNoEvents()
+        }
     }
 }

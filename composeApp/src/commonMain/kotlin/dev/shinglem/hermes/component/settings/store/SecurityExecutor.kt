@@ -96,6 +96,7 @@ internal class SecurityExecutor(
                 repository.patch(profile, patch)
                 // 回读：后端的归一化视图会补默认值，只有回读才看到真值。
                 dispatch(SecurityResult.EditsCleared(repository.read(profile)))
+                publish(SecurityEffect.Toast("已保存，对后续对话生效"))
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {

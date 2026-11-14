@@ -12,6 +12,7 @@ import dev.shinglem.hermes.core.result.Loadable
 import dev.shinglem.hermes.core.result.valueOrNull
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import app.cash.turbine.test
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -141,6 +142,24 @@ class ProfilesComponentTest {
         subject.onIntent(ProfilesIntent.EditSoul("# 改过的"))
 
         assertTrue(subject.state.value.soulDirty)
+    }
+
+    /** 一次性事件（Label → effects）的发射序列用 Turbine 断言（验收 #12）。 */
+    @Test
+    fun `保存 SOUL 成功弹一次 Toast`() = runTest {
+        val gateway = FakeGateway()
+        val subject = component(gateway)
+        subject.onIntent(ProfilesIntent.Appear())
+        subject.onIntent(ProfilesIntent.Select("alpha"))
+        subject.onIntent(ProfilesIntent.EditSoul("# 改过的"))
+
+        subject.effects.test {
+            subject.onIntent(ProfilesIntent.SaveSoul)
+            val toast = awaitItem()
+            assertTrue(toast is ProfilesEffect.Toast, "应当只发 Toast，实际 $toast")
+            expectNoEvents()
+        }
+        assertEquals(1, gateway.soulSaves.size)
     }
 
     @Test

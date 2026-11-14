@@ -15,6 +15,7 @@ import dev.shinglem.hermes.core.result.Loadable
 import dev.shinglem.hermes.feature.settings.EndpointDraft
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import app.cash.turbine.test
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -268,5 +269,31 @@ class CustomEndpointComponentTest {
         val beta = component(gateway, profile = "beta")
         beta.onIntent(CustomEndpointIntent.Appear())
         assertNull(beta.state.value.draft, "新 profile 不该继承上一个仓库的草稿")
+    }
+
+    /** 一次性事件（Label → effects）的发射序列用 Turbine 断言（验收 #12）。 */
+    @Test
+    fun `保存成功弹一次 Toast`() = runTest {
+        val gateway = FakeGateway()
+        val subject = component(gateway)
+        subject.onIntent(CustomEndpointIntent.Appear())
+        subject.onIntent(CustomEndpointIntent.StartCreate)
+        subject.onIntent(
+            CustomEndpointIntent.EditDraft(
+                EndpointDraft(
+                    name = "New EP",
+                    baseUrl = "https://api.example.com/v1",
+                    model = "gpt-4o",
+                    apiKey = "sk-1",
+                    apiMode = "openai",
+                ),
+            ),
+        )
+
+        subject.effects.test {
+            subject.onIntent(CustomEndpointIntent.Save)
+            assertEquals("已添加", (awaitItem() as CustomEndpointEffect.Toast).text)
+            expectNoEvents()
+        }
     }
 }

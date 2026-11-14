@@ -114,6 +114,7 @@ internal class ProfilesExecutor(
                 gateway.saveSoul(name, content)
                 loadSoul(name)
                 dispatch(ProfilesResult.Succeeded("已保存 SOUL.md"))
+                publish(ProfilesEffect.Toast("$name 的 SOUL.md 已保存"))
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {

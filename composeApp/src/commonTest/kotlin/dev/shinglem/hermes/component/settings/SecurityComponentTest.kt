@@ -10,6 +10,7 @@ import dev.shinglem.hermes.feature.settings.ConfigFieldKind
 import dev.shinglem.hermes.feature.settings.ConfigFieldSpec
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import app.cash.turbine.test
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -153,6 +154,24 @@ class SecurityComponentTest {
         val state = subject.state.value
         assertTrue(!state.dirty, "保存成功后应清空 edits")
         assertEquals("已保存", state.notice)
+    }
+
+    /** 一次性事件（Label → effects）的发射序列用 Turbine 断言（验收 #12）。 */
+    @Test
+    fun `保存成功弹一次 Toast`() = runTest {
+        val gateway = FakeGateway()
+        val subject = component(gateway)
+        val spec = ConfigFieldSpec(path = "approval.mode", label = "审批", kind = ConfigFieldKind.TEXT)
+        subject.onIntent(SecurityIntent.Appear())
+        subject.onIntent(SecurityIntent.Edit("approval.mode", "always"))
+        gateway.config = buildJsonObject { put("approval.mode", "always") }
+
+        subject.effects.test {
+            subject.onIntent(SecurityIntent.Save(listOf(spec)))
+            val toast = awaitItem()
+            assertTrue(toast is SecurityEffect.Toast, "应当只发 Toast，实际 $toast")
+            expectNoEvents()
+        }
     }
 
     @Test

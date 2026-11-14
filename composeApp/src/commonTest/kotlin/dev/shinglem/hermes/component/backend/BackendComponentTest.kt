@@ -10,6 +10,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import app.cash.turbine.test
+import dev.shinglem.hermes.component.labelsAsFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
@@ -180,5 +182,22 @@ class BackendComponentTest {
         val state = BackendState(logs = logs)
         assertEquals(BackendState.DIAGNOSTIC_LOG_LINES, state.tail().size)
         assertEquals("line100", state.tail().last().text)
+    }
+
+    /** 一次性事件（Label）的发射序列用 Turbine 断言（验收 #12）。 */
+    @Test
+    fun `复制诊断信息发一次剪贴板事件`() = kotlinx.coroutines.test.runTest {
+        val s = store(FakeGateway(), testScheduler)
+        s.accept(BackendIntent.Observe)
+        try {
+            s.labelsAsFlow().test {
+                s.accept(BackendIntent.CopyDiagnostics)
+                val effect = awaitItem()
+                assertTrue(effect is BackendEffect.CopyToClipboard, "应当只发剪贴板事件，实际 $effect")
+                expectNoEvents()
+            }
+        } finally {
+            s.dispose()
+        }
     }
 }

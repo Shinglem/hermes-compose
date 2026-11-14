@@ -14,6 +14,7 @@ import dev.shinglem.hermes.feature.model.ModelEntry
 import dev.shinglem.hermes.feature.model.ModelProviderGroup
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import app.cash.turbine.test
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -294,5 +295,19 @@ class ModelSettingsComponentTest {
         val state = subject.state.value
         assertNull(state.busyKey)
         assertNotNull(state.error)
+    }
+
+    /** 一次性事件（Label → effects）的发射序列用 Turbine 断言（验收 #12）。 */
+    @Test
+    fun `指派主模型成功弹一次 Toast`() = runTest {
+        val gateway = FakeGateway(catalog = catalog())
+        val subject = component(gateway)
+        subject.onConnectedChanged(true)
+
+        subject.effects.test {
+            subject.onIntent(ModelSettingsIntent.ApplyMain)
+            assertEquals("主模型已切换", (awaitItem() as ModelSettingsEffect.Toast).text)
+            expectNoEvents()
+        }
     }
 }
