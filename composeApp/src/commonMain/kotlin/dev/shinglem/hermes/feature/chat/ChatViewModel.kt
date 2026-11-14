@@ -89,26 +89,11 @@ class ChatViewModel(
 
     private data class LoadedTranscript(val rows: List<ChatRow>, val hasMore: Boolean)
 
-    /**
-     * (profile, storedId) → 该会话的模型。
-     *
-     * 单独按 key 存而不是只放在 `ChatState` 里，是因为 `ChatState` 会被整块替换
-     * （`open()` 置 Loading、`publish()` 重建），单值字段必然丢；按 key 存才能
-     * 切走再切回仍然显示上次读到的模型。
-     */
-    private val sessionModels = mutableMapOf<SessionKey, SessionModel>()
+    /** 会话级 / profile 级的模型真值（`ChatState` 会被整块替换，所以必须单独按 key 存）。 */
+    private val modelsCache = SessionModelCache()
 
-    /** profile → 该 profile 的默认模型（`GET /api/model/info`），作为会话级真值之前的兜底。 */
-    private val profileModels = mutableMapOf<String?, SessionModel>()
-
-    private data class SessionModel(
-        val model: String,
-        val provider: String?,
-        val reasoningEffort: String?,
-    )
-
-    /** 切走时保存的会话状态（含流式段落），切回先恢复，避免"内容消失 / 看起来卡死"。 */
-    private val savedStates = mutableMapOf<SessionKey, ChatState>()
+    /** 切走时的状态快照（含流式段落）：切回先恢复，避免"内容消失 / 看起来卡死"。 */
+    private val snapshots = SessionSnapshotCache()
 
     /** 已经弹过系统通知的审批（补拉 / 重连会重复拿到同一条）。 */
     private val notifiedApprovals = mutableSetOf<String>()
@@ -209,7 +194,7 @@ class ChatViewModel(
             SessionSwitchPlan.KEEP -> return
             // 先恢复切走时的快照（含流式段落）：切回瞬间就有内容，不会"看起来卡死"。
             SessionSwitchPlan.RESTORE_SNAPSHOT -> {
-                val saved = savedStates.remove(key)
+                val saved = snapshots.remove(key)
                 if (saved != null) {
                     restore(key, saved)
                     // 快照只保证"切回瞬间有内容"。卡片 / 队列是**后端状态**，必须对账：
@@ -231,7 +216,7 @@ class ChatViewModel(
             }
             SessionSwitchPlan.RELOAD -> Unit
         }
-        savedStates.remove(key)
+        snapshots.discard(key)
 
         cache.remove(key)
         loadJob?.cancel()
@@ -319,17 +304,18 @@ class ChatViewModel(
      * 用 profile 默认模型填 pill 的初始值。
      *
      * 只在当前还没有模型时生效：`session.info` / `session.resume` 拿到的是**会话级**真值，
-     * 那两条路径优先。接口失败就静默——pill 会停在"模型未知"（未读到，不是没有可用），点开菜单仍可用。
+     * 那两条路径优先。接口失败就静默 —— pill 会停在"模型未知"（未读到，不是没有可用），
+     * 点开菜单仍可用。
      */
     private suspend fun seedModelInfo(profile: String?) {
         // 已经读到该 profile 的默认值就不再请求；界面可能被整块替换过，补写一次即可。
-        if (profileModels[profile] != null) {
+        if (modelsCache.profileModel(profile) != null) {
             applyProfileModelIfMissing(profile)
             return
         }
         try {
             val info = models.current(profile) ?: return
-            rememberProfileModel(profile, SessionModel(info.model, info.provider, reasoningEffort = null))
+            modelsCache.putProfile(profile, SessionModel(info.model, info.provider, reasoningEffort = null))
             applyProfileModelIfMissing(profile)
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -338,48 +324,22 @@ class ChatViewModel(
         }
     }
 
-    private fun rememberProfileModel(profile: String?, model: SessionModel) {
-        profileModels[profile] = model
-    }
-
     /**
-     * 记录某会话的模型真值（会话级）。
-     *
-     * 所有来源（`session.resume` / `session.info` 事件 / `session.mutate` 回执）都写这里，
-     * `publish()` 与 `open()` 再从 map 取 —— 这样"状态被整块替换"和"协程赛跑"都不会把模型弄丢。
-     * 传 null 的字段保留旧值（回执往往只带改动的那个）。
+     * 记录某会话的模型真值（会话级）。传 null 的字段保留旧值（回执往往只带改动的那个）。
      */
-    private fun rememberSessionModel(
-        key: SessionKey,
-        model: String?,
-        provider: String?,
-        reasoningEffort: String?,
-    ) {
-        val previous = sessionModels[key]
-        val resolvedModel = model?.takeIf { it.isNotBlank() } ?: previous?.model ?: return
-        sessionModels[key] = SessionModel(
-            model = resolvedModel,
-            provider = provider?.takeIf { it.isNotBlank() } ?: previous?.provider,
-            reasoningEffort = reasoningEffort?.takeIf { it.isNotBlank() } ?: previous?.reasoningEffort,
-        )
+    private fun rememberSessionModel(key: SessionKey, model: String?, provider: String?, reasoningEffort: String?) {
+        modelsCache.putSession(key, model, provider, reasoningEffort)
     }
-
-    /** 某个会话该显示的模型：会话级真值 → profile 默认 → null（真的还没读到）。 */
-    private fun modelFor(key: SessionKey): SessionModel? =
-        sessionModels[key] ?: profileModels[key.profile]
 
     /** 给一份新建的状态补上该会话已知的模型（不覆盖已带值的那份）。 */
-    private fun ChatState.withModelOf(key: SessionKey): ChatState {
-        if (model != null) return this
-        val known = modelFor(key) ?: return this
-        return copy(model = known.model, provider = known.provider, reasoningEffort = known.reasoningEffort)
-    }
+    private fun ChatState.withModelOf(key: SessionKey): ChatState = withModelOf(modelsCache.forSession(key))
 
+    /** profile 默认值读到了就补进当前 state（仅当还没有会话级真值时）。 */
     private fun applyProfileModelIfMissing(profile: String?) {
         val key = _state.value.key ?: return
         if (key.profile != profile) return
-        if (sessionModels[key] != null) return
-        val seeded = profileModels[profile] ?: return
+        if (modelsCache.hasSessionModel(key)) return
+        val seeded = modelsCache.profileModel(profile) ?: return
         _state.update { current ->
             if (current.key != key || current.model != null) {
                 current
@@ -388,7 +348,6 @@ class ChatViewModel(
             }
         }
     }
-
     fun reload(profile: String?, sessionId: String?) = open(profile, sessionId, force = true)
 
     /** 发送一条用户消息（Markdown 源码原样提交，不做任何改写）。 */
@@ -817,7 +776,7 @@ class ChatViewModel(
     /**
      * 一条等待项已经不需要了：本端应答、后端撤回、或已被别处处理。
      *
-     * 必须**同时**清当前状态和切走时保存的快照 —— `savedStates` 里的快照同样持有
+     * 必须**同时**清当前状态和切走时保存的快照 —— `snapshots` 里的快照同样持有
      * `pendingApprovals`，切回该会话时会把它恢复出来；用户看到的是一张已经答过的卡片，
      * 再点一次就撞 `4001 stale_generation`（实测）。
      */
@@ -828,14 +787,13 @@ class ChatViewModel(
                 pendingClarify = current.pendingClarify.filterNot { it.requestId == requestId },
             )
         }
-        savedStates.keys.toList().forEach { key ->
-            val snapshot = savedStates[key] ?: return@forEach
+        snapshots.updateAll { snapshot ->
             if (snapshot.pendingApprovals.none { it.requestId == requestId } &&
                 snapshot.pendingClarify.none { it.requestId == requestId }
             ) {
-                return@forEach
+                return@updateAll snapshot
             }
-            savedStates[key] = snapshot.copy(
+            snapshot.copy(
                 pendingApprovals = snapshot.pendingApprovals.filterNot { it.requestId == requestId },
                 pendingClarify = snapshot.pendingClarify.filterNot { it.requestId == requestId },
             )
@@ -1208,12 +1166,11 @@ class ChatViewModel(
     /** 切走前把当前会话状态存起来（含流式段落），切回时可以原样恢复。 */
     private fun stashCurrentState() {
         val key = _state.value.key ?: return
-        savedStates[key] = _state.value
-        // 快照里有整段消息列表，别无限攒：保留最近 12 个会话足够覆盖来回切换。
-        if (savedStates.size > 12) savedStates.remove(savedStates.keys.first())
+        // 快照里有整段消息列表，`SessionSnapshotCache` 内部按上限淘汰（保留最近 12 个）。
+        snapshots.put(key, _state.value)
     }
 
-    private fun cachedStreaming(key: SessionKey): Boolean = savedStates[key]?.streaming != null
+    private fun cachedStreaming(key: SessionKey): Boolean = snapshots.hasStreaming(key)
 
     /**
      * 切走期间在**影子状态**上继续处理该会话的流式事件。
@@ -1224,8 +1181,7 @@ class ChatViewModel(
      * 这里把事件累积到快照上，切回时快照本身就是最新的。
      */
     private fun trackShadow(key: SessionKey, event: GatewayEvent) {
-        val snapshot = savedStates[key] ?: return
-        savedStates[key] = snapshot.reduceStreamEvent(event.toChatStreamEvent(), ::nextLocalId)
+        snapshots.track(key, event.toChatStreamEvent(), ::nextLocalId)
     }
 
 
@@ -1235,7 +1191,7 @@ class ChatViewModel(
         sameKeyReady = _state.value.key == key && _state.value.load is Loadable.Ready,
         stale = stale,
         cachedStreaming = cachedStreaming(key),
-        hasSnapshot = savedStates.containsKey(key),
+        hasSnapshot = snapshots.containsKey(key),
         hasCache = cache.containsKey(key),
     )
 
@@ -1295,7 +1251,7 @@ class ChatViewModel(
         if (runtimes[key] != null) {
             // runtime 可复用，但模型可能还没读到（#16）：补一次 profile 默认。
             // 这里不 force resume —— 那会重新注册 live session，代价远大于收益。
-            if (sessionModels[key] == null) {
+            if (!modelsCache.hasSessionModel(key)) {
                 scope.launch { seedModelInfo(key.profile) }
             }
             return
@@ -2009,9 +1965,9 @@ class ChatViewModel(
             olderError = null,
             // 模型/用量都是会话级状态：从 map 取（不是从上一份状态取），
             // 这样切走再切回、以及状态被整块替换后都还能显示上次读到的模型（#16）。
-            model = modelFor(key)?.model,
-            provider = modelFor(key)?.provider,
-            reasoningEffort = modelFor(key)?.reasoningEffort,
+            model = modelsCache.forSession(key)?.model,
+            provider = modelsCache.forSession(key)?.provider,
+            reasoningEffort = modelsCache.forSession(key)?.reasoningEffort,
             usage = if (sameSession) previous.usage else null,
             usageDetail = if (sameSession) previous.usageDetail else null,
             // 目录是 profile 级的，切会话不必重新拉。
