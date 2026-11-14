@@ -1230,7 +1230,7 @@ class ChatViewModel(
      */
     private fun trackShadow(key: SessionKey, event: GatewayEvent) {
         val snapshot = savedStates[key] ?: return
-        savedStates[key] = snapshot.applyShadowEvent(event.toChatStreamEvent(), nextId = { kind -> nextLocalId(kind) })
+        savedStates[key] = snapshot.reduceStreamEvent(event.toChatStreamEvent(), ::nextLocalId)
     }
 
 
@@ -1715,102 +1715,47 @@ class ChatViewModel(
     /** 思考增量直接合并（量小、不必和正文一样做 40ms 缓冲）。 */
     private fun appendReasoning(text: String) {
         if (text.isEmpty()) return
-        _state.update { current ->
-            val streaming = current.streaming ?: StreamingState(startedAt = Clock.System.now())
-            current.copy(streaming = streaming.appendReasoning(text))
-        }
+        reduceInPlace(ChatStreamEvent.ReasoningDelta(text))
     }
 
     /** `message.interim`：当前这段旁白封段，后续正文另起一段。 */
     private fun sealInterim(interim: ChatStreamEvent.Interim) {
         flushDeltaBuffer()
-        _state.update { current ->
-            val streaming = current.streaming ?: StreamingState(startedAt = Clock.System.now())
-            current.copy(streaming = streaming.sealInterim(interim.text))
-        }
+        reduceInPlace(interim)
     }
 
     private fun upsertTool(started: ChatStreamEvent.ToolStarted) {
         // 先把缓冲里的正文落盘，工具段才会排在它后面而不是把它吞掉。
         flushDeltaBuffer()
-        val id = LIVE_TOOL_PREFIX + started.toolId.ifBlank { nextLocalId("tool") }
-        val item = ChatItem.Tool(
-            id = id,
-            timestamp = Clock.System.now(),
-            name = started.name,
-            label = started.label,
-            arguments = started.arguments,
-            result = null,
-            failed = false,
-            pairedWithCall = true,
-            running = true,
-        )
-        _state.update { current ->
-            val streaming = current.streaming ?: StreamingState(startedAt = Clock.System.now())
-            current.copy(streaming = streaming.startTool(item))
-        }
+        reduceInPlace(started)
     }
 
     private fun finishTool(completed: ChatStreamEvent.ToolCompleted) {
-        _state.update { current ->
-            val streaming = current.streaming ?: return@update current
-            current.copy(
-                streaming = streaming.finishTool(
-                    toolId = LIVE_TOOL_PREFIX + completed.toolId,
-                    result = completed.result,
-                    failed = completed.failed,
-                ),
-            )
-        }
+        reduceInPlace(completed)
+    }
+
+    /**
+     * 把一条事件交给 [reduceStreamEvent] 应用到自己身上。
+     *
+     * 迁移前这里是 5 个各自手写变换的私有方法，与 `SessionShadow` 里那份平行实现漂移过
+     * （失败的提示只在一边补了）。现在变换只有一份，这里只负责"把它写进 state"。
+     */
+    private fun reduceInPlace(event: ChatStreamEvent) {
+        _state.update { current -> current.reduceStreamEvent(event, ::nextLocalId) }
     }
 
     private fun finishTurn(completed: ChatStreamEvent.Completed) {
         flushDeltaBuffer()
-        val streaming = _state.value.streaming
-        val timestamp = Clock.System.now()
-        val segments = streaming?.segments.orEmpty().withFinalText(completed.text)
-        // 后端跑完却什么都没给（实测 `response=0 chars`：上游断流后被吞掉）：
-        // 不提示的话界面上就是"发了消息、什么都没发生"（#14）。
-        val hasVisible = segments.any { segment ->
-            when (segment) {
-                is StreamSegment.Answer -> segment.text.isNotBlank()
-                is StreamSegment.Reasoning -> segment.text.isNotBlank()
-                is StreamSegment.Tool -> true
-            }
-        }
-        val additions = buildList {
-            addAll(segments.toChatItems(timestamp) { kind -> nextLocalId(kind) })
-            // 失败的一轮要在对话里留痕：只放顶部横幅的话，滚动回来看历史会以为"什么都没发生"。
-            if (completed.failed) {
-                val reason = completed.error?.takeIf { it.isNotBlank() }
-                    ?: completed.status?.takeIf { it.isNotBlank() }
-                    ?: "这一轮没有正常结束"
-                add(ChatItem.Notice(nextLocalId("notice"), timestamp, "本轮失败：$reason"))
-            } else if (!hasVisible) {
-                add(
-                    ChatItem.Notice(
-                        nextLocalId("notice"),
-                        timestamp,
-                        "本轮没有返回任何内容（上游可能中断），可以重试。",
-                    ),
-                )
-            }
-        }
-        _state.update { current ->
-            val merged = current.load.valueOrNull.orEmpty() + additions
-            current.copy(
-                load = Loadable.Ready(merged),
-                streaming = null,
-                sendError = if (completed.failed) {
-                    AppError.Server(0, completed.error ?: completed.status.orEmpty().ifBlank { "turn failed" })
-                } else {
-                    current.sendError
-                },
-            )
-        }
+        // 变换统一走 ChatReducer（与后台影子路径同一份实现）；这里只做副作用：
+        // 刷新上下文占用、发一次性事件。
+        val closingText = _state.value.streaming?.segments
+            ?.filterIsInstance<StreamSegment.Answer>()
+            ?.lastOrNull()
+            ?.text
+            .orEmpty()
+        reduceInPlace(completed)
         // 一轮结束后刷新上下文占用（不在流式路径里刷）。
         refreshUsage()
-        val closingText = segments.filterIsInstance<StreamSegment.Answer>().lastOrNull()?.text.orEmpty()
         emit(ChatEffect.TurnFinished(completed.failed, closingText.ifBlank { completed.text }))
     }
 

@@ -13,7 +13,7 @@ import kotlin.time.Instant
  * 切走期间的"影子状态"：别的会话的增量必须继续累积在它的快照上，
  * 否则切回时只能看到切走前那一帧（`待修复问题.md` 第 3 条，用户实测复现过两次）。
  */
-class SessionShadowTest {
+class BackgroundSessionStateTest {
 
     private val now = Instant.fromEpochSeconds(1_790_000_000)
 
@@ -23,7 +23,7 @@ class SessionShadowTest {
         var current = state
         var seq = 0
         events.forEach { event ->
-            current = current.applyShadowEvent(event, nextId = { kind -> "$kind#${seq++}" }, now = now)
+            current = current.reduceStreamEvent(event, nextId = { kind -> "$kind#${seq++}" }, now = now)
         }
         return current
     }
