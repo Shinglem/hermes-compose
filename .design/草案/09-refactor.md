@@ -924,18 +924,23 @@ component/chat/
 
 ### S8 · 收尾
 
-> **S4/S3 遗留的两块必须在这里做完**（否则会一直是"设计稿说删了、实际还在"的技术债）：
+> **S4/S3 遗留的两块 —— 已完成（2026-11-14）**，实际落地时顺序与下表略有调整：
 >
-> | 遗留项 | 现状 | 正确顺序 |
-> |---|---|---|
-> | `ChatViewModel` 的 5 个平行 map → `SessionRuntimeStore` | `SessionRuntimeStore` 已写好并有 10 个语义测试，但**生产代码零使用** | 先换 map（行为等价、可逐字段对照） |
-> | 删 `SessionShadow` / `SessionSwitchPlan` | 仍在，被 `ChatViewModel` 引用 23 处 | 换完 map 后，`applyShadowEvent` 变成 `ChatReducer` 的一个分支 |
-> | `ChatReducer` 吃三份流式实现 | 未做 | 最后并，一步一验证 |
-> | 审批/澄清 6 个待决表 → `PendingRequests`（S3 第 4 项） | 未做 | 与上一项一起（都在 `ChatViewModel` 内） |
+> | 遗留项 | 现状 |
+> |---|---|
+> | `ChatViewModel` 的平行 map → `SessionRuntimeStore` | ✅ 六个（`runtimeIds` / `generations` / `revisions` / `lastEventAt` / `cwds` / `dirtyKeys`）全部并入；store 从 `component/chat` 移到 `feature/chat`（否则 feature → component 倒挂）。**修正一处语义倒退**：`runtimeId` 必须是 `String?`，重连清成 null —— 保留旧值会让 `ensureRuntime` 短路、重连后不再 resume |
+> | `ChatReducer` 吃两份流式实现 | ✅ 新增 `ChatReducer.kt`（`reduceStreamEvent`），`ChatViewModel` 的 5 个前台方法与影子路径都走它；`ChatReducerTest` 9 条锁住判据 |
+> | 删 `SessionShadow` | ✅ `SessionShadow.kt` 只剩 `LIVE_TOOL_PREFIX`（改名 `LiveToolId.kt`）。**注意**：不能连"后台累积"一起删 —— 那要求 per-session Component，见下 |
+> | 删 `SessionSwitchPlan` | ⚠️ **没删，改归属**：它的决策依赖快照与 dirty，而这两者的语义由 `SessionSnapshotCache` 承载，所以并入该文件而不是删除。删掉"切回何时该补拉"的判据会让多会话流式丢失回归 |
+> | 审批/澄清 4 个待决表 → `PendingRequests` | ✅ `PendingRequest(frameId, requestId, decision)` + 两张内部索引；`takeDecisionByFrameId` 刻意不摘记录（撤回后等待方自己 finally 摘，提前摘会让 resolve 变空操作） |
+> | 模型真值两张 map | ✅ `SessionModelCache`（顺带把「传 null 保留旧值」这条判据独立可测） |
+> | 切走快照 + 上限 12 | ✅ `SessionSnapshotCache` |
 >
-> **顺序不能颠倒**：`SessionSwitchPlan` 的决策依赖 `savedStates` / `dirtyKeys`，
-> 而这两个的语义要由 `SessionRuntimeStore` 接住；先删计划再换 map 会把
-> "切回何时该补拉"的判断依据弄丢。
+> **`SessionShadow` 的"能否彻底删除"取决于一个新前提**：切走的会话能继续在后台推进，
+> 恰恰是因为 `ChatViewModel` 是**单一实例**、事件流只有一条。要做到"删掉影子状态"，
+> 必须先有 per-session Component（Decompose back stack 保证非栈顶不销毁），
+> 那是 S4 的完整形态，不在本轮范围。当前形态下影子状态是**必需的**，只是变换逻辑已统一。
+
 
 > **S5 遗留（过渡形态）必须在这里补完**（2026-11-14 登记）：
 >
@@ -1057,6 +1062,7 @@ component/chat/
 | 2026-11-14 | **S3（1–3 项）完成**：新增 `RestRepository` 基类（`withProfile`/`decodeList`/`sendAck`/`buildJson`），**10 个** Repository 全部继承、删掉各域私有副本；`decodeFromJsonElement` **170 → 37**（-78%），读写都改走 `getAs`/`sendAs`；新增 `ProfileScope` 值类型（`@JvmInline`，`None`/`All` 是两个值）+ 6 个归一化测试。**第 4 项（审批/澄清收敛成 `PendingRequests`）移到 S4** —— 它在 `ChatViewModel` 里与流式状态机深度交织（60+ 处），S4 重写 Chat 时一次做，现在单独抽会返工两次。666 测试全绿（+6） | S3 排期 |
 | 2026-11-14 | **S2 完成**（ADR-069）：7 个 settings 域全部迁成 Component + Store（Security/ProviderKeys/CustomEndpoint/MoA/ModelSettings/Profiles 用完整模板，Maintenance 用过渡形态 —— 6 域 60+ 动作，逐方法搬进 Reducer 风险过大，只把 `viewModelScope` 换成 Component scope 并包成 Component，拆 7 个 Store 排到 S8）。基座：`StoreAdapters` / `StoreHolder` / `RememberComponentContext`。每个域依赖自己的小 Gateway 接口（`SecurityConfigGateway` 等）让 Component 可在纯 JVM 测。删 7 个 `*ViewModel.kt` + 7 个 UI 页面，新增 `ui/settings/*Content.kt`，**-3634 行**。660 测试全绿（+57）。真机验 7 页数据全部正确回填 | S2 排期 |
 | 2026-11-14 | **S2 模板落地**（ADR-069）：Security 域迁成 Component + Store 样板。新增基座 `StoreAdapters`（Store→StateFlow / Label→Channel）、`StoreHolder`（Store + scope 装进 InstanceKeeper）、`RememberComponentContext`（S2 过渡）。Security 拆成 Contract / Reducer / Executor / StoreFactory / Component + `ui/settings/SecurityContent`，删旧 `SecurityState.kt` + `SecurityPage.kt`。**关键修正**：`Appear` 必须带 `connected` —— 第一版在 Component init 里直接读，实测先闪「连不上后端服务」（`REST /api/config failed` 早于 `gateway connected` 3 秒），迁移前 UI 的 `LaunchedEffect(isConnected)` 就是这个约束。真机验证审批页数据正确回填。604 测试全绿（+21） | S2 排期 |
+| 2026-11-14 | **S8 Chat 域收尾（阶段二）**：`ChatViewModel` 2012 → 1917 行，但更重要的是把四类"平行簿记"各自收成一个类。① 六个平行 map → `SessionRuntimeStore`（**修正语义倒退**：`runtimeId` 改 `String?`，重连清 null；保留会让 `ensureRuntime` 短路、重连后不再 resume —— 这正是「重连后审批/clarify 再也收不到」的根因）；② 两份流式实现 → `ChatReducer.reduceStreamEvent`（漂移点：前台补「本轮没有返回任何内容」而影子不补，合并后统一为"只在本轮本地跑过时才补"）；③ 4 张待决表 → `PendingRequests`；④ 模型真值 → `SessionModelCache`、切走快照 → `SessionSnapshotCache`（含 `switchPlan`）。删 `SessionShadow`（只剩工具 id 前缀，改名 `LiveToolId.kt`）；`SessionSwitchPlan.kt` 并入快照缓存。**.kt 测试 736 → 760（+24）**。真机验证：启动 / 会话切换（快照恢复）/ 模型 pill / 完整流式（思考块 → 回答 → 用量刷新）/ 能力页 / 定时任务全部正常 | 用户「继续」 |
 | 2026-11-14 | **S8 文件规模清理（阶段一）**：单文件 >600 行从 **10 个降到 1 个**（只剩 `ChatViewModel` 2012 行）。① 验收口径 #13 完成：删 `FilePicker.kt` / `FilePicker.desktop.kt` 与 `FileDrop.kt` 的 3 个 `expect`，5 个选择器统一到 `commonMain/platform/FileDialogs.kt`（FileKit 本身就是 multiplatform，再包一层只是多一套同签名声明）；② `SessionListPane` 791 → 4 文件（Pane/Rows/Sections/Dialogs）；③ `CronPane` 646 → +`CronWidgets`、`ChatPane` 688 → +`ChatPaneParts`；④ `SettingsPane` 722 → 564 + `SettingsPaneParts` + `SettingsDetailScope`；⑤ `MaintenanceState` 731 → 453 + `MaintenanceMemoryController` + `MaintenanceOpsController`（12 个转发方法保住对外形状，6 个 UI 页面零改动）；⑥ `ChatRepository` 708 → 566 + `ChatModels`；⑦ `AppShell` 1130 → 582：装配段进 `AppShellDeps`（32 个域对象）、三个 mode 分支各成一文件、`remind`/`remindApproval` → `ShellNotifier`、六个重复 effect 合并。**未做**：`ChatViewModel` 的 `SessionRuntimeStore` 接线 + `ChatReducer`（原计划的 S4 欠账，需单独一轮）。真机验证（2026-11-14 21:2x）：启动 → 会话模式 → 设置页 → 记忆页（MemoryController 数据正确回填 2200/1375 + 两个内置文件）→ 能力页（113 技能）→ 定时任务（空态 + 新建表单 + 蓝图菜单 16 项）全部正常。736 测试全绿 | 用户「按你推荐的方式做」（先 #13 + 拆中等文件，ChatViewModel 单独啃） |
 
 ---
