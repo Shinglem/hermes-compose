@@ -1029,7 +1029,8 @@ component/chat/
 15. **真机六项**：单实例（含 `--silent` 激活）/ 提权重启 / 开机自启 / 托盘常驻 /
     触摸滚动 / 中文 IME 全过
 16. **通知栈零改动**：`ShortcutScan` / `ShortcutAumidWriter` / `ProcessAumid` /
-    `NativeNotifications.desktop.kt` 的公开行为不变（仅允许搬家，逻辑不改）
+    `NativeNotifications.desktop.kt` 的公开行为不变（仅允许搬家，逻辑不改）。
+    ✅ **已机械验证**（2026-11-15）：四个文件与搬家前（`e5732e7^`）逐行对比，**去掉 package/import 后完全一致**
 17. 提权进程下 FileKit 对话框能弹出（若不过则回退 `expect/actual`，并在 §2.8 记录）
 18. **测试数不减**：`@Test` ≥ **573**；减少的用例必须逐条说明是搬家而非删除（见 14 篇 §2）
 19. **功能对齐**：v0.5.8 的全部功能域手工清单全过（14 篇 §6.3，共 16 行覆盖会话/对话/输入/终端/能力/设置/通知/子代理/后端/命令面板/快捷键）
