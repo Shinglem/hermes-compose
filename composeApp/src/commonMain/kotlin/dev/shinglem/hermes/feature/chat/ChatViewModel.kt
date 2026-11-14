@@ -1506,6 +1506,41 @@ class ChatViewModel(
     }
 
     private suspend fun handleGatewayEvent(event: GatewayEvent) {
+        trackEventForWatchdog(event)
+        val key = _state.value.key ?: return
+        // 别的会话 / 别的 profile：只标记"有新内容"，切回时补拉；绝不写当前 UI。
+        val otherKey = event.sessionId
+            ?.let { sid -> runtimes.byRuntimeId(sid) }
+            ?.takeIf { it != key }
+        if (otherKey != null) {
+            trackOtherSessionEvent(otherKey, event)
+            return
+        }
+        val runtimeId = runtimes[key]?.runtimeId ?: return
+        if (!ownedByCurrentRuntime(event, runtimeId)) return
+        if (handlePendingPromptOrCancel(event, key, runtimeId)) return
+        Log.debug("chat event ${event.type} sid=${event.sessionId}")
+
+        // 后台进程的输出增量不进对话流，直接接到任务行上（详情里能实时看）。
+        if (event.type == GatewayEventTypes.AGENT_TERMINAL_OUTPUT) {
+            val payload = event.payload as? JsonObject
+            appendBackgroundOutput(
+                processId = (payload?.get("process_id") as? JsonPrimitive)?.contentOrNull.orEmpty(),
+                chunk = (payload?.get("chunk") as? JsonPrimitive)?.contentOrNull.orEmpty(),
+            )
+            return
+        }
+
+        applyStreamEvent(event)
+    }
+
+    /**
+     * 前置簿记：跟上执行代 + 刷新看门狗时刻。
+     *
+     * 两条都必须**在判定归属之前**做 —— 事件可能属于别的会话，但它的 fence 与活跃度
+     * 仍然要更新（否则切回那个会话时拿的是过期凭据 → `4001 stale_generation`）。
+     */
+    private fun trackEventForWatchdog(event: GatewayEvent) {
         // 每一帧都带着当前执行代：先跟上它，再决定这帧要不要渲染。
         // 不更新的话，"停止 / 纠偏 / 审批"会拿着上一代的凭据去撞 `4001 stale_generation`。
         event.executionGeneration?.let { gen ->
@@ -1530,36 +1565,46 @@ class ChatViewModel(
                     }
                 }
             }
-        val key = _state.value.key ?: return
-        // 别的会话 / 别的 profile：只标记"有新内容"，切回时补拉；绝不写当前 UI。
-        val otherKey = event.sessionId
-            ?.let { sid -> runtimes.byRuntimeId(sid) }
-            ?.takeIf { it != key }
-        if (otherKey != null) {
-            // 「后端在等人」不是"这个会话有新内容"：用户此刻可能在别的会话里，
-            // 也必须弹提醒，否则要切回来才知道（实测：切走后就再也不弹）。
-            notifyCrossSessionPending(otherKey, event)
-            if (isContentEvent(event.type)) {
-                runtimes.markDirty(otherKey)
-                trackShadow(otherKey, event)
-                Log.debug("chat event tracked ${event.type} for ${otherKey.sessionId}")
-            }
-            return
+    }
+
+    /** 别的会话的事件：只累积进它的影子状态，不动当前 UI。 */
+    private fun trackOtherSessionEvent(otherKey: SessionKey, event: GatewayEvent) {
+        // 「后端在等人」不是"这个会话有新内容"：用户此刻可能在别的会话里，
+        // 也必须弹提醒，否则要切回来才知道（实测：切走后就再也不弹）。
+        notifyCrossSessionPending(otherKey, event)
+        if (isContentEvent(event.type)) {
+            runtimes.markDirty(otherKey)
+            trackShadow(otherKey, event)
+            Log.debug("chat event tracked ${event.type} for ${otherKey.sessionId}")
         }
-        val runtimeId = runtimes[key]?.runtimeId ?: return
-        // 认不出归属的事件（sessionId 为空，或不是本端已知的 runtime）按原规则过滤。
-        if (event.sessionId != null && event.sessionId != runtimeId) {
-            // 重连时会清空 runtimeIds，别的会话的 runtime 映射随之丢失 —— 这时它的审批事件
-            // 会落到这里被丢掉。审批 / 提问是"有人在等"，漏掉就是静默卡死，至少留下可查的记录。
-            if (event.type == GatewayEventTypes.APPROVAL_REQUEST ||
-                event.type == GatewayEventTypes.CLARIFY_REQUEST
-            ) {
-                Log.warn("pending ${event.type} dropped: unknown runtime ${event.sessionId} (current=$runtimeId)")
-            } else {
-                Log.debug("chat event ignored ${event.type} sid=${event.sessionId} (current=$runtimeId)")
-            }
-            return
+    }
+
+    /**
+     * 归属判定：`sessionId` 为空（认不出）或与本端当前 runtime 不符的事件要不要丢。
+     *
+     * @return true = 属于当前会话，继续处理。
+     */
+    private fun ownedByCurrentRuntime(event: GatewayEvent, runtimeId: String): Boolean {
+        if (event.sessionId == null || event.sessionId == runtimeId) return true
+        // 重连时会清掉 runtimeId，别的会话的 runtime 映射随之丢失 —— 这时它的审批事件
+        // 会落到这里被丢掉。审批 / 提问是"有人在等"，漏掉就是静默卡死，至少留下可查的记录。
+        if (event.type == GatewayEventTypes.APPROVAL_REQUEST ||
+            event.type == GatewayEventTypes.CLARIFY_REQUEST
+        ) {
+            Log.warn("pending ${event.type} dropped: unknown runtime ${event.sessionId} (current=$runtimeId)")
+        } else {
+            Log.debug("chat event ignored ${event.type} sid=${event.sessionId} (current=$runtimeId)")
         }
+        return false
+    }
+
+    /**
+     * 三条**不用走流式状态机**的特殊事件：审批 / 澄清请求、撤回、后台进程输出之外的
+     * gateway 路线专有形态。
+     *
+     * @return true = 已处理，调用方应停止继续。
+     */
+    private fun handlePendingPromptOrCancel(event: GatewayEvent, key: SessionKey, runtimeId: String): Boolean {
         // 后端在等人：gateway 路线**只发事件**，不发 server→client 请求帧。
         // 漏了这两条，卡片永远不弹（只有刷新才从快照里补出来 —— 实测踩过）。
         if (event.type == GatewayEventTypes.APPROVAL_REQUEST ||
@@ -1570,7 +1615,7 @@ class ChatViewModel(
                     Log.info("pending prompt from event: kind=${prompt.kind} id=${prompt.promptId}")
                 }
             }
-            return
+            return true
         }
         if (event.type == GatewayEventTypes.REQUEST_CANCEL) {
             val payload = event.payload as? JsonObject
@@ -1581,20 +1626,24 @@ class ChatViewModel(
                 approvalRequests.completeByRequestId(id, CHOICE_DENY)
                 Log.info("request.cancel method=$method id=$id")
             }
-            return
+            return true
         }
-        Log.debug("chat event ${event.type} sid=${event.sessionId}")
+        return false
+    }
 
-        // 后台进程的输出增量不进对话流，直接接到任务行上（详情里能实时看）。
-        if (event.type == GatewayEventTypes.AGENT_TERMINAL_OUTPUT) {
-            val payload = event.payload as? JsonObject
-            appendBackgroundOutput(
-                processId = (payload?.get("process_id") as? JsonPrimitive)?.contentOrNull.orEmpty(),
-                chunk = (payload?.get("chunk") as? JsonPrimitive)?.contentOrNull.orEmpty(),
-            )
-            return
+    private fun appendDelta(text: String) {
+        if (text.isEmpty()) return
+        deltaBuffer.append(text)
+        if (flushJob?.isActive == true) return
+        flushJob = scope.launch {
+            delay(STREAM_FLUSH_INTERVAL_MS)
+            flushDeltaBuffer()
         }
+    }
 
+
+    /** 把一条流式事件分派给对应的状态变换（原 `handleGatewayEvent` 的 when 分支）。 */
+    private fun applyStreamEvent(event: GatewayEvent) {
         when (val parsed = event.toChatStreamEvent()) {
             is ChatStreamEvent.Delta -> appendDelta(parsed.text)
 
@@ -1640,16 +1689,6 @@ class ChatViewModel(
             is ChatStreamEvent.TitleChanged,
             ChatStreamEvent.Ignored,
             -> Unit
-        }
-    }
-
-    private fun appendDelta(text: String) {
-        if (text.isEmpty()) return
-        deltaBuffer.append(text)
-        if (flushJob?.isActive == true) return
-        flushJob = scope.launch {
-            delay(STREAM_FLUSH_INTERVAL_MS)
-            flushDeltaBuffer()
         }
     }
 
