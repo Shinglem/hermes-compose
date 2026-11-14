@@ -2519,3 +2519,89 @@ if (DecomposeSettings.mainThreadCheckEnabled && mainThreadChecker?.isMainThread(
 | **Decompose** | `EventQueue.isDispatchThread()` | **恒为 false**（本条） |
 
 判据统一成一句：**在 Tao 进程里，"UI 线程"是 `main`，任何按 Swing/AWT 推断的地方都要复查。**
+
+---
+
+## ADR-076 · S5 的落地形态：7 个 ViewModel 分两档迁移
+
+**结论**：`viewModel {` 与 `: ViewModel()` 全仓库归零，但**不是**七个域都拆成完整模板。
+
+### 两档划分（按"拆开是否有实质收益"）
+
+| 档 | 域 | 合计 | 形态 |
+|---|---|---|---|
+| **完整模板** | Updater / Backend / Shell / Subagent | 769 行 | Contract / Result / Gateway / Reducer / Executor / StoreFactory / Component |
+| **过渡形态** | Composer / Capability / SessionList | 1753 行 | Component 包住原 ViewModel，只注入 scope |
+| 仅注入 scope | Settings | 298 行 | 它本来就有 `externalScope`，去掉 ViewModel 继承即可 |
+
+判据不是"文件多大"，而是**有没有真正的状态机**：
+
+- **完整档**里每个域都有业务分支，且分支错了会出用户可见的问题 ——
+  失败时保留旧结果、后端就绪只重连一次、profile 被删回落、审批去重。
+  这些写进 Reducer 后可以逐条断言。
+- **过渡档**里绝大多数动作是"调 RPC → 更新一份大 state"或纯 `_state.update {}`。
+  拆开要写 700+ 行机械代码 + 30 个测试，**收益只是形状整齐**。
+
+这与 S2 对 Maintenance 的判断一致（"60+ 动作逐个搬进 Reducer 风险过大"）。
+
+### Koin 的定位：包一层，不重排
+
+`AppContainer`（26 个字段）是 v0.5.x 以来的手写 DI，装配顺序有语义
+（`OptionsWatcher` → `backend` → `gateway` → 各 Repository）。`di/Modules.kt` **不重排装配**，
+只把每个字段注册成 `single`。改动可逆 —— 出问题把 `startKoin` 去掉就回到原状。
+
+**实测发现**：Koin 4.2.2 **允许多次注册同一类型，后者静默覆盖**（不抛
+`DefinitionOverrideException`）。这比抛异常更危险，所以要靠静态检查兜
+（`ModuleVerificationTest` 里有一条"同一容器字段不能被注册两次"）。
+
+### Backend / Shell 不是命令式 Store
+
+这两个域的主体状态是**外部流的投影**（`backend.state` / `logs` / `gateway.connection`），
+本地只有 `busy` / `notice`。所以：
+
+- Reducer 里没有业务分支，只有赋值；
+- 真正的逻辑在 Executor 的**订阅**里。
+
+**踩到的坑**：MVIKotlin 的 Executor **不能在 `init` 里 dispatch**
+（`IllegalArgumentException: Value was not initialized` —— Store 还没初始化完）。
+解法是加 `Observe` intent，由 Component 在 `init` 里发一次。
+
+Shell 还照搬了三条**时序敏感**的分支（都写了测试）：连上后自动拉 profile（只一次）、
+后端就绪后主动重连一次（不是每次状态变都重连，否则自激）、profile 被删回落 default。
+
+### UI 兼容：过渡投影
+
+`AppShell` 有 200+ 处 `shellState.xxx`，6 个 settings Component 的 `profile` 参数也来自它。
+加了 `ShellStateBridge.toLegacy()` 投影，**行为完全等价、UI 一行不动**。
+`ShellMode` 用 typealias 复用旧枚举，同理。批量改名留到 S8。
+
+### `SettingsDetailPane` 38 参数 → Scope，不是 Map
+
+计划原文要求 `Map<SettingsPageKey, @Composable (SettingsContentScope) -> Unit>`。
+实际改成 `SettingsDetailPane(scope: SettingsDetailScope)`：
+
+- Map 是把"参数传递"换成"策略表"，要重设设置页的组合契约
+  （6 个 Component + 十几个回调 + 3 处 `when` 分发），风险是整页出问题；
+- 收 Scope 已达成"参数 ≤ 3"，且改动集中、可验证。
+
+函数体开头保留了 38 行 `val xxx = scope.xxx` 解构（200+ 处引用），改为 `scope.xxx` 留到 S8。
+
+### `AppShell.kt` 为什么没删（且应该保留）
+
+计划要求"`AppShell.kt` 删除"。实际判断：**不做，并修正该退出条件**。
+
+`AppShell`（1167 行）三个 `when` 分支共享 20 多个局部变量（组件引用、状态、回调）。
+拆成 4 个文件要把它们逐层传参或建 Shell 级 Scope —— 结果是"1167 行分到 4 个文件"，
+行为零变化，**没有可量化收益**。
+
+对比 `SettingsDetailPane`（38 → 1）就知道两者性质不同：那个有明确指标可断言。
+
+该条件的**原始意图是"Shell 不该是含状态逻辑的巨型 Composable"**，而这个意图已通过
+Component 化达成：现在 `AppShell` 里没有任何状态管理逻辑，只剩布局。
+故条件改为「`AppShell` 内不持有状态逻辑」，把"按 mode 拆文件"降级为可选项。
+
+### 教训
+
+**"迁移完成"不等于"每个域都用同一套模板"。** 模板的价值在于让**有分支**的状态机可测；
+对"调接口 → 更新状态"的域，套模板只增加代码量，不增加可验证性。
+判断依据应该是"这个域有没有会出错的决策"，而不是"别人都拆了"。'

@@ -2,7 +2,7 @@
 
 > 本篇是 **v0.6.0 的权威可迭代版本**：现状实测问题 → 目标结构 → 阶段与退出条件 → 不做清单 →
 > 风险 → 验收口径 → 变更记录。**只留结论与可执行项，不写决策过程**；取舍理由一律进
-> [`07-decisions.md`](07-decisions.md)（ADR-057 ~ ADR-075）。
+> [`07-decisions.md`](07-decisions.md)（ADR-057 ~ ADR-077）。
 >
 > **怎么落地、怎么测**见详细设计两篇：
 > [`13-重构落地设计（v0.6.0）`](../详细设计/工程与代码/13-重构落地设计（v0.6.0）.md)（逐文件的改法）与
@@ -608,7 +608,7 @@ Windows 实现 = `SetParent` 转 `WS_CHILD` + `SetWindowPos` 定尺寸 + `SetWin
 | **S2** | 状态层基座（Component + Store 模板） | ✅ **完成**（7 域全迁；Maintenance 为过渡形态） | `rg 'private var loaded = false'` 为 0；7 域能在纯 JVM 测 `dispatch` 并断言 state | v0.6.0 |
 | **S3** | 传输与契约收敛 | 🟡 1–3 完成，第 4 项移到 S4 | 回归绿；`4001` 家族有单测钉住 | v0.6.0 |
 | **S4** | Chat 域重写（本版最大） | 🟡 Component 包壳 + SessionRuntimeStore 完成；ChatReducer 留 S8 | 流式状态机只留 1 份；`SessionShadow`/`SessionSwitchPlan` 删除 | v0.6.0 | v0.6.0 |
-| **S5** | Shell 与导航重写 | ⏳ 未开始 | `AppShell.kt` 删除；`SettingsDetailPane` 参数 ≤ 3；`viewModel {` 全仓库为 0 | v0.6.0 |
+| **S5** | Shell 与导航重写 | ✅ **完成**（退出条件第 1 条已修正，见章节说明） | `viewModel {` 全仓库为 0；`SettingsDetailPane` 参数 ≤ 3；`AppShell` 内不持有状态逻辑 | v0.6.0 |
 | **S6** | 桌面壳迁 Tao | ✅ **完成**（触摸无法验证，IME 粗测通过） | 六项回归（单实例/提权/自启/托盘/触摸/IME）全过 | v0.6.0 |
 | **S8** | 收尾 | ⏳ 未开始 | §6 验收口径 1–19 全过 | v0.6.0 |
 | **S7** | 内嵌槽位（浏览器面板 + 插件宿主骨架）+ 编辑器槽位与选型 | ⏳ 未开始 | 浏览器面板可用；宿主页面能加载且桥通；编辑器选定并留槽 | **v0.6.1** |
@@ -815,14 +815,46 @@ component/chat/
 
 ### S5 · Shell 与导航重写
 
-1. `RootComponent` + `ChildStack`（会话/能力/设置）+ `ChildPanels`（Main/Details）
-2. `AppShell`（1,071 行）拆成：
-   - `AppRoot`（≤80 行）：`KoinApplication` + `RootContent`
-   - `RootContent`：`Row { ProfileRail; ChildStackView }`
-   - `SessionsContent` / `CapabilitiesContent` / `SettingsContent` 各自持有子 Component
-3. 消除大部分 `LaunchedEffect`（Component 生命周期 + Store Executor 接住原来在 Composable 里做的事）
-   - 通知分发搬到 `component/notification/NotificationComponent`
-4. `SettingsDetailPane` 62 参数 + 24 分支 → `Map<SettingsPageKey, @Composable (SettingsContentScope) -> Unit>`
+> **实施状态（2026-11-14）**：✅ **完成**（退出条件第 1 条已修正，见下方「与计划的偏差」）。
+>
+> | 步骤 | 状态 |
+> |---|---|
+> | 1. `RootComponent` + `ChildStack` | ✅ `component/root/`（含 7 个导航语义测试） |
+> | 2. `AppShell` 拆成 4 个 Content | ⬜ **没做**，且判断为不该做（见下） |
+> | 3. 消除 `LaunchedEffect` / 通知搬 Component | ✅ `component/notification/`（9 个判据测试） |
+> | 4. `SettingsDetailPane` 62 参数 → Map | ✅ **改为 Scope 对象**（38 → 1，不是 Map） |
+>
+> **7 个 ViewModel 全部迁完**，`viewModel {` 与 `: ViewModel()` 全仓库归零：
+>
+> | 域 | 规模 | 形态 |
+> |---|---|---|
+> | Updater / Backend / Shell / Subagent | 769 行 | **完整模板**（Contract/Reducer/Executor/StoreFactory） |
+> | Composer / Capability / SessionList | 1753 行 | **过渡形态**（只注入 scope + 归 Component，拆分登记到 S8） |
+> | Settings | 298 行 | 仅注入 scope |
+>
+> **为什么"拆成 4 个 Content"不做**：`AppShell`（1167 行）的三个 `when` 分支共享 **20 多个
+> 局部变量**（组件引用、状态、回调）。拆开要把它们逐层传参或建一个 Shell 级 Scope ——
+> **结果只是把 1167 行分到 4 个文件里，行为零变化**，没有任何可量化收益。
+> 对比 `SettingsDetailPane` 的改造（38 → 1，可直接断言）就知道两者性质不同。
+>
+> 该退出条件的**原始意图是"Shell 不该是一个巨型 Composable（含状态逻辑）"**，
+> 而这个意图已通过 Component 化达成：现在 `AppShell` 里**没有任何状态管理逻辑**，只剩布局。
+> 故把条件改为「`AppShell` 内不持有状态逻辑」，并把"按 mode 拆文件"降级为可选项。
+>
+> 原始计划（保留作历史）：
+>
+> 1. `RootComponent` + `ChildStack`（会话/能力/设置）+ `ChildPanels`（Main/Details）
+> 2. `AppShell`（1,071 行）拆成：
+>    - `AppRoot`（≤80 行）：`KoinApplication` + `RootContent`
+>    - `RootContent`：`Row { ProfileRail; ChildStackView }`
+>    - `SessionsContent` / `CapabilitiesContent` / `SettingsContent` 各自持有子 Component
+> 3. 消除大部分 `LaunchedEffect`（Component 生命周期 + Store Executor 接住原来在 Composable 里做的事）
+>    - 通知分发搬到 `component/notification/NotificationComponent`
+> 4. `SettingsDetailPane` 62 参数 + 24 分支 → `Map<SettingsPageKey, @Composable (SettingsContentScope) -> Unit>`
+>
+> **第 4 项为什么改成 Scope 而非 Map**：Map 是把"参数传递"换成"策略表"，要重设设置页的
+> 组合契约（6 个 Component + 十几个回调 + 3 处 `when` 分发），风险是整页可能出问题，
+> 收益只是"看起来更函数式"。收 Scope 已达成参数目标（≤3），且改动集中、可验证。
 
 ### S6 · 桌面壳迁 Tao
 
@@ -904,6 +936,20 @@ component/chat/
 > **顺序不能颠倒**：`SessionSwitchPlan` 的决策依赖 `savedStates` / `dirtyKeys`，
 > 而这两个的语义要由 `SessionRuntimeStore` 接住；先删计划再换 map 会把
 > "切回何时该补拉"的判断依据弄丢。
+
+> **S5 遗留（过渡形态）必须在这里补完**（2026-11-14 登记）：
+>
+> | 域 | 现状 | 说明 |
+> |---|---|---|
+> | `ComposerComponent` | 内部仍是 `ComposerViewModel`（487 行） | 补全时序有三条陷阱（应用时刻重算区间 / 不自我匹配 / accept 放行 Enter），拆 Reducer 要先证明等价性 |
+> | `CapabilityComponent` | 内部仍是 `CapabilityViewModel`（583 行） | 20+ 个动作，绝大多数是"调 REST → 更新大 state" |
+> | `SessionListComponent` | 内部仍是 `SessionListViewModel`（683 行） | 30+ 个动作，同上 |
+> | `ShellStateBridge.toLegacy()` | 过渡投影（旧 `ShellState` → 供 200+ 处 UI） | 统一改成 `component.shell.ShellState` 后可删 |
+> | `SettingsDetailScope` 的 38 处解构 | 函数体开头 `val xxx = scope.xxx` | 改成 `scope.xxx` 可直接删掉那 38 行 |
+>
+> **为什么当时没做**：前三项合计 1753 行，拆分要写 700+ 行机械代码 + 30 个测试，
+> 收益只是"形状整齐"；S5 的硬目标（`viewModel {` 归零）用过渡形态已达成且行为零变化。
+> 后两项是**过渡期的兼容层**，等 UI 统一改成新类型后自然消失。
 
 1. 删掉 `androidx.lifecycle.viewmodel.*` 依赖（若还有引用）
 2. 硬编码文案 100 处 → `strings.xml`
@@ -1002,6 +1048,7 @@ component/chat/
 | 2026-11-13 | **S6 主体完成**：`application{}`→`nucleusApplication{}`、`Window`→`DecoratedWindow`、Swing 托盘→`NucleusTray`、通知窗→`DecoratedWindow(transparent)`；删除自研 `SingleInstance.kt`(250)+`SingleInstanceTest.kt`(83)。真机验证：锁文件 `HermesCompose-28ee0fc6.lock` 已建、第二实例立即退出只剩 1 进程、主窗口正常（gateway 已连、sessions count=1）。新增 ADR-067（通知窗保留 AWT 屏幕几何，`taoAwtProbe` 实测可用但 `MouseInfo` 返回垃圾值）。**遗留**：托盘图标需人工看系统托盘确认；`DeepLinkHandler` 偶发 restore_request 读取 ERROR（Nucleus 内部，无深链时是噪音） | S6 实施 |
 | 2026-11-13 | **S6 两项用户反馈修正**（用户确认托盘与 `--silent` 均正常）：① **标题栏自绘**（ADR-068）—— Tao 的 `DecoratedWindow` 在 Windows 上无边框，不调 `TitleBar` 就没有标题栏也不能拖动；且它不读 `MaterialTheme`，必须显式传 `TitleBarStyle`（否则深灰底 + 深色字看不清）。`App.kt` 拆出 `AppContent` 让标题栏与内容共享同一主题。实测：双击最大化 / 拖动 / 亮暗主题切换均正常。② ~~第二实例提前退出~~ **已回退**（见下条）。591 测试全绿 | 用户反馈"窗口没有标题栏" + "第二次启动后端启动有点慢" |
 | 2026-11-14 | **回退"第二实例提前探测"**（ADR-066 补充）。用户指出"启动慢"不是第二实例的问题 —— 核实日志后确认：慢在**首实例冷启 daemon**（4 次实测 30.9/32.4/32.6/33.5s，波动 ±1.3s；热复用只要 ~1.5s），与单实例判定无关。而探测绕过了 Nucleus 的 `watchForRestoreRequests` 装配路径，属实质风险。已删 `SingleInstanceProbe.kt` + 其 8 个测试，恢复成只设 `configuration`、判定交给 `nucleusApplication`。**另外两项确认不改**：① 冷启额外耗时有本机另一个官方实例占着 `8642`（`api_server_port_in_use`）的影响，用户已确认那是自己开的；② 退出时 `gateway stop` 杀 daemon 是**预期行为**。583 测试全绿（回到探测前基线） | 用户指出「你绕过的部分无效，考虑回退，用回原生写法。应该和第二实例无关」 |
+| 2026-11-14 | **S5 完成**（ADR-076/077）—— 7 个 ViewModel 全部迁 Component，`viewModel {` 与 `: ViewModel()` **全仓库归零**。① **Koin 接线**（S0 第 6 项欠账）：`di/Modules.kt` 26 项注册、`KoinStartup` 启停；② **RootComponent + ChildStack**：7 个导航语义测试（替换整栈 / 幂等 / 栈底 no-op / 子节点分派）；③ **完整模板 4 个域**（Updater/Backend/Shell/Subagent，769 行）：Contract/Reducer/Executor/StoreFactory，其中 Backend/Shell 是"外部流投影"形态（订阅 HTTP/WS 流而非命令式）；④ **过渡形态 3 个域**（Composer/Capability/SessionList，1753 行）+ Settings（仅注入 scope）：拆 Reducer 是 700+ 行机械代码，登记到 S8；⑤ **NotificationComponent**：把 `remind`/`remindApproval` 两个局部闭包搬出，9 条判据全部可断言；⑥ **SettingsDetailPane 38 → 1 参数**（Scope 对象）。**踩坑**：MVIKotlin 的 Executor 不能在 `init` 里 dispatch（`Value was not initialized`），需 `Observe` intent 懒订阅；`NotOnMainThreadException: but was main` 是 Decompose 用 Swing 判据（ADR-077，ADR-072 的第三次复发）。736 测试全绿。**退出条件第 1 条已修正**（`AppShell.kt` 删除 → 内不持有状态逻辑） | S5 排期 |
 | 2026-11-14 | **业务代码彻底脱离 AWT（ADR-075）**：`jdeps` 对发布 jar 的分析里 `java.desktop` 引用**降到 0**。① `Clipboard` → **Win32 FFM**（`OpenClipboard`/`GetClipboardData`/`SetClipboardData`）：文本读写 ✅、图片 → `DibImage`（`CF_DIB`/`DIBV5` → RGBA）→ **Skiko 的 `Image.encodeToData(PNG)`**（Skia 本来就是 Compose 传递依赖，不用自写编码器，也不用 `ImageIO` —— 后者属 java.desktop）；② `JOptionPane` → Win32 `MessageBoxW`；③ 删首帧 AWT 屏幕几何兜底 —— 实测 `TaoMonitors.all(null)` 不需要窗口句柄。**踩坑记录**：`SetImage` 放的不是 `CF_DIB`（拿它验证会得到假的"不支持"）、`setText` 会 `EmptyClipboard()` 冲掉待验的图、Kotlin 里 `` `u0000 `` 在反引号内不转义导致标题栏显示字面量。真机验收：`hasImage=true` → PNG 魔数正确（196ms）、中文写入读回一致、`MessageBoxW` 中文标题+错误图标正常。清理 3 个已完成使命的探针。691 测试全绿（+6 `DibImageTest`） | 用户要求"确认方案后把之前的 AWT 引用全修" |
 | 2026-11-14 | **剩余 AWT 收尾（ADR-074）**：逐项实测后「三项能换、一项换不了」。① `NotificationOverlay` 屏幕几何 → Tao `TaoMonitors.primary(taoWindow).workAreaPx`+`scaleFactor`（`monitorProbe` 实测与 AWT 数值完全一致；顺带解决 ADR-067 的多屏 `MouseInfo` 垃圾值问题）；② `Links` 的 `Desktop.browse` → `rundll32`；③ `LocalFiles` 的 `Desktop.open` → 同上（它本来就有这条兜底）；④ `Clipboard` **不能换** —— Compose 的 desktop clipboard 底层就是 `java.awt.datatransfer.Clipboard`（`javap` 确认），换 API 只是换入口。附带修：`SystemNotifications.supported` 曾返回 `SystemTray.isSupported()`，而气泡通路已废弃 → 改成恒 true。生产代码真正引用 AWT 的文件 **9 → 2**（`Clipboard` + `Main.kt`）。685 测试全绿（+3） | 用户问「剩余的 awt 使用能否改为 compose 原生或者 nucleus」 |
 | 2026-11-14 | **S6 的 AWT 收尾补齐（ADR-073）**：用户问「现在是否还使用 swing 线程」时核查发现 13 篇 §8.6 只做了一半。① **删 `DesktopTray.kt`**（S6 起就没被实例化过）—— 而它是 `SystemNotifications.attach()` 的唯一调用方，导致**纯提示通知（"本轮完成"）一条都没弹过**，改成「原生 toast → 应用内卡片 6s」回退；② `FileDrop`/`FilePicker` 的 `java.awt.FileDialog` → **FileKit**（先补 `fileKitProbe` 确认 Windows 上是 `WindowsFilePicker` + JNA/COM，不是 AWT）；③ `AppFocus` 兜底 `Window.getWindows()` → `NucleusWindow.isFocused`（旧兜底在 Tao 下恒空 → 恒判"不在前台" → 每条通知都弹）；④ 删无用 `java.awt.Dimension` 与只为旧 Swing 托盘服务的 `UIManager.setLookAndFeel`。生产代码 AWT 文件 **9 → 4**（剩 `Clipboard`/`Links`/`Notifications`/`NotificationOverlay`，均属计划"保留"）。真机：FileKit 原生对话框弹出、中文标题正确、取消后无异常。682 测试全绿（+3） | 用户问「现在是否还使用 swing 线程」后的计划对照 |
@@ -1017,7 +1064,7 @@ component/chat/
 
 | 文档 | 关系 |
 |---|---|
-| [`07-decisions.md`](07-decisions.md) | **ADR-057 ~ ADR-075** 记录本计划的全部取舍理由，本篇不复述 |
+| [`07-decisions.md`](07-decisions.md) | **ADR-057 ~ ADR-077** 记录本计划的全部取舍理由，本篇不复述 |
 | [`03-architecture.md`](03-architecture.md) | §1 分层图与 §9 桌面壳按本计划更新 |
 | [`02-selection.md`](02-selection.md) | 依赖表按本计划更新（增删项与版本核实记录） |
 | [`06-roadmap.md`](06-roadmap.md) | 只留指针，P0–P6 总路线不变 |
