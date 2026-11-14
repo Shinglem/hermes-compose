@@ -863,3 +863,16 @@ tasks.register<JavaExec>("taoAwtProbe") {
     jvmArgs("--enable-native-access=ALL-UNNAMED", "-Dfile.encoding=UTF-8")
     hermesRtDir?.let { dir -> setExecutable("$dir\\bin\\java.exe") }
 }
+
+// FileKit 能力探针（S0 第 8 项欠账）：验它在 Tao 进程里的平台实现与线程行为。
+tasks.register<JavaExec>("fileKitProbe") {
+    group = "verification"
+    description = "探针：FileKit 在 Tao 进程中初始化到哪套平台实现、能否安全调用"
+    mainClass.set("dev.shinglem.hermes.shell.spike.FileKitProbeMainKt")
+    dependsOn("desktopMainClasses")
+    val desktopMain = kotlin.targets.getByName("desktop").compilations.getByName("main")
+    classpath = files(desktopMain.output.classesDirs, desktopMain.runtimeDependencyFiles)
+    workingDir = layout.projectDirectory.asFile
+    jvmArgs("--enable-native-access=ALL-UNNAMED", "-Dfile.encoding=UTF-8")
+    hermesRtDir?.let { dir -> setExecutable("$dir\\bin\\java.exe") }
+}

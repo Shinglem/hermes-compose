@@ -8,12 +8,14 @@ import androidx.compose.ui.draganddrop.DragAndDropEvent
 import androidx.compose.ui.draganddrop.DragAndDropTarget
 import androidx.compose.ui.draganddrop.DragData
 import androidx.compose.ui.draganddrop.dragData
-import java.awt.FileDialog
-import java.awt.Frame
+import io.github.vinceglb.filekit.FileKit
+import io.github.vinceglb.filekit.dialogs.FileKitDialogSettings
+import io.github.vinceglb.filekit.dialogs.FileKitMode
+import io.github.vinceglb.filekit.dialogs.FileKitType
+import io.github.vinceglb.filekit.dialogs.openFilePicker
+import io.github.vinceglb.filekit.dialogs.openFileSaver
 import java.io.File
 import java.net.URI
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -70,31 +72,42 @@ private fun uriToPath(raw: String): String? = runCatching {
     if (uri.scheme.equals("file", ignoreCase = true)) File(uri).absolutePath else null
 }.getOrNull()
 
+// ---------------------------------------------------------------------------
+// 系统文件对话框：FileKit（Windows 上走 JNA + COM `IFileOpenDialog`）
+//
+// 换掉 `java.awt.FileDialog` 的理由（ADR-072 之后又一处"平台隐含契约"）：
+// AWT 的模态对话框**自己在 UI 线程上跑事件循环**，而 Tao 进程的 UI 线程是 `main`，
+// 不是 AWT 的 EDT —— 在 `Dispatchers.Main` 上调 `dialog.isVisible = true` 会把
+// Compose 的组合线程阻塞住（旧实现靠 `withContext(Dispatchers.IO)` 绕开，但那意味着
+// 对话框挂在不属于任何窗口模型的后台线程上，弹窗归属/置顶都不可控）。
+//
+// FileKit 的 Windows 实现是 `WindowsFilePicker` + JNA/COM（实测见 `fileKitProbe`：
+// `platform.Current` 在 Windows 上解析成 `WindowsFilePicker`，`AwtFilePicker` /
+// `SwingFilePicker` 只在 Linux 分支里当备选）。它是挂起函数，不占用调用线程。
+// ---------------------------------------------------------------------------
+
 actual suspend fun pickFiles(title: String, imagesOnly: Boolean): List<String> =
-    withContext(Dispatchers.IO) {
-        val dialog = FileDialog(null as Frame?, title, FileDialog.LOAD)
-        dialog.isMultipleMode = true
-        if (imagesOnly) {
-            dialog.setFilenameFilter { _, name -> isImagePath(name) }
-        }
-        // setVisible(true) 阻塞到对话框关闭；AWT 模态对话框自带事件循环，
-        // 所以放在 IO 线程而非 UI 线程调用。
-        dialog.isVisible = true
-        dialog.files.orEmpty().map { it.absolutePath }
-    }
+    FileKit.openFilePicker(
+        type = if (imagesOnly) FileKitType.Image else FileKitType.File(IMAGE_EXTENSIONS),
+        mode = FileKitMode.Multiple(),
+        dialogSettings = FileKitDialogSettings(title = title),
+    ).orEmpty().map { it.file.absolutePath }
 
-actual suspend fun pickFile(title: String): String? = withContext(Dispatchers.IO) {
-    val dialog = FileDialog(null as Frame?, title, FileDialog.LOAD)
-    dialog.isMultipleMode = false
-    dialog.isVisible = true
-    dialog.files?.firstOrNull()?.absolutePath
-}
+actual suspend fun pickFile(title: String): String? =
+    FileKit.openFilePicker(
+        type = FileKitType.File(),
+        dialogSettings = FileKitDialogSettings(title = title),
+    )?.file?.absolutePath
 
-actual suspend fun pickSaveFile(title: String, defaultName: String): String? = withContext(Dispatchers.IO) {
-    val dialog = FileDialog(null as Frame?, title, FileDialog.SAVE)
-    dialog.file = defaultName
-    dialog.isVisible = true
-    // SAVE 模式下完整路径是 `directory` + `file`（`files` 往往为空）。
-    val name = dialog.file ?: return@withContext null
-    File(dialog.directory.orEmpty(), name).absolutePath
+actual suspend fun pickSaveFile(title: String, defaultName: String): String? {
+    // 0.17.0 的 `extension` 参数已废弃（它只是"默认扩展名提示"，不是过滤器），
+    // 所以把完整文件名作为 `suggestedName` 传进去，扩展名由对话框自己截。
+    val suggested = defaultName.substringBeforeLast('.', defaultName)
+    val extension = defaultName.substringAfterLast('.', "").takeIf { it.isNotBlank() }
+    return FileKit.openFileSaver(
+        suggestedName = suggested,
+        dialogSettings = FileKitDialogSettings(title = title),
+    )?.file?.absolutePath
+        // 用户可能在对话框里删掉了扩展名：补回去，否则导出的 tar.gz 没有后缀。
+        ?.let { if (extension != null && !it.endsWith(".$extension")) "$it.$extension" else it }
 }

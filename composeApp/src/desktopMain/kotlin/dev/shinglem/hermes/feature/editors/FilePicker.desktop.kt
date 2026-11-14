@@ -1,36 +1,30 @@
 package dev.shinglem.hermes.feature.editors
 
-import java.awt.FileDialog
-import java.awt.Frame
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import io.github.vinceglb.filekit.FileKit
+import io.github.vinceglb.filekit.dialogs.FileKitDialogSettings
+import io.github.vinceglb.filekit.dialogs.FileKitType
+import io.github.vinceglb.filekit.dialogs.openFilePicker
 
 /**
- * AWT 文件选择框。
+ * 系统文件对话框（FileKit，Windows 上走 JNA + COM `IFileOpenDialog`）。
  *
- * `FileDialog.setVisible(true)` 是**模态且阻塞**的，必须放到 IO 线程，
- * 否则 Compose 的帧循环会跟着停（表现为整个窗口卡住，直到用户选完）。
+ * 原来用 `java.awt.FileDialog`：它是**模态且阻塞**的，必须丢到 IO 线程，
+ * 否则 Compose 的帧循环会跟着停。换 FileKit 之后 `openFilePicker` 本身是挂起函数，
+ * 不再需要 `withContext(Dispatchers.IO)`。
+ *
+ * `runCatching` 保留：对话框初始化失败（COM 不可用 / 被策略禁用）时应当退化成
+ * "用户取消"，而不是把异常抛进 UI 侧的事件处理。
  */
-actual suspend fun pickExecutableFile(): String? = withContext(Dispatchers.IO) {
-    runCatching {
-        val dialog = FileDialog(null as Frame?, "选择编辑器可执行文件", FileDialog.LOAD).apply {
-            file = "*.exe"
-            isVisible = true
-        }
-        val directory = dialog.directory ?: return@runCatching null
-        val file = dialog.file ?: return@runCatching null
-        "$directory$file"
-    }.getOrNull()
-}
+actual suspend fun pickExecutableFile(): String? = runCatching {
+    FileKit.openFilePicker(
+        type = FileKitType.File("exe"),
+        dialogSettings = FileKitDialogSettings(title = "选择编辑器可执行文件"),
+    )?.file?.absolutePath
+}.getOrNull()
 
-actual suspend fun pickJsonFile(): String? = withContext(Dispatchers.IO) {
-    runCatching {
-        val dialog = FileDialog(null as Frame?, "选择会话 JSON 文件", FileDialog.LOAD).apply {
-            file = "*.json"
-            isVisible = true
-        }
-        val directory = dialog.directory ?: return@runCatching null
-        val file = dialog.file ?: return@runCatching null
-        "$directory$file"
-    }.getOrNull()
-}
+actual suspend fun pickJsonFile(): String? = runCatching {
+    FileKit.openFilePicker(
+        type = FileKitType.File("json"),
+        dialogSettings = FileKitDialogSettings(title = "选择会话 JSON 文件"),
+    )?.file?.absolutePath
+}.getOrNull()

@@ -47,6 +47,7 @@ import dev.shinglem.hermes.core.log.StartupLog
 import dev.shinglem.hermes.core.prefs.WindowBounds
 import dev.shinglem.hermes.di.DesktopContainer
 import dev.shinglem.hermes.feature.terminal.TerminalContent
+import dev.shinglem.hermes.platform.AppFocus
 import dev.shinglem.hermes.platform.SystemNotifications
 import dev.shinglem.hermes.platform.TerminalQuoteBridge
 import dev.shinglem.hermes.platform.NativeNotifications
@@ -55,11 +56,9 @@ import dev.shinglem.hermes.resources.Res
 import dev.shinglem.hermes.resources.icon
 import dev.shinglem.hermes.terminal.terminalSelectedText
 import dev.shinglem.hermes.terminal.terminalTailText
-import java.awt.Dimension
 import java.io.File
 import kotlinx.coroutines.launch
 import javax.swing.JOptionPane
-import javax.swing.UIManager
 import kotlin.system.exitProcess
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.jetbrains.compose.resources.painterResource
@@ -116,9 +115,10 @@ fun main(args: Array<String>) {
     // BossTerm 的默认存储是 `~/.bossterm`（settings / 字体缓存 / 会话快照）。统一改到我们的数据目录，
     // 别在用户家目录留下第二个配置文件夹；终端设置本身由 state.json 注入，不走这个文件。
     System.setProperty("bossterm.settings.dir", File(appDataDir, "terminal").absolutePath)
-    // 托盘菜单是 Swing 原生菜单：跟着系统外观走才与截图里的系统菜单一致（Compose 自绘的部分
-    // 不受 LAF 影响）。必须在创建任何 Swing 组件之前设置。
-    runCatching { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()) }
+    // 托盘菜单曾是 Swing `JPopupMenu`，必须跟着系统外观走才与截图里的系统菜单一致；
+    // S6 换成 `composenativetray`（原生 Win32 菜单）之后不需要 LAF 了。
+    // 只剩 `showFatal` 里的 `JOptionPane`，它用默认外观即可 —— 那是配置解析失败时的兜底，
+    // 此时连 Compose 都没起来，换成自绘对话框反而多一层失败点。
     val silent = isSilent(args)
     // 极早期日志：配置解析失败也要留痕（`--silent` 下 showFatal 只写 stderr，javaw 没有控制台）。
     val startup = StartupLog(startupHome())
@@ -277,6 +277,10 @@ fun main(args: Array<String>) {
 
         // 托盘：`composenativetray` 的原生桥（解决 CMP-1936 中文菜单乱码）。
         // 点图标先 `consumePendingAction()` 再决定显示/退出（沿用旧顺序）。
+        //
+        // 这里顺带把"点通知时把窗口拉出来"的兜底注册给 `SystemNotifications`：
+        // 它以前由已删除的 `DesktopTray.install()` 注入，而那个类在 S6 换 NucleusTray 后
+        // 就再没被实例化过 —— 纯提示通知因此一直静默丢掉（见 `Notifications.desktop.kt` 注释）。
         NucleusTray(
             icon = appIcon,
             tooltip = ProductInfo.DISPLAY_NAME,
@@ -287,6 +291,9 @@ fun main(args: Array<String>) {
             onShow = { windowVisible = true },
             onQuit = { quit() },
         )
+        LaunchedEffect(Unit) {
+            SystemNotifications.attachActivation { windowVisible = true }
+        }
 
         // 窗口**常驻组合、只切换可见性**（`visible`），不用 `if (windowVisible)` 整块移除。
         // 理由见 `08-单实例与启动时序.md`：销毁再重建窗口会让输入法的 `InputMethodRequests` 为空，
@@ -306,6 +313,11 @@ fun main(args: Array<String>) {
             icon = appIcon,
             minimumSize = DpSize(windowConfig.minWidth.dp, windowConfig.minHeight.dp),
         ) {
+            // `AppFocus` 的兜底（S6 收尾）：旧实现查 AWT `Window.getWindows()`，而 Tao 进程里
+            // 没有 AWT 窗口 → 恒判"不在前台"→ 每条通知都弹。这里改挂到 Nucleus 的窗口焦点。
+            LaunchedEffect(nucleusWindow) {
+                AppFocus.attachProbe { nucleusWindow.isFocused }
+            }
             // 窗口内容整体包在应用主题里 —— 标题栏也必须跟着主题走。
             // Tao 的 `TitleBar` 不读 `MaterialTheme`，靠 `LocalTitleBarStyle` 取色；把主题开在
             // 它的外层，再显式传 `style`（见 `shell/window/TitleBarTheme.kt`）。

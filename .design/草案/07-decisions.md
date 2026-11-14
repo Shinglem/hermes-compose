@@ -2212,3 +2212,79 @@ UiDispatcher.context = Dispatchers.Main[Tao]
 3. **换窗口壳要复查所有"平台隐含契约"**。`Dispatchers.Main` 指向哪条线程就属于这一类：
    代码里没有任何一处写着 Swing，但 `DesktopContainer` 那一行 `Dispatchers.Swing`
    是照着旧壳写的。
+
+---
+
+## ADR-073 · S6 的 AWT 收尾：删 DesktopTray、文件对话框迁 FileKit、前台判定迁 Tao
+
+**背景**：S6 在 09 篇被标为 ✅ 完成，但 13 篇 §8.6 的 AWT 收尾只做了一半。
+用户问"现在是否还使用 swing 线程"时核查发现实际状况：
+
+| §8.6 要求 | 实际 |
+|---|---|
+| 删 `core/app/DesktopTray.kt` | ❌ 文件还在，但**从未被实例化**（托盘已换 `NucleusTray`） |
+| `FileDrop` → FileKit | ❌ 仍是 `java.awt.FileDialog` |
+| `FilePicker` → FileKit | ❌ 同上（且 S0 第 8 项"FileKit 三点验证"从未做） |
+| `AppFocus` → Tao 焦点 API | ❌ 仍是 `Window.getWindows()` |
+| `Clipboard` / `Links` / `Notifications` 保留 | ✅ 与计划一致 |
+| `NotificationOverlay` | ✅ 已改 `DecoratedWindow(transparent)`（ADR-067），屏幕几何按 ADR-067 保留 AWT |
+
+### 顺带查出的两个真实缺陷
+
+**1. 纯提示通知一直静默丢失（用户可见）**
+
+`SystemNotifications` 的"无按钮通知"（一轮完成）走 `icon ?: return`，而那个 `icon`
+由 `DesktopTray.install()` 注入 —— 该类自 S6 起就没被实例化过，所以 `icon` 恒为 null，
+**每条"本轮完成"通知都在这一行静默返回**，用户什么也看不到。
+
+修复：取消对托盘图标的依赖，改成「原生 toast → 应用内卡片（自动收起 6s）」两级回退；
+托盘激活兜底改由 `Main` 显式 `attachActivation { }` 注册。
+
+**2. `AppFocus` 的兜底在 Tao 下失效且方向危险**
+
+旧兜底查 `java.awt.Window.getWindows()`，而 Tao 主窗口不是 AWT 窗口 → 集合恒空
+→ `any { ... }` 恒 false → **恒判"用户不在看"** → 每条通知都弹（噪音）。
+（迁移前的反面是恒 true 导致提醒被吞掉，方向反了但同样是错的。）
+
+修复：兜底改查 `NucleusWindow.isFocused`（`Main` 在 `DecoratedWindow` 作用域里
+`AppFocus.attachProbe { nucleusWindow.isFocused }`）；探针缺失或抛异常时**假定在前台**。
+
+### FileKit 是实测过的，不是照抄计划
+
+S0 第 8 项（filter / 取消 / 提权下能弹）从未执行，所以先写了 `fileKitProbe`：
+
+| 探针项 | 结果 |
+|---|---|
+| FileKit 在 Tao 进程可用 | ✅ |
+| Windows 平台实现 | `WindowsFilePicker`（JNA + COM `IFileOpenDialog`） |
+| `AwtFilePicker` / `SwingFilePicker` 是否被选中 | ❌ 仅 Linux 分支备选（读 `PlatformFilePicker$Companion` 字节码确认） |
+
+换掉 `java.awt.FileDialog` 的**真实动机**：AWT 模态对话框在调用线程上跑自己的事件循环，
+而 Tao 的 UI 线程是 `main` 不是 EDT —— 旧实现靠 `withContext(Dispatchers.IO)` 绕开，
+但那意味着对话框挂在不属于任何窗口模型的后台线程上，弹窗归属/置顶不可控。
+FileKit 的 Windows 实现是挂起函数 + COM，不占用调用线程。
+
+**真机验证**：点「设置 → 配置档案 → 导入」，弹出**原生**文件对话框，
+标题「选择档案归档（.tar.gz / .tgz）」正确、中文正常、取消后应用继续正常运行、无异常。
+
+### 结果
+
+| 指标 | 前 | 后 |
+|---|---|---|
+| 生产代码里 import `java.awt` / `javax.swing` 的文件 | 9 | **4** |
+| 其中属于计划"保留"清单的 | — | 4（`Clipboard` / `Links` / `Notifications` / `NotificationOverlay`） |
+| 测试 | 679 | **682** |
+
+`Main.kt` 里 `java.awt.Dimension`（无用 import）与 `UIManager.setLookAndFeel`
+（只为旧 Swing 托盘菜单服务）一并删掉；`JOptionPane` 按 13 篇 §8.6 保留
+（配置解析期 Compose 还没起来，换自绘对话框只会多一层失败点）。
+
+### 教训
+
+1. **"阶段标完成"要按 §8.6 这种清单逐条勾，不能按"主体跑通了"就标 ✅**。
+   这次四个文件里三个是计划明确要求删/改的，却在 S6 标完成时留在原地。
+2. **死代码会掩盖活 bug**：`DesktopTray` 没人调用看起来无害，但它是
+   `SystemNotifications.attach()` 的唯一调用方 —— 它一死，纯提示通知就整条路径失效。
+   删死代码前先查"它是不是某条路径的唯一入口"。
+3. **探针结论要落到"哪个实现被选中"**，不能停在"类能加载"。FileKit 的 jar 里
+   同时有 AWT/Windows/Swing 三套实现，只看 classpath 会误判。
