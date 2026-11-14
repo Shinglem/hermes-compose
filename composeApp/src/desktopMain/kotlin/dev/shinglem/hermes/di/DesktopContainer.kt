@@ -55,10 +55,9 @@ import java.io.File
 import java.security.SecureRandom
 import java.util.prefs.Preferences
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.swing.Swing
+import dev.shinglem.hermes.platform.UiDispatcher
 
 /** 桌面端装配：配置、偏好、日志、传输层与 Repository 各一份。 */
 object DesktopContainer {
@@ -97,7 +96,17 @@ object DesktopContainer {
         val stateSettings = JsonFileSettings(paths.stateFile)
         migrateRegistryIfNeeded(paths, stateSettings)
         val preferences = AppPreferences(stateSettings) { stateSettings.flush() }
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Swing)
+        // **必须是 UI 线程**（S6 后 = `Dispatchers.Main` = Tao 的 `main`）。
+        //
+        // 这里曾写 `Dispatchers.Swing`：v0.5.x 的 Compose Desktop 用 AWT 窗口，
+        // `Dispatchers.Main` 就是 Swing EDT，两者碰巧是同一条线程，所以看不出问题。
+        // 迁到 Nucleus Tao 后 `Dispatchers.Main` 被 `TaoMainDispatcherFactory`
+        // （loadPriority 100）接管成 `main`，而 `Dispatchers.Swing` 变成
+        // `kotlinx-coroutines-swing` 另起的 `AWT-EventQueue-0` —— 于是本 scope 里的
+        // `GatewayClient`（事件派发 + server-request handler）与各个 ViewModel
+        // （`viewModelScope` = `Dispatchers.Main`）分居两条线程，而它们共享大量
+        // 裸 map / StringBuilder 却没有同步。实测见 `build/swing-probe.txt`。
+        val scope = CoroutineScope(SupervisorJob() + UiDispatcher.context)
 
         // options.json 热生效：启动时先应用一次，之后改了文件立即跟。
         // watcher 复用同一个 scope，AppContainer.close() 里 scope.cancel() 会连带停掉它。

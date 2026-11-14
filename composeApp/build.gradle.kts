@@ -834,6 +834,25 @@ tasks.register<JavaExec>("taoSpike") {
 //  那本身就说明这些调用在 Tao 主线程上可能阻塞。
 //  结果：%TEMP%/hermes-awt-probe.txt 与 stdout。
 // ============================================================================
+// 线程模型探针（ADR-072）：验 UI 线程到底是 `Dispatchers.Main` 还是 `Dispatchers.Swing`。
+// ---------------------------------------------------------------------------
+//  S6 迁 Nucleus Tao 后 `MainDispatcherFactory` 的仲裁结果变了：Tao 的 factory
+//  loadPriority=100 压过 coroutines-swing 的 0，于是 `Main` = `main`、`Swing` = 另一条 EDT。
+//  这是"平台隐含契约"，代码里没有任何一处能看出来 —— 只能实测。
+//  结果：build/swing-probe.txt（窗口起来后写，写完即退出）。
+tasks.register<JavaExec>("taoSwingProbe") {
+    group = "verification"
+    description = "探针：UI 线程判定（Dispatchers.Main vs .Swing）与启动期 fallback 行为"
+    mainClass.set("dev.shinglem.hermes.shell.spike.TaoSwingProbeMainKt")
+    dependsOn("desktopMainClasses")
+    val desktopMain = kotlin.targets.getByName("desktop").compilations.getByName("main")
+    classpath = files(desktopMain.output.classesDirs, desktopMain.runtimeDependencyFiles)
+    workingDir = layout.projectDirectory.asFile
+    systemProperty("java.awt.headless", "false")
+    jvmArgs("--enable-native-access=ALL-UNNAMED", "-Dfile.encoding=UTF-8")
+    hermesRtDir?.let { dir -> setExecutable("$dir\\bin\\java.exe") }
+}
+
 tasks.register<JavaExec>("taoAwtProbe") {
     group = "verification"
     description = "S6 探针：验 AWT 的 GraphicsEnvironment / Toolkit / MouseInfo 在 Tao 运行时是否可用"

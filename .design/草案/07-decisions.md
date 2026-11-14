@@ -2127,6 +2127,88 @@ AppShell 的 32 处替换逐条对照无语义塌陷（`justCreatedId → AdoptE
 `ChatViewModel.dispose()` 覆盖完整（两个 handler + 两个待决表 + 两个 frameIds 表）。
 
 **教训**：「把 `viewModelScope` 换成注入的 scope」看起来是纯搬家，实际**改变了并发模型**。
-`viewModelScope` 在 desktop 下是单线程 EDT，这是一个**没说出口的隐含契约** ——
+`viewModelScope` 在 desktop 下是单线程 dispatcher，这是一个**没说出口的隐含契约** ——
 凡是持有非线程安全状态、又没有显式同步的 ViewModel，迁移时必须显式选择单线程 dispatcher，
 而不是接受任何 `Dispatchers.Default` 形式的默认值。
+
+> ⚠️ **本 ADR 上述推理的前提已被 ADR-072 推翻**：当时写的「`viewModelScope` 在 desktop 下 =
+> Swing EDT」在 S6 换 Nucleus Tao 之后**已不成立** —— 实测 `Dispatchers.Main` 是 Tao 的 `main`，
+> `Dispatchers.Swing` 是另一条 `AWT-EventQueue-0`。结论（必须是单线程、不能用 `Default`）
+> 仍然正确且已保留；但「传 `Dispatchers.Swing`」这个具体取值是错的，正确取值见 ADR-072。
+---
+
+## ADR-072 · UI 线程判定改为 `Dispatchers.Main`（推翻 ADR-071 的 Swing 依据）
+
+**决策**：`UiDispatcher.context` 在 desktop 侧 = **`Dispatchers.Main`**，不是 `Dispatchers.Swing`。
+`DesktopContainer` 的主 scope 同步改为 `UiDispatcher.context`。
+
+### 怎么发现的
+
+ADR-071 的 Critical 修复假设「`viewModelScope` 在 desktop 下 = Swing EDT」。用户提出质疑
+（"我记得现在应当没有使用 swing 了"）后，我写了 `:composeApp:taoSwingProbe`
+（`shell/spike/TaoSwingProbeMain.kt`）在真实 `nucleusApplication` + `DecoratedWindow` 里实测。
+
+### 实测结果（可复现，结果落 `build/swing-probe.txt`）
+
+| 探针项 | 结果 |
+|---|---|
+| `Dispatchers.Main.toString()` | `Dispatchers.Main[Tao]`（启动前后都是） |
+| Compose 的 `LaunchedEffect` | `main` |
+| `Dispatchers.Main` 派发的任务 | `main` |
+| **`Dispatchers.Swing` 派发的任务** | **`AWT-EventQueue-0`**（另一条线程） |
+| `Dispatchers.Default` | `DefaultDispatcher-worker-N` |
+
+**根因**：Nucleus 通过 `META-INF/services/kotlinx.coroutines.internal.MainDispatcherFactory`
+注册 `TaoMainDispatcherFactory`，**loadPriority = 100**；`kotlinx-coroutines-swing` 的
+`SwingDispatcherFactory` 是 **0**。`Dispatchers.Main` 只会选优先级最高的一个 ——
+所以 Tao 进程里 `Main` 是 `main`，而 `Swing` 是 coroutines-swing 另起的 EDT，**两者分家**。
+
+### 这条 ADR 修的是什么（比 ADR-071 更根本）
+
+ADR-071 修的是「Chat 别用 `Dispatchers.Default`」，方向对但**依据是错的**，而且**漏了真正的回归**：
+
+`DesktopContainer` 从 v0.5.x 起就用 `Dispatchers.Swing`。那时 Compose Desktop 用 AWT 窗口，
+`Dispatchers.Main` 恰好也解析成 Swing EDT，**两者碰巧是同一条线程**，所以看不出问题。
+S6 换成 Nucleus Tao 后它们分家，于是：
+
+| 谁 | 线程（修复前） |
+|---|---|
+| UI 事件回调（`onIntent` 等，从 Compose 来） | `main` |
+| Compose 重组 | `main` |
+| `DesktopContainer` scope：`GatewayClient`（读写 `runtimeIds` 等）+ 8 个 `ViewModel` 的 `viewModelScope` | `AWT-EventQueue-0` / `main` **各一半** |
+
+也就是说 **GatewayClient 的事件派发与各个 ViewModel 的协程从来不在同一条线程上**，
+而它们共享大量无同步的裸 map / StringBuilder。这才是 S6 引入的真实回归。
+
+### 修复后的验收（`taoSwingProbe`）
+
+```
+UiDispatcher.context = Dispatchers.Main[Tao]
+[compose]                      thread=main
+[container] new-launch         thread=main
+[container] resumed-after-start thread=main
+[swing-old]  ← 对照组，旧写法 thread=AWT-EventQueue-0
+```
+
+### 启动期的边界（也是实测的）
+
+`DesktopContainer.build()` 跑在 `nucleusApplication` **之前**。此阶段向 `Dispatchers.Main`
+**立即**派发会落到 `Nucleus-Tao-Main-Fallback`（单线程池）。但 Tao 起来之后，
+同一个 scope 的新 launch 与 delay 恢复**都回到 `main`**（探针场景 B/C/E 验证）。
+所以不存在"长期分叉"，只有启动期同步立即派发那一小段在 fallback 上
+（那时 `GatewayClient` 还没开始写共享状态，`OptionsWatcher` 显式用了 `Dispatchers.IO`）。
+
+### 防回归
+
+`desktopTest/platform/UiDispatcherTest.kt` 断言 `UiDispatcher.context` 是 `Dispatchers.Main`
+且**不是** `Dispatchers.Swing` —— 有人改回 Swing 会在 CI 立刻失败。
+
+### 教训（比 ADR-071 那条更进一步）
+
+1. **"换成什么 dispatcher"不能用推断代替测量**。ADR-071 的推理链每一步都合理，
+   唯独前提（`Dispatchers.Main` = Swing EDT）在换壳之后已经不成立。
+2. **依赖仲裁要看优先级**。进程里同时存在 `MainDispatcherFactory` 的多个实现时，
+   谁的 `loadPriority` 高谁赢 —— 不是"两个都在，所以都是 Main"。
+3. **换窗口壳要复查所有"平台隐含契约"**。`Dispatchers.Main` 指向哪条线程就属于这一类：
+   代码里没有任何一处写着 Swing，但 `DesktopContainer` 那一行 `Dispatchers.Swing`
+   是照着旧壳写的。

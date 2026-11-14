@@ -28,22 +28,23 @@ import kotlin.coroutines.CoroutineContext
  * 内部行为**零改动** —— 这是有意的：`ChatViewModel` 的六条线（流式/审批/快照/
  * 模型/用量/后台）交织在一起，任何一处改写都要连带验证其余五条。
  *
- * ### ⚠️ [executorContext] 必须是**单线程**的 `Dispatchers.Swing`
+ * ### ⚠️ [executorContext] 必须是**单线程**的 UI dispatcher
  *
- * 这不是保守选择，是**硬约束**。迁移前 `ChatViewModel : ViewModel()` 的全部协程跑在
- * `viewModelScope` 上，desktop 下即 `Dispatchers.Main.immediate`（= Swing EDT，
- * `build.gradle.kts` 专门加了 `kotlinx-coroutines-swing`）。也就是说它的全部代码路径
- * 被**隐式串行化在一条线程**上，而它持有一大把裸 `mutableMapOf` / `StringBuilder` /
- * `var localSeq`（`runtimeIds` / `savedStates` / `deltaBuffer` / …），全靠那条线程做互斥。
+ * 这不是保守选择，是**硬约束**。`ChatViewModel` 持有一大把裸 `mutableMapOf` /
+ * `StringBuilder` / `var localSeq`（`runtimeIds` / `savedStates` / `deltaBuffer` / …），
+ * 全靠"全部代码路径被隐式串行化在一条线程"做互斥。
  *
- * 更关键：**server→client 请求处理器不在这个 scope 里** —— `GatewayClient` 用
- * container 的 `Dispatchers.Swing` 调 `answerServerRequest`，进而在
+ * 而且**这条线程必须与 `GatewayClient` 的同一条**：server→client 请求处理器跑在
+ * container 的 scope 上，会调 `answerServerRequest`，进而在
  * `awaitApprovalDecision` / `awaitClarifyDecision` 里写 `approvalDecisions` 并读
- * `runtimeIds`。如果这里换成 `Dispatchers.Default`（多线程 pool），两边就真正并发，
+ * `runtimeIds`。换成 `Dispatchers.Default`（多线程 pool）两边就真正并发，
  * `runtimeIds` 的遍历会 `ConcurrentModificationException`、`deltaBuffer` 会串字。
  *
- * 所以**不要**把它改成 `Dispatchers.Default`；等 S8 把那些裸 map 收进
- * `SessionRuntimeStore` + 加同步之后，才谈得上换多线程。
+ * desktop 侧要传 `UiDispatcher.context`，**不是** `Dispatchers.Swing` —— S6 迁 Nucleus Tao
+ * 之后 `Dispatchers.Main` 才是 UI 线程（Compose 组合与 UI 事件回调都在 `main` 上），
+ * `Dispatchers.Swing` 是另一条 `AWT-EventQueue-0`。判据与实测见 `platform/UiDispatcher.kt`。
+ *
+ * 等 S8 把那些裸 map 收进 `SessionRuntimeStore` + 加同步之后，才谈得上换多线程。
  */
 class DefaultChatComponent(
     private val componentContext: ComponentContext,
@@ -52,12 +53,12 @@ class DefaultChatComponent(
     models: dev.shinglem.hermes.feature.model.ModelRepository,
     preferences: dev.shinglem.hermes.core.prefs.AppPreferences,
     /**
-     * **必须**传单线程 dispatcher（desktop 侧传 `Dispatchers.Swing`）。
+     * **必须**是 UI 线程（desktop 侧传 `UiDispatcher.context`，S6 后 = `Dispatchers.Main`）。
      *
-     * 故意不给默认值：它在本类所在的 `commonMain` 里不可用（`Dispatchers.Swing`
-     * 是 `kotlinx-coroutines-swing` 的 JVM 扩展），而"随手用 `Dispatchers.Default`"
-     * 会**改变并发模型**并引入数据竞争 —— 详见类注释。强制调用方显式选择，
-     * 就不会有人在不知情的情况下踩这个坑。
+     * 故意不给默认值：`Dispatchers.Swing` 曾是 desktop 的 UI 线程，但迁到 Nucleus Tao
+     * 之后它变成了**另一条**线程（`AWT-EventQueue-0`），用错就等于把 UI 事件回调
+     * （`main`）与状态变更（Swing EDT）拆到两条线程上。强制调用方显式选择，
+     * 就不会有人在不知情的情况下踩这个坑 —— 判据与实测见 `platform/UiDispatcher.kt`。
      */
     executorContext: CoroutineContext,
 ) : ChatComponent, ComponentContext by componentContext {
