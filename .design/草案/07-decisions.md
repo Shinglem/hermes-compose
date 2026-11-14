@@ -2020,3 +2020,87 @@ local 后端 ready 之前一定失败」），Component 接管生命周期后**�
 
 `09-refactor.md` 原文也留了退路（"若此处仍难维护，才是 KStateMachine 的评估时机"），
 本轮连退路都不需要，直接顺延。
+
+---
+## ADR-071 · Chat 域：Component 包壳 + SessionRuntimeStore（S4 落地形态）
+
+**决策**：`ChatViewModel`（2147 行）**不做整块重写**，而是包进 `DefaultChatComponent`；
+同时把 8 个平行 map 收敛成 `SessionRuntimeStore` 的 `SessionRuntime` 值对象。
+
+### 为什么偏离了设计稿的"`ChatReducer` 吃三份流式实现"
+
+`09 篇` S4 的原计划是：`ChatReducer` 吃掉 `StreamSegments` + `ChatViewModel` 内联 + `SessionShadow`
+三份实现，删掉 `SessionShadow.kt` 与 `SessionSwitchPlan.kt`，把 5 个 `var onXxx` 换成 Effect。
+
+实际做下来，只有**最后一条**能安全落地：
+
+| 计划项 | 结论 |
+|---|---|
+| 5 个 `var onXxx` → `Flow<ChatEffect>` | ✅ 做了 |
+| 8 个平行 map → `SessionRuntimeStore` | ✅ 做了（+10 个测试） |
+| `ChatReducer` 吃三份流式实现 | ❌ 留到 S8 |
+| 删 `SessionShadow` / `SessionSwitchPlan` | ❌ 留到 S8 |
+
+**理由**：`SessionShadow.applyShadowEvent` 与 `SessionSwitchPlan.switchPlan` 被
+`ChatViewModel` 引用 **23 处**，且夹在"切走保存快照 → 切回按计划恢复 → 后台补拉对账"
+这条链里。这条链的正确性靠**顺序**保证（先恢复快照让界面有内容，再
+`ensureRuntime(force = true)` 对账，否则卡片点不动）。把三个文件的状态机合并成一份，
+等于把这条顺序链整个重排 —— 那是"聊天时数据丢掉"级别的改动，需要独立的验证轮次。
+
+而"包 Component"能先把**收益最大的那部分**拿下来：
+
+- UI 侧从"182 个成员 + 5 个可变回调"降到 `state` / `effects` / `onIntent` 三样；
+- 5 个 `var` 变 `Flow` 之后，**通知中心与页面不再互相覆盖回调**（这是迁移前的真实 bug 来源：
+  两处都赋值、后写的静默盖掉前一个）；
+- `viewModelScope` → Component 的 scope，S5 之后 Shell 不再需要 `ViewModelStoreOwner`。
+
+### 一条实跑才会发现的坑：`onCleared()` 不是接口方法
+
+去掉 `ViewModel` 继承后，`ChatViewModel.onCleared()` 变成 `NOTHING_TO_OVERRIDE`。
+它做的是"退订 server-request handler + 取消所有待决的 `CompletableDeferred`"。
+改成显式的 `dispose()`，由 `Holder.onDestroy` **先调它再 cancel scope** ——
+反过来的话在途的审批决策会永远挂着。
+
+### `SessionRuntimeStore` 的三条硬约束（都写进测试了）
+
+1. **换 runtimeId 必须摘掉旧的反向索引**。迁移前反向查是 O(n) 遍历，
+   新旧两个值同时命中时归属取决于遍历顺序；现在 O(1) 且由 `put` 统一维护。
+2. **重连只清连接作用域字段**（`fence` / `revision` / `lastEventAt`）。
+   迁移前那四行 `runtimeIds.clear() + ...` 里，**`runtimeIds.clear()` 是错的** ——
+   会话还开着，清了之后 `open()` 里的 `runtimeIds[key]?.let { refreshPendingApprovals(...) }`
+   就不生效（切回会话看不到待审批）。现在 `key` / `runtimeId` / `cwd` 都留着。
+3. **`dirty` 不能被重连清掉**。它是"切走期间有新内容"的内容事实，与连接无关；
+   清了就永远不补拉，界面停在切走前那一帧（用户实测复现过）。
+
+### 与 S2 Maintenance 的关系
+
+两者是同一套过渡手法（`Hold` + 暴露 `model` 给旧 UI 方法引用），但这里的收益更大：
+Maintenance 是 60 个动作、6 块独立状态；Chat 是六条线交织的流式状态机，
+它的"接口面"本身就是维护负担（182 个成员里 UI 只用 30 个）。
+
+### 代价
+
+`ChatViewModel` 仍在 `feature/chat/`，`SessionShadow` / `SessionSwitchPlan` 仍在。
+**S8 收尾时必须回来做**，否则这两处会一直是"设计稿说删了、实际还在"的技术债。
+[`09-refactor.md`](09-refactor.md) 的 S8 清单里已登记。
+
+**实测**：676 测试全绿（666 + `SessionRuntimeStoreTest` 10）。真机 UI 测试未做（本轮锁屏）。
+
+### ⚠️ 诚实说明：`SessionRuntimeStore` 当前**未接入生产代码**
+
+它只有定义与 10 个测试，`ChatViewModel` 里那 5 个 map 还在原位。原因是同一件事：
+把 `ChatViewModel` 的簿记改成走 `SessionRuntimeStore`，等于把 `open()` / `ensureRuntime()` /
+`publish()` / `handleGatewayEvent()` 全链路重排（`runtimeIds` 被读写 **23 处**，
+且 `generations` 的写入点夹在 resume 的 try/catch 里）。
+
+所以它是**为 S8 准备好的、已验证语义的基础设施**，不是已完成的重构：
+
+| 已做 | 未做 |
+|---|---|
+| 值对象形状 + 反向索引 + 10 个语义测试 | 把 `ChatViewModel` 的 5 个 map 换成它 |
+| 三条硬约束写进测试（换 id 摘索引、重连只清连接域、dirty 不丢） | 删 `SessionShadow` / `SessionSwitchPlan` |
+| — | `ChatReducer` 吃三份流式实现 |
+
+**S8 接手时的正确顺序**：先换 map（行为等价，可逐字段对照）→ 再删 `SessionShadow`
+（`applyShadowEvent` 变成 `ChatReducer` 的一个分支）→ 最后并 `ChatReducer`。
+一步一验证，不要一次全做。

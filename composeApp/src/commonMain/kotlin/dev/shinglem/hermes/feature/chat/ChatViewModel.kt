@@ -1,7 +1,5 @@
 package dev.shinglem.hermes.feature.chat
 
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import dev.shinglem.hermes.core.contract.RpcMethods
 import dev.shinglem.hermes.core.transport.ConnectionState
 import dev.shinglem.hermes.core.transport.SessionFence
@@ -20,6 +18,7 @@ import dev.shinglem.hermes.feature.composer.RuntimeHandle
 import dev.shinglem.hermes.feature.model.ModelCatalog
 import dev.shinglem.hermes.feature.model.ModelRepository
 import dev.shinglem.hermes.feature.model.ModelSwitchOutcome
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
@@ -46,12 +45,23 @@ import kotlin.time.Clock
  * - 事件按 runtime session id 过滤，别的 profile/会话的事件不得写进当前 UI。
  * - `prompt.submit` 只等 ack（可能很久）；正文靠 `message.delta` / `message.complete` 推进。
  */
+/**
+ * Chat 域的状态持有者。
+ *
+ * **S4 过渡形态**（见 ADR-071）：这类 2147 行、六条线交织的状态机，整块重写为
+ * 单份 `ChatReducer` 是 3000+ 行的替换，风险远超本轮可承受。本轮只做两件事：
+ * 1. `viewModelScope` → 注入的 [scope]（生命周期交给 `DefaultChatComponent`）；
+ * 2. 由 Component 包住它，对外只暴露 `state` / `effects` / `onIntent`。
+ *
+ * `13 篇` 的"`ChatReducer` 吃三份流式实现 + 删 `SessionShadow`"排到 S8。
+ */
 class ChatViewModel(
     private val repository: ChatRepository,
     private val gateway: GatewayClient,
     private val models: ModelRepository,
     private val preferences: AppPreferences,
-) : ViewModel(), ComposerSessionContext {
+    private val scope: CoroutineScope,
+) : ComposerSessionContext {
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
@@ -159,13 +169,13 @@ class ChatViewModel(
     private var localSeq = 0
 
     init {
-        viewModelScope.launch {
+        scope.launch {
             gateway.events.collect(::handleGatewayEvent)
         }
         // 重连后必须重新 resume：订阅与"本端会应答 server→client 请求"的声明都绑在**连接**上，
         // 断线重连后旧订阅作废。不重建的话，重连窗口内后端发出的审批 / clarify 我们永远收不到，
         // 只能靠用户手动刷新（触发 resume）从快照里补出来 —— 实测就是"审批不弹、刷新才有"。
-        viewModelScope.launch {
+        scope.launch {
             var wasConnected = false
             gateway.connection.collect { connection ->
                 when (reconnectDecision(wasConnected, connection)) {
@@ -229,7 +239,7 @@ class ChatViewModel(
                     restore(key, saved)
                     // 快照只保证"切回瞬间有内容"。卡片 / 队列是**后端状态**，必须对账：
                     // 别处（系统通知 / TUI）可能已经把它答掉了，照着快照显示就是一张点不动的卡片。
-                    viewModelScope.launch {
+                    scope.launch {
                         runCatching { ensureRuntime(key, force = true) }
                             .onFailure { Log.debug("revalidate after restore failed: ${it.message}") }
                     }
@@ -252,8 +262,8 @@ class ChatViewModel(
         loadJob?.cancel()
         // 先填上 pill 的初始值（不阻塞历史读取）：会话级 override 要等 `session.info`，
         // 这里给的是 profile 默认值。
-        viewModelScope.launch { seedModelInfo(profile) }
-        loadJob = viewModelScope.launch {
+        scope.launch { seedModelInfo(profile) }
+        loadJob = scope.launch {
             // 置 Loading 时也带上模型：否则 seed / 之前读到的值会被这次整块替换冲掉（#16）。
             _state.value = ChatState(key = key, load = Loadable.Loading).withModelOf(key)
             try {
@@ -285,7 +295,7 @@ class ChatViewModel(
         if (!current.canLoadOlder) return
         val loaded = cache[key] ?: return
         _state.update { it.copy(loadingOlder = true, olderError = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val page = repository.loadTranscript(
                     profile = key.profile,
@@ -327,7 +337,7 @@ class ChatViewModel(
             load = Loadable.Ready(emptyList()),
             modelCatalog = _state.value.modelCatalog,
         ).withModelOf(key)
-        viewModelScope.launch { seedModelInfo(profile) }
+        scope.launch { seedModelInfo(profile) }
     }
 
     /**
@@ -415,7 +425,7 @@ class ChatViewModel(
         val key = current.key ?: return
         if (current.sending) return
 
-        viewModelScope.launch {
+        scope.launch {
             _state.update { it.copy(sending = true, sendError = null) }
             try {
                 val runtimeId = ensureRuntime(key)
@@ -475,7 +485,7 @@ class ChatViewModel(
     fun steerQueuedPrompt(admissionId: String) {
         val key = _state.value.key ?: return
         val item = _state.value.queuedPrompts.firstOrNull { it.admissionId == admissionId } ?: return
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val runtimeId = ensureRuntime(key)
                 repository.steerQueued(key.profile, runtimeId, admissionId)
@@ -523,7 +533,7 @@ class ChatViewModel(
     fun cancelQueuedPrompt(admissionId: String) {
         val key = _state.value.key ?: return
         val item = _state.value.queuedPrompts.firstOrNull { it.admissionId == admissionId } ?: return
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val runtimeId = ensureRuntime(key)
                 repository.cancelQueued(key.profile, runtimeId, admissionId)
@@ -547,7 +557,7 @@ class ChatViewModel(
         val current = _state.value
         val key = current.key ?: return
         if (current.steering) return
-        viewModelScope.launch {
+        scope.launch {
             _state.update { it.copy(steering = true, sendError = null) }
             try {
                 val runtimeId = ensureRuntime(key)
@@ -599,7 +609,7 @@ class ChatViewModel(
         val draft = _state.value.rewind ?: return
         val key = _state.value.key ?: return
         _state.update { it.copy(rewind = null, sending = true, sendError = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val runtimeId = ensureRuntime(key)
                 val loaded = repository.loadTranscript(key.profile, key.sessionId)
@@ -708,7 +718,7 @@ class ChatViewModel(
         val key = _state.value.key ?: return
         if (_state.value.branching) return
         _state.update { it.copy(branch = null, branching = true) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val runtimeId = ensureRuntime(key)
                 val result = repository.branch(
@@ -746,7 +756,7 @@ class ChatViewModel(
      * 它只在轮结束时刷新过，重新打开历史会话就什么都看不到。
      */
     private fun refreshUsage(key: SessionKey, runtimeId: String) {
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val detail = repository.loadContextBreakdown(key.profile, runtimeId)
                 if (_state.value.key != key) return@launch
@@ -781,7 +791,7 @@ class ChatViewModel(
     fun loadUsageDetail() {
         val key = _state.value.key ?: return
         val runtimeId = runtimeIds[key] ?: return
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val detail = repository.loadContextBreakdown(key.profile, runtimeId)
                 if (_state.value.key != key) return@launch
@@ -815,7 +825,7 @@ class ChatViewModel(
     fun stop() {
         val key = _state.value.key ?: return
         val runtimeId = runtimeIds[key] ?: return
-        viewModelScope.launch {
+        scope.launch {
             _state.update { it.copy(stopping = true) }
             try {
                 repository.interrupt(key.profile, runtimeId, generations[key])
@@ -892,7 +902,7 @@ class ChatViewModel(
         val runtimeId = pending.runtimeSessionId ?: runtimeIds[key] ?: return
         val generation = pending.executionGeneration ?: generations[key]
         forgetPendingRequest(requestId)
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.respondApproval(key.profile, runtimeId, requestId, choice, generation)
             } catch (cancelled: CancellationException) {
@@ -935,7 +945,7 @@ class ChatViewModel(
      */
     private fun startBackgroundPolling(key: SessionKey, runtimeId: String) {
         backgroundJob?.cancel()
-        backgroundJob = viewModelScope.launch {
+        backgroundJob = scope.launch {
             while (true) {
                 val alive = refreshBackgroundTasks(key, runtimeId)
                 if (!alive) break
@@ -973,7 +983,7 @@ class ChatViewModel(
         val runtimeId = runtimeIds[key] ?: return
         if (_state.value.killingTaskId != null) return
         _state.update { it.copy(killingTaskId = processId) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.killProcess(key.profile, runtimeId, processId)
             } catch (cancelled: CancellationException) {
@@ -1020,7 +1030,7 @@ class ChatViewModel(
         if (current.modelCatalogLoading) return
         if (!refresh && current.modelCatalog?.isEmpty == false) return
         _state.update { it.copy(modelCatalogLoading = true, modelError = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val catalog = models.options(_state.value.key?.profile, refresh)
                 _state.update { it.copy(modelCatalog = catalog, modelCatalogLoading = false) }
@@ -1055,7 +1065,7 @@ class ChatViewModel(
         }
 
         _state.update { it.copy(modelSwitching = true, modelError = null, modelConfirm = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val outcome = switchModelRemote(key, provider, model, confirmToken)
                 // 守卫拒绝是**成功回执**，里面的 revision/generation 也可能是新的：不采纳的话，
@@ -1167,7 +1177,7 @@ class ChatViewModel(
 
         rememberSessionModel(key, model = null, provider = null, reasoningEffort = effort)
         _state.update { it.copy(modelSwitching = true, modelError = null, reasoningEffort = effort) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val outcome = retryOnStaleFence(key) {
                     models.setReasoning(
@@ -1198,11 +1208,21 @@ class ChatViewModel(
     fun draftSelection(): Triple<String?, String?, String?> =
         Triple(preferences.draftProvider, preferences.draftModel, preferences.draftReasoning)
 
-    override fun onCleared() {
+    /**
+     * 释放：由 [dev.shinglem.hermes.component.chat.DefaultChatComponent] 的
+     * `Holder.onDestroy` 调用（原 `onCleared()` 钩子，去 ViewModel 继承后要显式调）。
+     */
+    fun dispose() {
         gateway.removeServerRequestHandler(APPROVAL_REQUEST)
+        gateway.removeServerRequestHandler(CLARIFY_REQUEST)
+        // 两个待决表都要取消：漏掉 clarify 的那些 `CompletableDeferred` 会永远挂着，
+        // 而 `awaitClarifyDecision` 的协程也就永远不结束（原 `onCleared()` 只清了审批那一半）。
         approvalDecisions.values.forEach { it.cancel() }
         approvalDecisions.clear()
         approvalFrameIds.clear()
+        clarifyDecisions.values.forEach { it.cancel() }
+        clarifyDecisions.clear()
+        clarifyFrameIds.clear()
     }
 
     // ── 切走 / 切回：快照与脏标记 ────────────────────────────────────────
@@ -1259,7 +1279,7 @@ class ChatViewModel(
             )
         }
         resumeInBackground(key)
-        viewModelScope.launch {
+        scope.launch {
             if (_state.value.key != key) return@launch
             // 还在跑：后续 delta / complete 会把内容补齐，别覆盖流式段落。
             if (repository.isSessionLive(key.profile, key.sessionId)) return@launch
@@ -1269,7 +1289,7 @@ class ChatViewModel(
 
     /** 不置 Loading 的重新读取：恢复快照后发现那轮已结束，用它把内容补齐。 */
     private fun reloadQuietly(key: SessionKey) {
-        viewModelScope.launch {
+        scope.launch {
             val loaded = try {
                 val page = repository.loadTranscript(key.profile, key.sessionId)
                 LoadedTranscript(page.rows, page.hasMore)
@@ -1298,11 +1318,11 @@ class ChatViewModel(
             // runtime 可复用，但模型可能还没读到（#16）：补一次 profile 默认。
             // 这里不 force resume —— 那会重新注册 live session，代价远大于收益。
             if (sessionModels[key] == null) {
-                viewModelScope.launch { seedModelInfo(key.profile) }
+                scope.launch { seedModelInfo(key.profile) }
             }
             return
         }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 ensureRuntime(key)
             } catch (cancelled: CancellationException) {
@@ -1685,7 +1705,7 @@ class ChatViewModel(
         if (text.isEmpty()) return
         deltaBuffer.append(text)
         if (flushJob?.isActive == true) return
-        flushJob = viewModelScope.launch {
+        flushJob = scope.launch {
             delay(STREAM_FLUSH_INTERVAL_MS)
             flushDeltaBuffer()
         }
@@ -1893,7 +1913,7 @@ class ChatViewModel(
         val key = pending.sessionKey ?: _state.value.key ?: return
         val runtimeId = pending.runtimeSessionId ?: runtimeIds[key] ?: return
         forgetPendingRequest(requestId)
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.respondClarify(
                     profile = key.profile,
@@ -1945,7 +1965,7 @@ class ChatViewModel(
     }
 
     private fun startTurnWatchdog(key: SessionKey, runtimeId: String) {
-        viewModelScope.launch {
+        scope.launch {
             delay(TURN_SILENCE_TIMEOUT_MS)
             if (_state.value.key != key || _state.value.streaming == null) return@launch
             val silentFor = Clock.System.now().toEpochMilliseconds() - (lastEventAt[key] ?: 0L)
@@ -2002,7 +2022,7 @@ class ChatViewModel(
     private fun acknowledgeApproval(requestId: String, runtimeId: String?) {
         val key = _state.value.key ?: return
         if (runtimeId.isNullOrBlank()) return
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.acknowledgeApproval(key.profile, runtimeId, requestId)
             } catch (cancelled: CancellationException) {
@@ -2018,7 +2038,7 @@ class ChatViewModel(
      * 那个响应帧永远不会到达本端，只能靠 `approval.pending` 恢复卡片。
      */
     private fun refreshPendingApprovals(key: SessionKey, runtimeId: String) {
-        viewModelScope.launch {
+        scope.launch {
             val pending = try {
                 repository.pendingApprovals(key.profile, runtimeId)
             } catch (cancelled: CancellationException) {

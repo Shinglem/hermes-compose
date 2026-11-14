@@ -49,7 +49,6 @@ import dev.shinglem.hermes.feature.capabilities.CapabilityDetailPane
 import dev.shinglem.hermes.feature.capabilities.CapabilityNavPane
 import dev.shinglem.hermes.feature.capabilities.CapabilityViewModel
 import dev.shinglem.hermes.feature.chat.ChatPane
-import dev.shinglem.hermes.feature.chat.ChatViewModel
 import dev.shinglem.hermes.feature.chat.PendingApproval
 import dev.shinglem.hermes.feature.chat.SessionKey
 import dev.shinglem.hermes.feature.editors.EditorLaunchContext
@@ -60,6 +59,9 @@ import dev.shinglem.hermes.feature.composer.ModelPill
 import dev.shinglem.hermes.feature.composer.ReasoningPill
 import com.arkivanov.decompose.ComponentContext
 import dev.shinglem.hermes.component.rememberDefaultComponentContext
+import dev.shinglem.hermes.component.chat.ChatEffect
+import dev.shinglem.hermes.component.chat.ChatIntent
+import dev.shinglem.hermes.component.chat.DefaultChatComponent
 import dev.shinglem.hermes.component.settings.ConfigCustomEndpointGateway
 import dev.shinglem.hermes.component.settings.ConfigModelSettingsGateway
 import dev.shinglem.hermes.component.settings.MaintenanceIntent
@@ -148,18 +150,23 @@ fun AppShell(
     val sessionViewModel: SessionListViewModel = viewModel {
         SessionListViewModel(container.sessionRepository, container.preferences, container.chatRepository)
     }
-    val chatViewModel: ChatViewModel = viewModel {
-        ChatViewModel(
-            container.chatRepository,
-            container.gateway,
-            container.modelRepository,
-            container.preferences,
+    // Chat 域：S4 起由 Component 持有（内部仍是原 ChatViewModel 的状态机，
+    // 只是 scope 与 5 个回调交给 Component —— 见 DefaultChatComponent 的类注释）。
+    val chatComponent = remember(context) {
+        DefaultChatComponent(
+            componentContext = context,
+            repository = container.chatRepository,
+            gateway = container.gateway,
+            models = container.modelRepository,
+            preferences = container.preferences,
         )
     }
     val composerViewModel: ComposerViewModel = viewModel {
         ComposerViewModel(
             repository = container.composerRepository,
-            sessions = chatViewModel,
+            // Composer 的 `@` / `/` 补全要用 chat 的运行时（profile + runtimeId），
+            // 走 `ComposerSessionContext` 接口。S5 落 RootComponent 后改为注入 Component。
+            sessions = chatComponent.model,
             preferences = container.preferences,
         )
     }
@@ -179,8 +186,7 @@ fun AppShell(
     }
     val subagentViewModel: SubagentViewModel = viewModel {
         SubagentViewModel(container.gateway) {
-            val info = chatViewModel.runtimeInfo()
-            info?.let { SubagentViewModel.RuntimeContext(chatViewModel.profile, it.runtimeId) }
+            chatComponent.runtimeId?.let { SubagentViewModel.RuntimeContext(chatComponent.profile, it) }
         }
     }
     val updaterViewModel: UpdaterViewModel = viewModel {
@@ -286,7 +292,7 @@ fun AppShell(
     }
     var paletteOpen by remember { mutableStateOf(false) }
     val sessionState by sessionViewModel.state.collectAsStateWithLifecycle()
-    val chatState by chatViewModel.state.collectAsStateWithLifecycle()
+    val chatState by chatComponent.state.collectAsStateWithLifecycle()
     val composerState by composerViewModel.state.collectAsStateWithLifecycle()
     val capabilityState by capabilityViewModel.state.collectAsStateWithLifecycle()
     val settingsState by settingsViewModel.state.collectAsStateWithLifecycle()
@@ -371,26 +377,19 @@ fun AppShell(
         // 选中项属于上一个 profile（刚切换、列表还没刷回来）：这一帧不要去读历史，
         // 那个 id 在新 profile 里不存在，后端会返回 404。等列表刷新后本 effect 会再跑一次。
         if (sessionState.profile != shellState.activeProfile) {
-            chatViewModel.open(shellState.activeProfile, null)
+            chatComponent.onIntent(ChatIntent.Open(shellState.activeProfile, null))
             composerViewModel.openSession(null)
             return@LaunchedEffect
         }
         // 刚新建的会话还没有 transcript（history 会 404），直接置空而不是当错误处理。
         if (selectedId != null && selectedId == sessionState.justCreatedId) {
-            chatViewModel.adoptEmpty(shellState.activeProfile, selectedId)
+            chatComponent.onIntent(ChatIntent.AdoptEmpty(shellState.activeProfile, selectedId))
         } else {
-            chatViewModel.open(shellState.activeProfile, selectedId)
+            chatComponent.onIntent(ChatIntent.Open(shellState.activeProfile, selectedId))
         }
         composerViewModel.openSession(selectedId)
     }
 
-    // 新建会话在第一条 prompt 之前不在 session.list 里，等后端接受后再刷新列表。
-    DisposableEffect(chatViewModel, sessionViewModel) {
-        chatViewModel.onSessionPersisted = {
-            sessionViewModel.refresh(shellState.activeProfile)
-        }
-        onDispose { chatViewModel.onSessionPersisted = null }
-    }
 
     // 一轮结束 / 审批 / clarify 的系统通知：用户没看着对应会话时才弹，点击直达该会话。
     val reminders = remember { ReminderGate() }
@@ -447,7 +446,7 @@ fun AppShell(
         target: SessionKey?,
         foreground: Boolean = AppFocus.isForeground,
         /** 卡片已经在界面上（当前会话的审批）——此时再弹系统通知就是纯噪音。 */
-        onScreen: Boolean = chatViewModel.state.value.visibleApprovals.any {
+        onScreen: Boolean = chatState.visibleApprovals.any {
             it.requestId == approval.requestId
         },
     ) {
@@ -459,50 +458,66 @@ fun AppShell(
                 .ifBlank { approval.description.trim() }
                 .ifBlank { "有一个命令等待确认" },
             actions = listOf(
-                NotificationAction("允许一次") { chatViewModel.resolveApproval(approval.requestId, "once") },
-                NotificationAction("拒绝") { chatViewModel.resolveApproval(approval.requestId, "deny") },
+                NotificationAction("允许一次") { chatComponent.onIntent(ChatIntent.ResolveApproval(approval.requestId, "once")) },
+                NotificationAction("拒绝") { chatComponent.onIntent(ChatIntent.ResolveApproval(approval.requestId, "deny")) },
             ),
             foreground = foreground,
             onScreen = onScreen,
         )
     }
 
-    DisposableEffect(chatViewModel, container) {
-        chatViewModel.onTurnFinished = { failed, text ->
-            val enabled = container.preferences.notificationsEnabled
-            if (enabled && !AppFocus.isForeground && SystemNotifications.supported) {
-                val title = if (failed) {
-                    "${ProductInfo.DISPLAY_NAME} · 本轮失败"
-                } else {
-                    "${ProductInfo.DISPLAY_NAME} · 已完成"
+    // Chat 域的一次性事件统一在这里消费（S4：5 个 `var onXxx` → 一个 effects 流）。
+    //
+    // 为什么合并成一个收集器：`effects` 是单条 `Flow`，多个 `LaunchedEffect` 各自
+    // `collect` 会**抢事件**（每个消费者只拿到一部分）。迁移前的 5 个 `var` 之所以
+    // 没出问题，是因为它们本来就是 5 条独立的回调槽。
+    LaunchedEffect(chatComponent, sessionViewModel) {
+        chatComponent.effects.collect { effect ->
+            when (effect) {
+                // 新建会话在第一条 prompt 之前不在 session.list 里，等后端接受后再刷新。
+                ChatEffect.SessionPersisted -> sessionViewModel.refresh(shellState.activeProfile)
+
+                is ChatEffect.TurnFinished -> {
+                    val enabled = container.preferences.notificationsEnabled
+                    if (enabled && !AppFocus.isForeground && SystemNotifications.supported) {
+                        val title = if (effect.failed) {
+                            "${ProductInfo.DISPLAY_NAME} · 本轮失败"
+                        } else {
+                            "${ProductInfo.DISPLAY_NAME} · 已完成"
+                        }
+                        val body = effect.text.trim()
+                            .ifBlank { if (effect.failed) "这一轮没有正常结束" else "回答已生成" }
+                        SystemNotifications.setPendingAction(null)
+                        SystemNotifications.show(title, body.take(180))
+                    }
                 }
-                val body = text.trim().ifBlank { if (failed) "这一轮没有正常结束" else "回答已生成" }
-                SystemNotifications.setPendingAction(null)
-                SystemNotifications.show(title, body.take(180))
+
+                // 审批超时会按拒绝处理（命令直接失败），所以用户没看着这个会话时必须提醒。
+                is ChatEffect.ApprovalRequested -> remindApproval(
+                    effect.approval,
+                    effect.key ?: effect.approval.sessionKey,
+                )
+
+                is ChatEffect.ClarifyRequested -> remind(
+                    id = "clarify:${effect.clarify.requestId}",
+                    target = effect.key ?: effect.clarify.sessionKey,
+                    title = "${ProductInfo.DISPLAY_NAME} · 等待回答",
+                    body = effect.clarify.questions.firstOrNull()?.question?.trim().orEmpty()
+                        .ifBlank { "agent 正在等你回答一个问题" },
+                    onScreen = chatState.visibleClarify.any {
+                        it.requestId == effect.clarify.requestId
+                    },
+                )
+
+                // 分支出的新会话：刷新列表并选中它（分支结果是 live 的，列表里马上能看到）。
+                is ChatEffect.Branched -> {
+                    sessionViewModel.refresh(shellState.activeProfile)
+                    sessionViewModel.select(effect.from.storedSessionId)
+                }
             }
         }
-        // 审批超时会按拒绝处理（命令直接失败），所以用户没看着这个会话时必须提醒。
-        chatViewModel.onApprovalRequested = { approval, target ->
-            remindApproval(approval, target ?: approval.sessionKey)
-        }
-        chatViewModel.onClarifyRequested = { clarify, target ->
-            remind(
-                id = "clarify:${clarify.requestId}",
-                target = target ?: clarify.sessionKey,
-                title = "${ProductInfo.DISPLAY_NAME} · 等待回答",
-                body = clarify.questions.firstOrNull()?.question?.trim().orEmpty()
-                    .ifBlank { "agent 正在等你回答一个问题" },
-                onScreen = chatViewModel.state.value.visibleClarify.any {
-                    it.requestId == clarify.requestId
-                },
-            )
-        }
-        onDispose {
-            chatViewModel.onTurnFinished = null
-            chatViewModel.onApprovalRequested = null
-            chatViewModel.onClarifyRequested = null
-        }
     }
+
 
     // 用户切走会话 / 切 profile / **把窗口切到后台**之后，仍未处理的审批与提问再判断一次：
     // 到达时可能正看着（没弹），切走后就该提醒了。被跳过的那条没有进 ReminderGate，
@@ -549,13 +564,6 @@ fun AppShell(
     }
 
     // 分支出的新会话：刷新列表并选中它（分支结果是 live 的，列表里马上能看到）。
-    DisposableEffect(chatViewModel, sessionViewModel) {
-        chatViewModel.onBranched = { branch ->
-            sessionViewModel.refresh(shellState.activeProfile)
-            sessionViewModel.select(branch.storedSessionId)
-        }
-        onDispose { chatViewModel.onBranched = null }
-    }
 
     // 运行态点：连上后端后每 5s 刷一次活跃会话集合（失败静默）。
     LaunchedEffect(shellState.isConnected) {
@@ -880,17 +888,17 @@ fun AppShell(
                                     val id = sessionState.selectedId
                                     // 刚新建的会话还没有 transcript，重新加载只会再拿一次 404。
                                     if (id != null && id == sessionState.justCreatedId) {
-                                        chatViewModel.adoptEmpty(shellState.activeProfile, id)
+                                        chatComponent.onIntent(ChatIntent.AdoptEmpty(shellState.activeProfile, id))
                                     } else {
-                                        chatViewModel.reload(shellState.activeProfile, id)
+                                        chatComponent.onIntent(ChatIntent.Reload(shellState.activeProfile, id))
                                     }
                                 },
                                 onReload = {
                                     val id = sessionState.selectedId
                                     if (id != null && id == sessionState.justCreatedId) {
-                                        chatViewModel.adoptEmpty(shellState.activeProfile, id)
+                                        chatComponent.onIntent(ChatIntent.AdoptEmpty(shellState.activeProfile, id))
                                     } else {
-                                        chatViewModel.reload(shellState.activeProfile, id)
+                                        chatComponent.onIntent(ChatIntent.Reload(shellState.activeProfile, id))
                                     }
                                 },
                                 onSend = { text ->
@@ -899,43 +907,43 @@ fun AppShell(
                                     // 不回传就永远到不了模型（待修复问题 #19）。
                                     val attachments = composerViewModel.state.value.attachments
                                         .mapNotNull { it.toPromptAttachment() }
-                                    chatViewModel.send(text, attachments)
+                                    chatComponent.onIntent(ChatIntent.Send(text, attachments))
                                     composerViewModel.markSent(text)
                                 },
-                                onStop = chatViewModel::stop,
-                                onApprove = chatViewModel::resolveApproval,
-                                onClarifyAnswer = chatViewModel::answerClarify,
-                                onClarifyCancel = chatViewModel::cancelClarify,
+                                onStop = { chatComponent.onIntent(ChatIntent.Stop) },
+                                onApprove = { id, choice -> chatComponent.onIntent(ChatIntent.ResolveApproval(id, choice)) },
+                                onClarifyAnswer = { id, answers -> chatComponent.onIntent(ChatIntent.AnswerClarify(id, answers)) },
+                                onClarifyCancel = { id -> chatComponent.onIntent(ChatIntent.CancelClarify(id)) },
                                 onQuote = composerViewModel::quote,
                                 modifier = Modifier.weight(1f),
-                                onConfirmModelSwitch = chatViewModel::confirmModelSwitch,
-                                onDismissModelConfirm = chatViewModel::dismissModelConfirm,
-                                onDismissModelError = chatViewModel::dismissModelError,
-                                onLoadOlder = chatViewModel::loadOlder,
+                                onConfirmModelSwitch = { chatComponent.onIntent(ChatIntent.ConfirmModelSwitch) },
+                                onDismissModelConfirm = { chatComponent.onIntent(ChatIntent.DismissModelConfirm) },
+                                onDismissModelError = { chatComponent.onIntent(ChatIntent.DismissModelError) },
+                                onLoadOlder = { chatComponent.onIntent(ChatIntent.LoadOlder) },
                                 onRewind = { item ->
                                     // 历史消息的 id 是后端 row id；本地刚发的 `local:` 不能拿去截断。
                                     if (!item.id.startsWith("local:")) {
-                                        chatViewModel.beginRewind(item.id, item.text)
+                                        chatComponent.onIntent(ChatIntent.BeginRewind(item.id, item.text))
                                     }
                                 },
                                 onBranch = { item ->
                                     if (!item.id.startsWith("local:")) {
                                         val title = selectedSession?.displayTitle.orEmpty()
-                                        chatViewModel.beginBranch(item.id, title)
+                                        chatComponent.onIntent(ChatIntent.BeginBranch(item.id, title))
                                     }
                                 },
-                                onConfirmRewind = chatViewModel::confirmRewind,
-                                onCancelRewind = chatViewModel::cancelRewind,
-                                onConfirmBranch = chatViewModel::confirmBranch,
-                                onCancelBranch = chatViewModel::cancelBranch,
-                                onShowUsageDetail = chatViewModel::loadUsageDetail,
-                                onDismissUsageError = chatViewModel::dismissUsageError,
+                                onConfirmRewind = { chatComponent.onIntent(ChatIntent.ConfirmRewind) },
+                                onCancelRewind = { chatComponent.onIntent(ChatIntent.CancelRewind) },
+                                onConfirmBranch = { chatComponent.onIntent(ChatIntent.ConfirmBranch) },
+                                onCancelBranch = { chatComponent.onIntent(ChatIntent.CancelBranch) },
+                                onShowUsageDetail = { chatComponent.onIntent(ChatIntent.LoadUsageDetail) },
+                                onDismissUsageError = { chatComponent.onIntent(ChatIntent.DismissUsageError) },
                                 onOpenSubagents = { subagentViewModel.open() },
-                                onKillBackgroundTask = chatViewModel::killBackgroundTask,
-                                onSteerQueued = chatViewModel::steerQueuedPrompt,
-                                onCancelQueued = chatViewModel::cancelQueuedPrompt,
-                                onReconnect = chatViewModel::reconnect,
-                                onDismissBackgroundTask = chatViewModel::dismissBackgroundTask,
+                                onKillBackgroundTask = { id -> chatComponent.onIntent(ChatIntent.KillBackgroundTask(id)) },
+                                onSteerQueued = { id -> chatComponent.onIntent(ChatIntent.SteerQueued(id)) },
+                                onCancelQueued = { id -> chatComponent.onIntent(ChatIntent.CancelQueued(id)) },
+                                onReconnect = { chatComponent.onIntent(ChatIntent.Reconnect) },
+                                onDismissBackgroundTask = { id -> chatComponent.onIntent(ChatIntent.DismissBackgroundTask(id)) },
                                 modelBar = {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
@@ -948,9 +956,9 @@ fun AppShell(
                                             loading = chatState.modelCatalogLoading,
                                             busy = chatState.modelSwitching,
                                             enabled = true,
-                                            onRequestCatalog = { chatViewModel.loadModelCatalog() },
+                                            onRequestCatalog = { chatComponent.onIntent(ChatIntent.LoadModelCatalog) },
                                             onSelect = { entry ->
-                                                chatViewModel.switchModel(entry.provider, entry.model)
+                                                chatComponent.onIntent(ChatIntent.SwitchModel(entry.provider, entry.model))
                                             },
                                         )
                                         ReasoningPill(
@@ -960,7 +968,7 @@ fun AppShell(
                                                 ?: true,
                                             busy = chatState.modelSwitching,
                                             enabled = true,
-                                            onSelect = chatViewModel::setReasoning,
+                                            onSelect = { effort -> chatComponent.onIntent(ChatIntent.SetReasoning(effort)) },
                                         )
                                     }
                                 },
