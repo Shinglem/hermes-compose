@@ -48,6 +48,7 @@ import dev.shinglem.hermes.core.log.Log
 import dev.shinglem.hermes.core.log.StartupLog
 import dev.shinglem.hermes.core.prefs.WindowBounds
 import dev.shinglem.hermes.di.DesktopContainer
+import dev.shinglem.hermes.di.KoinStartup
 import dev.shinglem.hermes.feature.terminal.TerminalContent
 import dev.shinglem.hermes.platform.AppFocus
 import dev.shinglem.hermes.platform.SystemNotifications
@@ -166,6 +167,10 @@ fun main(args: Array<String>) {
     }
     startup.info("config", "ok mode=${container.config.backend.mode} log=${container.config.app.logLevel}")
 
+    // Koin 图（ADR-076）：S5 的 Component 树按类型取依赖。
+    // 必须在 `AppShell` 组合之前起来 —— 那里的 `AppRoot` 会 `KoinApplication {}`。
+    KoinStartup.start(container)
+
     // 原生通知（Windows toast）的实例身份按 <home> 哈希，与单实例命名同源：
     // 两份便携包各有独立的 AUMID 与开始菜单快捷方式，互不覆盖。
     NativeNotifications.attachHome(File(startup.homePath))
@@ -267,6 +272,8 @@ fun main(args: Array<String>) {
 
         fun quit() {
             startup.info("exit", "requested from tray")
+            // 先停图再拆容器：Component 的 onDestroy 可能还要从图里取东西。
+            KoinStartup.stop()
             container.close()
             exitApplication()
         }

@@ -72,7 +72,8 @@ class AppContainer(
     /** `terminal.read` 应答与 agent 镜像标签的事件订阅。 */
     val terminalRepository: TerminalRepository,
     val logger: AppLogger,
-    private val scope: CoroutineScope,
+    /** 应用级 scope：Component 的 Executor 与一次性任务共用（见 ADR-076）。 */
+    val scope: CoroutineScope,
     /** 启动时解析出的配置（不可变，全程只读）。 */
     val config: AppConfig,
     /** 后端数据根（`HERMES_HOME`）的绝对路径：维护页要用它拼记忆文件路径。 */
