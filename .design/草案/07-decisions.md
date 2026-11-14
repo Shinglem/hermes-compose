@@ -2424,3 +2424,32 @@ FileKit 的 Windows 实现是挂起函数 + COM，不占用调用线程。
 **"能不能换"要用 `jdeps` 与反编译证明，不能用包名推断。**
 `java.desktop` 在 `runtimeModules` 里仍然**必须保留** —— Compose/Skiko 自身依赖它
 （字体、`BufferedImage`、窗口层），只是业务代码不再直接引用。这两件事经常被混为一谈。
+
+### 追加验证（2026-11-14，真机 UI 路径）
+
+之前只验证了「实现正确」（直接调生产 `Clipboard`），没验证「UI 接线正确」。这一轮补上了：
+
+| 路径 | 结果 |
+|---|---|
+| UI `Ctrl+V` → `Clipboard.getText()` | ✅ 读回 17 字符中文，输入框显示 `UI粘贴验证-中文-content` |
+| UI `Ctrl+V` → `Clipboard.hasImage()` → `saveImageToTemp()` → 附件 | ✅ 输入框上方出现 `已附加: upload_866g5r1z.png` |
+
+也就是从按键到**后端接受 `image.attach_bytes`** 的完整链路都通了。
+
+#### 注入侧的三个坑（与实现无关，但会让人误判成"实现坏了"）
+
+1. **`VK_CONTROL`（0x11）不生效，必须用 `VK_LCONTROL`（0xA2）**。
+   用 0x11 时 `Ctrl+V` 一次都没进 `handleComposerKey`；换 0xA2 立刻生效。
+2. **中文 IME 布局（`0x8040804`）会吞掉注入的普通按键** —— 字母 `a` 打进去没反应。
+   用 Win+Space 切到 `0x4090409` 后 `abc` 正常输入。这与技能
+   [`dev-desktop-gui-e2e-testing`](../../skill/dev-desktop-gui-e2e-testing/SKILL.md) §1 的记录一致。
+3. **`SetWindowPos(HWND_TOPMOST)` 之后点击/按键会失效**。
+   置顶只应用于截图，交互前必须复原（技能 §3.4 也是这么写的）。
+
+#### 判据：怎么区分"注入没到"与"实现坏了"
+
+在 `Composer.handleComposerKey` 的 `Ctrl+V` 分支临时加 `Log.info("DIAG ...")`：
+- 日志**没有** DIAG → 按键没到应用（注入问题），与应用无关；
+- 日志**有** DIAG 但行为不对 → 才是实现问题。
+
+定位完立刻删掉，别留在代码里（本轮已删干净，`git diff` 为空）。
