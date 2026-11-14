@@ -107,57 +107,47 @@ fun SettingsNavPane(
  */
 @Composable
 fun SettingsDetailPane(
-    state: SettingsState,
-    onEdit: (String, String) -> Unit,
-    onSave: () -> Unit,
-    onRestart: () -> Unit,
-    onDismissSaved: () -> Unit,
-    terminalSettings: TerminalSettings = TerminalSettings(),
-    onTerminalSettingsChange: ((TerminalSettings) -> TerminalSettings) -> Unit = {},
-    /** 提供方密钥页：S2 起整页由 Component 驱动。 */
-    providerKeys: ProviderKeysComponent? = null,
-    /** 自定义端点页：S2 起整页由 Component 驱动。 */
-    customEndpoints: CustomEndpointComponent? = null,
-    /** 配置档案页：S2 起整页由 Component 驱动。 */
-    profiles: ProfilesComponent? = null,
-    /** 模型三页（主 / 辅助 / 备用）：S2 起共用一份 Component。 */
-    modelSettings: ModelSettingsComponent? = null,
-    /** MoA 页：S2 起整页由 Component 驱动（模型目录仍是旧 state，见 `MoaContent` 注释）。 */
-    moa: MoaComponent? = null,
-    /** 安全三页：S2 起整页由 Component 驱动，不再收 state + 三个回调。 */
-    security: SecurityComponent? = null,
-    officialDesktop: dev.shinglem.hermes.core.app.OfficialDesktopLauncher? = null,
-    autostart: AutostartInfo = AutostartInfo.DISABLED,
-    orphanTasks: List<OrphanTaskInfo> = emptyList(),
-    onDeleteOrphanTask: (String) -> Unit = {},
-    // ── v0.3.0 桌面组 ──
-    notificationsEnabled: Boolean = true,
-    onNotificationsToggle: (Boolean) -> Unit = {},
-    nativeNotifications: Boolean = false,
-    onNativeNotificationsToggle: (Boolean) -> Unit = {},
-    browserHeaded: Boolean = false,
-    onBrowserHeadedToggle: (Boolean) -> Unit = {},
-    browserArgs: String = "",
-    onBrowserArgsChange: (String) -> Unit = {},
-    editors: EditorsOptions = EditorsOptions(),
-    onEditorsSave: (EditorsOptions) -> Unit = {},
-    updateState: UpdateState = UpdateState(),
-    onCheckUpdate: () -> Unit = {},
-    backendVersion: String = "",
-    dataDir: String = "",
-    logDir: String = "",
-    maintenance: MaintenanceViewModel,
-    /** 后端管理页（#15）：由桌面容器注入，缺省时该页留空。 */
-    backendAdmin: dev.shinglem.hermes.component.backend.BackendComponent? = null,
-    /**
-     * 维护类页面顶部的「应用到」档案清单（纯数据，来自 shell 的档案列表）。
-     *
-     * 切换只改本组页面的配置目标，**不**动会话页当前使用的档案。
-     */
-    profileChoices: List<ProfileChoice> = emptyList(),
-    onSelectScopeProfile: (String) -> Unit = {},
-    modifier: Modifier = Modifier,
+    scope: SettingsDetailScope,
 ) {
+    // 过渡期解构：函数体里 200+ 处直接引用这些局部名。
+    // 全部改成 scope.xxx 是纯机械改名，留到 S8；这里先让签名达标（38 → 3 参数）。
+    val state = scope.state
+    val onEdit = scope.onEdit
+    val onSave = scope.onSave
+    val onRestart = scope.onRestart
+    val onDismissSaved = scope.onDismissSaved
+    val terminalSettings = scope.terminalSettings
+    val onTerminalSettingsChange = scope.onTerminalSettingsChange
+    val providerKeys = scope.providerKeys
+    val customEndpoints = scope.customEndpoints
+    val profiles = scope.profiles
+    val modelSettings = scope.modelSettings
+    val moa = scope.moa
+    val security = scope.security
+    val officialDesktop = scope.officialDesktop
+    val autostart = scope.autostart
+    val orphanTasks = scope.orphanTasks
+    val onDeleteOrphanTask = scope.onDeleteOrphanTask
+    val notificationsEnabled = scope.notificationsEnabled
+    val onNotificationsToggle = scope.onNotificationsToggle
+    val nativeNotifications = scope.nativeNotifications
+    val onNativeNotificationsToggle = scope.onNativeNotificationsToggle
+    val browserHeaded = scope.browserHeaded
+    val onBrowserHeadedToggle = scope.onBrowserHeadedToggle
+    val browserArgs = scope.browserArgs
+    val onBrowserArgsChange = scope.onBrowserArgsChange
+    val editors = scope.editors
+    val onEditorsSave = scope.onEditorsSave
+    val updateState = scope.updateState
+    val onCheckUpdate = scope.onCheckUpdate
+    val backendVersion = scope.backendVersion
+    val dataDir = scope.dataDir
+    val logDir = scope.logDir
+    val maintenance = scope.maintenance
+    val backendAdmin = scope.backendAdmin
+    val profileChoices = scope.profileChoices
+    val onSelectScopeProfile = scope.onSelectScopeProfile
+    val modifier = scope.modifier
     val maintenanceMemory by maintenance.memory.collectAsState()
     val maintenanceOps by maintenance.ops.collectAsState()
     val maintenanceCredentials by maintenance.credentials.collectAsState()
@@ -716,3 +706,51 @@ private fun FieldRow(field: SettingsField, value: String, onEdit: (String, Strin
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
+
+/**
+ * 设置页详情面板需要的**全部外部依赖**（S5）。
+ *
+ * 原来它们是 `SettingsDetailPane` 的 38 个平铺参数。那个形状的问题是：
+ * 新增一个设置项就要改函数签名，而调用点（`AppShell` 里 60 行的调用）也跟着改，
+ * 很容易漏传默认值变成静默失效。收成一个对象后签名只剩 3 个参数。
+ */
+@androidx.compose.runtime.Immutable
+class SettingsDetailScope(
+    val state: SettingsState,
+    val onEdit: (String, String) -> Unit,
+    val onSave: () -> Unit,
+    val onRestart: () -> Unit,
+    val onDismissSaved: () -> Unit,
+    val terminalSettings: TerminalSettings = TerminalSettings(),
+    val onTerminalSettingsChange: ((TerminalSettings) -> TerminalSettings) -> Unit = {},
+    val providerKeys: ProviderKeysComponent? = null,
+    val customEndpoints: CustomEndpointComponent? = null,
+    val profiles: ProfilesComponent? = null,
+    val modelSettings: ModelSettingsComponent? = null,
+    val moa: MoaComponent? = null,
+    val security: SecurityComponent? = null,
+    val officialDesktop: dev.shinglem.hermes.core.app.OfficialDesktopLauncher? = null,
+    val autostart: AutostartInfo = AutostartInfo.DISABLED,
+    val orphanTasks: List<OrphanTaskInfo> = emptyList(),
+    val onDeleteOrphanTask: (String) -> Unit = {},
+    val notificationsEnabled: Boolean = true,
+    val onNotificationsToggle: (Boolean) -> Unit = {},
+    val nativeNotifications: Boolean = false,
+    val onNativeNotificationsToggle: (Boolean) -> Unit = {},
+    val browserHeaded: Boolean = false,
+    val onBrowserHeadedToggle: (Boolean) -> Unit = {},
+    val browserArgs: String = "",
+    val onBrowserArgsChange: (String) -> Unit = {},
+    val editors: EditorsOptions = EditorsOptions(),
+    val onEditorsSave: (EditorsOptions) -> Unit = {},
+    val updateState: UpdateState = UpdateState(),
+    val onCheckUpdate: () -> Unit = {},
+    val backendVersion: String = "",
+    val dataDir: String = "",
+    val logDir: String = "",
+    val maintenance: MaintenanceViewModel,
+    val backendAdmin: dev.shinglem.hermes.component.backend.BackendComponent? = null,
+    val profileChoices: List<ProfileChoice> = emptyList(),
+    val onSelectScopeProfile: (String) -> Unit = {},
+    val modifier: Modifier = Modifier,
+)

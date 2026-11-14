@@ -843,51 +843,54 @@ fun AppShell(
                                     )
                                 }
                             }
-                            SettingsDetailPane(                                state = settingsState,
-                                onEdit = settingsViewModel::edit,
-                                onSave = settingsViewModel::save,
-                                onRestart = settingsViewModel::restart,
-                                onDismissSaved = settingsViewModel::dismissSaved,
-                                terminalSettings = terminalSettings,
-                                onTerminalSettingsChange = container.terminalViewModel::updateSettings,
-                                providerKeys = providerKeysComponent,
-                                customEndpoints = customEndpointComponent,
-
-                                profiles = profilesComponent,
-
-                                modelSettings = modelSettingsComponent,
-                                moa = moaComponent,
-                                security = securityComponent,
-                                officialDesktop = container.officialDesktop,
-                                autostart = autostartInfo,
-                                orphanTasks = orphanTasks,
-                                notificationsEnabled = settingsState.notificationsEnabled,
-                                onNotificationsToggle = settingsViewModel::setNotificationsEnabled,
-                                nativeNotifications = settingsState.nativeNotifications,
-                                onNativeNotificationsToggle = settingsViewModel::setNativeNotifications,
-                                browserHeaded = settingsState.browserHeaded,
-                                onBrowserHeadedToggle = settingsViewModel::setBrowserHeaded,
-                                browserArgs = settingsState.browserArgs,
-                                onBrowserArgsChange = settingsViewModel::setBrowserArgs,
-                                editors = settingsState.editors,
-                                onEditorsSave = settingsViewModel::setEditors,
-                                updateState = updateState,
-                                onCheckUpdate = { updaterComponent.onIntent(UpdaterIntent.Check()) },
-                                backendVersion = shellState.health?.version.orEmpty(),
-                                dataDir = appDataDir,
-                                logDir = container.config.app.log.dir,
-                                maintenance = maintenance,
-                                backendAdmin = backendComponent,
-                                profileChoices = maintenanceProfileChoices,
-                                onSelectScopeProfile = maintenance::setScopeProfile,
-                                onDeleteOrphanTask = { name ->
-                                    composerScope.launch(Dispatchers.IO) {
-                                        if (container.deleteOrphanTask(name)) {
-                                            container.orphanTasks.update { list -> list.filterNot { it.name == name } }
+                            SettingsDetailPane(
+                                scope = dev.shinglem.hermes.feature.settings.SettingsDetailScope(
+                                    state = settingsState,
+                                    onEdit = settingsViewModel::edit,
+                                    onSave = settingsViewModel::save,
+                                    onRestart = settingsViewModel::restart,
+                                    onDismissSaved = settingsViewModel::dismissSaved,
+                                    terminalSettings = terminalSettings,
+                                    onTerminalSettingsChange = container.terminalViewModel::updateSettings,
+                                    providerKeys = providerKeysComponent,
+                                    customEndpoints = customEndpointComponent,
+    
+                                    profiles = profilesComponent,
+    
+                                    modelSettings = modelSettingsComponent,
+                                    moa = moaComponent,
+                                    security = securityComponent,
+                                    officialDesktop = container.officialDesktop,
+                                    autostart = autostartInfo,
+                                    orphanTasks = orphanTasks,
+                                    notificationsEnabled = settingsState.notificationsEnabled,
+                                    onNotificationsToggle = settingsViewModel::setNotificationsEnabled,
+                                    nativeNotifications = settingsState.nativeNotifications,
+                                    onNativeNotificationsToggle = settingsViewModel::setNativeNotifications,
+                                    browserHeaded = settingsState.browserHeaded,
+                                    onBrowserHeadedToggle = settingsViewModel::setBrowserHeaded,
+                                    browserArgs = settingsState.browserArgs,
+                                    onBrowserArgsChange = settingsViewModel::setBrowserArgs,
+                                    editors = settingsState.editors,
+                                    onEditorsSave = settingsViewModel::setEditors,
+                                    updateState = updateState,
+                                    onCheckUpdate = { updaterComponent.onIntent(UpdaterIntent.Check()) },
+                                    backendVersion = shellState.health?.version.orEmpty(),
+                                    dataDir = appDataDir,
+                                    logDir = container.config.app.log.dir,
+                                    maintenance = maintenance,
+                                    backendAdmin = backendComponent,
+                                    profileChoices = maintenanceProfileChoices,
+                                    onSelectScopeProfile = maintenance::setScopeProfile,
+                                    onDeleteOrphanTask = { name ->
+                                        composerScope.launch(Dispatchers.IO) {
+                                            if (container.deleteOrphanTask(name)) {
+                                                container.orphanTasks.update { list -> list.filterNot { it.name == name } }
+                                            }
                                         }
-                                    }
-                                },
-                                modifier = Modifier.weight(1f),
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                ),
                             )
                         }
                     },
