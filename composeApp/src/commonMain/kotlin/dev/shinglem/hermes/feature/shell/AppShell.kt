@@ -54,6 +54,10 @@ import dev.shinglem.hermes.feature.chat.SessionKey
 import dev.shinglem.hermes.feature.editors.EditorLaunchContext
 import dev.shinglem.hermes.feature.editors.LocalEditorLaunchContext
 import dev.shinglem.hermes.feature.composer.ComposerController
+import dev.shinglem.hermes.component.sessionlist.DefaultSessionListComponent
+import dev.shinglem.hermes.component.sessionlist.SessionListComponent
+import dev.shinglem.hermes.component.capability.CapabilityComponent
+import dev.shinglem.hermes.component.capability.DefaultCapabilityComponent
 import dev.shinglem.hermes.component.composer.ComposerComponent
 import dev.shinglem.hermes.component.composer.DefaultComposerComponent
 import dev.shinglem.hermes.feature.composer.ComposerViewModel
@@ -172,9 +176,17 @@ fun AppShell(
             ),
         )
     }
-    val sessionViewModel: SessionListViewModel = viewModel {
-        SessionListViewModel(container.sessionRepository, container.preferences, container.chatRepository)
+    // 会话列表：S5 起由 Component 持有（**过渡形态** —— 内部仍是 SessionListViewModel，
+    // 30+ 个动作逐个搬进 Reducer 是纯机械劳动，留到 S8；见 DefaultSessionListComponent 注释）。
+    val sessionListComponent: SessionListComponent = remember(context) {
+        DefaultSessionListComponent(
+            componentContext = context,
+            repository = container.sessionRepository,
+            preferences = container.preferences,
+            chat = container.chatRepository,
+        )
     }
+    val sessionViewModel: SessionListViewModel = sessionListComponent.model
     // Chat 域：S4 起由 Component 持有（内部仍是原 ChatViewModel 的状态机，
     // 只是 scope 与 5 个回调交给 Component —— 见 DefaultChatComponent 的类注释）。
     val chatComponent = remember(context) {
@@ -208,15 +220,29 @@ fun AppShell(
             gateway = ProviderBackendGateway(container.backend, container.gateway),
         )
     }
-    val capabilityViewModel: CapabilityViewModel = viewModel {        CapabilityViewModel(container.capabilityRepository)
+    // 能力页：S5 起由 Component 持有（**过渡形态** —— 内部仍是 CapabilityViewModel，
+    // 20+ 个动作逐个搬进 Reducer 是纯机械劳动，留到 S8；见 DefaultCapabilityComponent 注释）。
+    val capabilityComponent: CapabilityComponent = remember(context) {
+        DefaultCapabilityComponent(
+            componentContext = context,
+            repository = container.capabilityRepository,
+        )
     }
-    val settingsViewModel: SettingsViewModel = viewModel {
+    val capabilityViewModel: CapabilityViewModel = capabilityComponent.model
+    // 设置页：S5 起 scope 由 componentScope 提供（去掉 viewModelScope 兜底）。
+    val componentScope = remember(context) {
+        kotlinx.coroutines.CoroutineScope(
+            kotlinx.coroutines.SupervisorJob() + dev.shinglem.hermes.platform.UiDispatcher.context,
+        )
+    }
+    val settingsViewModel: SettingsViewModel = remember(context) {
         SettingsViewModel(
             store = container.settingsStore,
             config = container.config,
             restarter = container.restarter,
             preferences = container.preferences,
             debugAvailable = container.officialDesktop != null,
+            externalScope = componentScope,
         )
     }
     val subagentComponent: dev.shinglem.hermes.component.subagent.SubagentComponent = remember(context) {

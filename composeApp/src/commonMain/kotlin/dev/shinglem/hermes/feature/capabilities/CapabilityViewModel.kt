@@ -2,8 +2,6 @@ package dev.shinglem.hermes.feature.capabilities
 
 import dev.shinglem.hermes.core.error.toNotice
 import dev.shinglem.hermes.core.error.toUserNotice
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import dev.shinglem.hermes.core.contract.CronJobCreate
 import dev.shinglem.hermes.core.contract.CronJobDto
 import dev.shinglem.hermes.core.contract.CronJobPatch
@@ -12,6 +10,7 @@ import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.result.Loadable
 import dev.shinglem.hermes.core.result.valueOrNull
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,7 +25,14 @@ import kotlinx.coroutines.launch
  */
 class CapabilityViewModel(
     private val repository: CapabilityRepository,
-) : ViewModel() {
+    /**
+     * 协程作用域（S5：从 `viewModelScope` 改成注入）。
+     *
+     * 这一域有 14 处 launch 且共享 `profile` / `platformDrafts` 等可变状态，
+     * 必须传**单线程** dispatcher（与 `ChatViewModel` 同一条约束）。
+     */
+    private val scope: CoroutineScope,
+) {
     private val _state = MutableStateFlow(CapabilityState.initial())
     val state: StateFlow<CapabilityState> = _state.asStateFlow()
 
@@ -120,7 +126,7 @@ class CapabilityViewModel(
     fun installCatalogSkill(identifier: String) {
         if (_state.value.busyKey == identifier) return
         _state.update { it.copy(busyKey = identifier) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.installSkill(profile, identifier)
                 // 给 CLI 一点落地时间再回读；失败也只是标记没刷新，不影响安装本身。
@@ -179,7 +185,7 @@ class CapabilityViewModel(
             load = { repository.cronJobs(profile) },
         )
         // 表单需要的两个下拉源；失败不阻塞主列表。
-        viewModelScope.launch {
+        scope.launch {
             runCatching { repository.blueprints(profile) }
                 .onSuccess { list -> _state.update { it.copy(blueprints = list) } }
             runCatching { repository.deliveryTargets(profile) }
@@ -194,7 +200,7 @@ class CapabilityViewModel(
         // 乐观更新：先把开关切过去，失败再整体回滚。
         val optimistic = current.map { if (it.name == name) it.copy(enabled = enabled) else it }
         _state.update { it.copy(skills = Loadable.Ready(optimistic), busyKey = name) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.setSkillEnabled(profile, name, enabled)
                 val fresh = repository.skills(profile)
@@ -225,7 +231,7 @@ class CapabilityViewModel(
         val current = _state.value.toolsets.valueOrNull ?: return
         val optimistic = current.map { if (it.name == name) it.copy(enabled = enabled) else it }
         _state.update { it.copy(toolsets = Loadable.Ready(optimistic), busyKey = name) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.setToolsetEnabled(profile, name, enabled)
                 val fresh = repository.toolsets(profile)
@@ -254,7 +260,7 @@ class CapabilityViewModel(
             return
         }
         _state.update { it.copy(expandedSkill = name, skillContent = Loadable.Loading) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val content = repository.skillContent(profile, name)
                 _state.update { it.copy(skillContent = Loadable.Ready(content)) }
@@ -295,7 +301,7 @@ class CapabilityViewModel(
         val env = _state.value.platformDrafts[platformId].orEmpty()
         // busyKey 带动作后缀：同一个按钮组的"保存"与"测试"要分别显示进度文案。
         _state.update { it.copy(busyKey = platformBusyKey(platformId, PlatformAction.SAVE)) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val result = repository.updatePlatform(profile, platformId, enabled, env)
                 val fresh = repository.platforms(profile).platforms
@@ -326,7 +332,7 @@ class CapabilityViewModel(
 
     fun testPlatform(platformId: String) {
         _state.update { it.copy(busyKey = platformBusyKey(platformId, PlatformAction.TEST)) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val ack = repository.testPlatform(profile, platformId)
                 // 后端会把"为什么不行"写在 message 里（例如未启用 / 需要重启网关），优先用它。
@@ -352,7 +358,7 @@ class CapabilityViewModel(
     /** 蓝图实例化：把槽位值填进蓝图并创建任务。 */
     fun instantiateBlueprint(blueprintKey: String, values: Map<String, String>) {
         _state.update { it.copy(busyKey = "blueprint:$blueprintKey") }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.instantiateBlueprint(profile, blueprintKey, values)
                 val fresh = repository.cronJobs(profile)
@@ -435,7 +441,7 @@ class CapabilityViewModel(
         }
         val editing = draft.editingJobId
         _state.update { it.copy(busyKey = if (editing == null) "cron:new" else editing) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 if (editing == null) {
                     repository.createCronJob(
@@ -486,7 +492,7 @@ class CapabilityViewModel(
 
     fun setCronPaused(jobId: String, paused: Boolean) {
         _state.update { it.copy(busyKey = jobId) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 if (paused) repository.pauseCronJob(profile, jobId) else repository.resumeCronJob(profile, jobId)
                 val fresh = repository.cronJobs(profile)
@@ -503,7 +509,7 @@ class CapabilityViewModel(
 
     fun triggerCron(jobId: String) {
         _state.update { it.copy(busyKey = jobId) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.triggerCronJob(profile, jobId)
                 _state.update { it.copy(busyKey = null, notice = "已触发，稍后刷新看结果", noticeIsError = false) }
@@ -517,7 +523,7 @@ class CapabilityViewModel(
 
     fun deleteCron(jobId: String) {
         _state.update { it.copy(busyKey = jobId) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.deleteCronJob(profile, jobId)
                 val fresh = repository.cronJobs(profile)
@@ -538,7 +544,7 @@ class CapabilityViewModel(
             return
         }
         _state.update { it.copy(expandedJob = jobId, cronRuns = Loadable.Loading) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val runs = repository.cronRuns(profile, jobId)
                 _state.update { it.copy(cronRuns = Loadable.Ready(runs)) }
@@ -565,7 +571,7 @@ class CapabilityViewModel(
         load: suspend () -> List<T>,
     ) {
         val stale = get(_state.value)
-        viewModelScope.launch {
+        scope.launch {
             if (stale == null) _state.update { it.set(Loadable.Loading) }
             try {
                 val value = load()

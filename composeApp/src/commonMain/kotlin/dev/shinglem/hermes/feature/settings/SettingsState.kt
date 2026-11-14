@@ -1,7 +1,5 @@
 package dev.shinglem.hermes.feature.settings
 
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import dev.shinglem.hermes.core.app.AppRestarter
 import dev.shinglem.hermes.core.app.RestartSupport
 import dev.shinglem.hermes.core.config.AppConfig
@@ -75,10 +73,11 @@ class SettingsViewModel(
     /** 是否检测到官方桌面端（决定左栏是否出现「调试」分组）。 */
     private val debugAvailable: Boolean = false,
     /** 重启走异步；单测里注入 `Dispatchers.Unconfined` 的 scope，不必拉起 Main。 */
-    externalScope: CoroutineScope? = null,
-) : ViewModel() {
+    /** S5：改为**必须**传入（原来有 viewModelScope 兜底，去掉 ViewModel 继承后没有兜底了）。 */
+    externalScope: CoroutineScope,
+) {
 
-    private val scope: CoroutineScope = externalScope ?: viewModelScope
+    private val scope: CoroutineScope = externalScope
 
     private val _state = MutableStateFlow(
         SettingsState(

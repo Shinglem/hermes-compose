@@ -23,6 +23,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.encodeToString
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,8 +31,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 import kotlin.time.Instant
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 
 /** 中栏的一行：分组标题或会话。 */
 sealed interface SessionRow {
@@ -196,7 +195,14 @@ class SessionListViewModel(
     private val preferences: AppPreferences,
     /** 导出 / 复制要读全量历史，所以会话列表也依赖 chat 域的数据入口。 */
     private val chat: ChatRepository,
-) : ViewModel() {
+    /**
+     * 协程作用域（S5：从 `viewModelScope` 改成注入）。
+     *
+     * 这一域有 11 处 launch 且共享 `refreshJob` / `searchJob` / 选择游标等可变状态，
+     * 必须传**单线程** dispatcher（与 `ChatViewModel` 同一条约束）。
+     */
+    private val scope: CoroutineScope,
+) {
     private val _state = MutableStateFlow(SessionListState())
     val state: StateFlow<SessionListState> = _state.asStateFlow()
 
@@ -226,7 +232,7 @@ class SessionListViewModel(
         val profileChanged = _state.value.profile != profile
         // 直接从 refresh 进来（未经 onProfileChanged）时也要保证选择与 profile 一致。
         _state.update { it.switchedTo(profile) }
-        refreshJob = viewModelScope.launch {
+        refreshJob = scope.launch {
             // 已经有列表时**静默刷新**：置 Loading 会让 `sessions` 变空、整片列表被换成骨架行，
             // 而 `sessions.changed` 在流式期间会连着来 —— 表现就是列表不停闪。
             _state.update { current ->
@@ -267,7 +273,7 @@ class SessionListViewModel(
         if (_state.value.creating) return
         val profile = _state.value.profile
         changedJob?.cancel()
-        changedJob = viewModelScope.launch {
+        changedJob = scope.launch {
             delay(SESSIONS_CHANGED_DEBOUNCE_MS)
             refresh(profile)
         }
@@ -296,7 +302,7 @@ class SessionListViewModel(
      */
     fun create(profile: String?) {
         if (_state.value.creating) return
-        viewModelScope.launch {
+        scope.launch {
             _state.update { it.copy(creating = true, createError = null) }
             try {
                 // 草稿态在 composer 里选过的模型，建会话时一起带过去（per-session override）。
@@ -381,7 +387,7 @@ class SessionListViewModel(
         val profile = _state.value.profile
         val live = _state.value.justCreatedId == draft.sessionId
         _state.update { it.copy(rowBusyId = draft.sessionId) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 if (live) {
                     repository.renameLiveSession(draft.sessionId, title)
@@ -418,7 +424,7 @@ class SessionListViewModel(
         val sessionId = _state.value.confirmDeleteId ?: return
         val profile = _state.value.profile
         _state.update { it.copy(rowBusyId = sessionId) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.deleteSession(profile, sessionId)
                 _state.update { current ->
@@ -464,7 +470,7 @@ class SessionListViewModel(
         val profile = _state.value.profile
         val target = _state.value.sessions.firstOrNull { it.id == sessionId }
         _state.update { it.copy(rowBusyId = sessionId) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.setArchived(profile, sessionId, archived = true)
                 val ref = ArchivedSessionRef(
@@ -505,7 +511,7 @@ class SessionListViewModel(
     fun restoreArchived(sessionId: String) {
         val profile = _state.value.profile
         _state.update { it.copy(rowBusyId = sessionId) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 repository.setArchived(profile, sessionId, archived = false)
                 val next = _state.value.archived.filterNot { it.id == sessionId }
@@ -537,7 +543,7 @@ class SessionListViewModel(
     /** 刷新"哪些会话在跑"。失败静默：运行态点只是装饰，不该弹错误。 */
     fun refreshActive() {
         val profile = _state.value.profile
-        viewModelScope.launch {
+        scope.launch {
             val ids = runCatching { repository.activeSessionIds(profile) }.getOrDefault(emptySet())
             _state.update { if (it.profile == profile) it.copy(activeIds = ids) else it }
         }
@@ -552,7 +558,7 @@ class SessionListViewModel(
         if (_state.value.duplicatingId != null) return
         val profile = _state.value.profile
         _state.update { it.copy(duplicatingId = sessionId, rowError = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val newId = repository.duplicateSession(profile, sessionId)
                 _state.update {
@@ -589,7 +595,7 @@ class SessionListViewModel(
         val profile = _state.value.profile
         val title = _state.value.sessions.firstOrNull { it.id == sessionId }?.displayTitle
         _state.update { it.copy(exporting = true, rowError = null, notice = null) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val rows = chat.fetchAllMessages(profile, sessionId)
                 val items = projectChat(rows)
@@ -643,7 +649,7 @@ class SessionListViewModel(
             _state.update { it.copy(contentResults = Loadable.Idle) }
             return
         }
-        searchJob = viewModelScope.launch {
+        searchJob = scope.launch {
             delay(CONTENT_SEARCH_DEBOUNCE_MS)
             _state.update { it.copy(contentResults = Loadable.Loading) }
             try {
