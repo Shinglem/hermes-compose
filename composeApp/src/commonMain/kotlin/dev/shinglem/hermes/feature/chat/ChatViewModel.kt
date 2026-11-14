@@ -515,17 +515,14 @@ class ChatViewModel(
 
     /** 用户点了消息上的「重发」：先弹确认（截断是破坏性的）。 */
     fun beginRewind(messageId: String, text: String) {
-        val items = _state.value.items
-        val index = items.indexOfFirst { it.id == messageId }
-        if (index < 0) return
-        // 截断到这条 user 消息之前；它是第一条 user 消息时历史会变空。
-        val priorUserCount = items.take(index).count { it is ChatItem.UserMessage }
+        // 序号口径见 `rewindTarget`：要判断"截断后历史是否为空"，算错只是少一句警告。
+        val target = rewindTarget(_state.value.items, messageId, text) ?: return
         _state.update {
             it.copy(
                 rewind = RewindDraft(
-                    messageId = messageId,
-                    text = text,
-                    emptyAfterTruncate = priorUserCount == 0,
+                    messageId = target.messageId,
+                    text = target.text,
+                    emptyAfterTruncate = target.emptyAfterTruncate,
                 ),
             )
         }
@@ -626,20 +623,15 @@ class ChatViewModel(
     fun beginBranch(messageId: String, title: String) {
         val key = _state.value.key ?: return
         val rows = cache[key]?.rows ?: return
-        // `count` 对应后端的"可见历史"：只有 user/assistant 且有文本的行会被复制
-        // （tool 行、hidden 行都不算），所以必须按同一口径算序号，不能拿 UI 条目下标。
-        val visible = rows.filter {
-            (it.role == ROLE_USER || it.role == ROLE_ASSISTANT) && it.text.isNotBlank()
-        }
-        val index = visible.indexOfFirst { it.id == messageId }
-        if (index < 0) return
+        // 序号口径见 `branchTarget`：必须按后端的"可见历史"算，不能拿 UI 条目下标
+        // （UI 里还有工具卡片 / 通知 / 思考块）。
+        val target = branchTarget(rows, messageId, title) ?: return
         _state.update {
             it.copy(
                 branch = BranchDraft(
-                    messageId = messageId,
-                    // `count` 是"保留前 N 条"（含这一条）。
-                    count = index + 1,
-                    title = title.ifBlank { "分支" },
+                    messageId = target.messageId,
+                    count = target.count,
+                    title = target.title,
                 ),
             )
         }
@@ -829,15 +821,24 @@ class ChatViewModel(
             ?: crossSessionApprovals[requestId]
             ?: return
         // **必须用卡片自己记的会话与 fence**：用户可能在别的会话里点系统通知，
-        // 现查 `_state.value.key` / `generations[当前会话]` 拿到的是另一个会话的值，
-        // 后端回 4001 stale_generation（实测：切会话后点通知必报）。
-        val key = pending.sessionKey ?: _state.value.key ?: return
-        val runtimeId = pending.runtimeSessionId ?: runtimes[key]?.runtimeId ?: return
-        val generation = pending.executionGeneration ?: runtimes[key]?.fence
+        // 现查当前会话的值会让后端回 4001 stale_generation（实测：切会话后点通知必报）。
+        val currentKey = _state.value.key
+        val target = approvalTarget(
+            pending = pending,
+            fallbackKey = currentKey,
+            fallbackRuntimeId = currentKey?.let { runtimes[it]?.runtimeId },
+            fallbackGeneration = currentKey?.let { runtimes[it]?.fence },
+        ) ?: return
         forgetPendingRequest(requestId)
         scope.launch {
             try {
-                repository.respondApproval(key.profile, runtimeId, requestId, choice, generation)
+                repository.respondApproval(
+                    target.key.profile,
+                    target.runtimeId,
+                    requestId,
+                    choice,
+                    target.generation,
+                )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
