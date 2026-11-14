@@ -1,5 +1,6 @@
 package dev.shinglem.hermes.feature.settings
 
+import androidx.compose.runtime.Immutable
 import dev.shinglem.hermes.core.app.AppRestarter
 import dev.shinglem.hermes.core.app.RestartSupport
 import dev.shinglem.hermes.core.config.AppConfig
@@ -25,6 +26,7 @@ import kotlinx.serialization.json.JsonPrimitive
 /** 保存后的提示：`restartRequired` 决定是「重启生效」还是「已即时生效」。 */
 data class SettingsSaved(val restartRequired: Boolean)
 
+@Immutable
 data class SettingsState(
     val sections: List<SettingsSection> = SettingsCatalog.sections(debugAvailable = false),
     /** 当前选中的二级页面。 */

@@ -1,5 +1,6 @@
 package dev.shinglem.hermes.feature.shell
 
+import androidx.compose.runtime.Immutable
 import dev.shinglem.hermes.core.backend.BackendBootState
 import dev.shinglem.hermes.core.backend.BackendKind
 import dev.shinglem.hermes.core.backend.BackendLogLine
@@ -26,6 +27,7 @@ import kotlinx.coroutines.launch
 
 enum class ShellMode { SESSIONS, CAPABILITIES, SETTINGS }
 
+@Immutable
 data class ShellState(
     val mode: ShellMode = ShellMode.SESSIONS,
     val profiles: Loadable<List<ProfileSummary>> = Loadable.Idle,

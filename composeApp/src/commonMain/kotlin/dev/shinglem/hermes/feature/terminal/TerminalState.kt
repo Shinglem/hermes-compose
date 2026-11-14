@@ -1,5 +1,6 @@
 package dev.shinglem.hermes.feature.terminal
 
+import androidx.compose.runtime.Immutable
 import dev.shinglem.hermes.core.prefs.AppPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,6 +41,7 @@ data class TerminalLayout(
     val tabs: List<TerminalTabVm> = emptyList(),
 )
 
+@Immutable
 data class TerminalPanelState(
     val layout: TerminalLayout = TerminalLayout(),
     /** 当前存活进程数（收起条上的状态点）。 */

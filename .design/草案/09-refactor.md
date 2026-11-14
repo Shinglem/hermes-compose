@@ -1014,14 +1014,14 @@ component/chat/
 
 1. `./gradlew :composeApp:compileKotlinDesktop :composeApp:desktopTest` 全绿
 2. 单文件 > 600 行的 `.kt`：从 **11 个降到 0**（含 `ChatRepository` 750 行也要拆）
-3. `rg 'import androidx.compose' composeApp/src/commonMain/kotlin/**/component` 为 0
+3. `component` 里**不出现 UI 组合代码**：只允许 `androidx.compose.runtime.Immutable`（纯编译期提示、无运行时依赖）与 `ComposerContract` 的 `TextFieldValue`（既有契约，换自绘模型属另一轮）。其余 `androidx.compose` import 为 0
 4. `rg 'import dev.shinglem.hermes.(component|ui|shell)' composeApp/src/commonMain/kotlin/**/{core,domain}` 为 0
 5. `rg 'import dev.nucleusframework' composeApp/src/**` 只命中 `shell/` 与 `di/`
 6. `rg 'private fun Throwable\.(describe|notice)'` 为 0
 7. `rg 'private var loaded = false'` 为 0
 8. `rg 'var on[A-Z]'`（ViewModel 可变回调）为 0
 9. `rg 'viewModel \{'` 与 `rg 'androidx.lifecycle.viewmodel'` 为 0
-10. `@Immutable` / `ImmutableList` 覆盖全部 State；`@Immutable` 标注数 ≥ State 数
+10. `@Immutable` 覆盖全部域 State（`StateImmutabilityTest` 钉住）；`@Immutable` 标注数 ≥ State 数
 11. 每个域至少 1 个 Reducer 纯函数测试 + 1 个 Component 测试；`ModuleVerificationTest.verify()` 通过
 12. `Store.labels` 的发射序列用 **Turbine `awaitItem()`** 断言（每个含 Label 的 Store 至少 1 例）
 13. `rg 'expect (suspend )?fun pick'` 与 `rg 'pickSaveFile|pickExecutableFile'` 为 0（FileKit 接管）

@@ -1,5 +1,6 @@
 package dev.shinglem.hermes.feature.chat
 
+import androidx.compose.runtime.Immutable
 import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.result.Loadable
 import dev.shinglem.hermes.core.result.valueOrNull
@@ -35,6 +36,7 @@ sealed interface StreamSegment {
 }
 
 /** 本轮正在生成的内容：有序段落 + 起始时间。 */
+@Immutable
 data class StreamingState(
     val segments: List<StreamSegment> = emptyList(),
     val startedAt: Instant? = null,
@@ -172,6 +174,7 @@ data class RewindDraft(
 /** 从某条消息分支：`count` 是"保留前 N 条"（含这条）。 */
 data class BranchDraft(val messageId: String, val count: Int, val title: String)
 
+@Immutable
 data class ChatState(
     val key: SessionKey? = null,
     /** 会话工作目录（`session.resume` 返回的 `cwd`）。相对路径的工具参数按它解析。 */

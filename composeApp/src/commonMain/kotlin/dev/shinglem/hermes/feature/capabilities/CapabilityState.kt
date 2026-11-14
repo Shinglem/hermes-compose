@@ -1,5 +1,6 @@
 package dev.shinglem.hermes.feature.capabilities
 
+import androidx.compose.runtime.Immutable
 import dev.shinglem.hermes.core.contract.BlueprintDto
 import dev.shinglem.hermes.core.contract.CronJobDto
 import dev.shinglem.hermes.core.contract.CronRunDto
@@ -54,6 +55,7 @@ data class CronDraft(
  * 每页一个独立 `Loadable`：一页失败不影响其它两页（功能域总览 §2.6 的要求）。
  * `busy` 记录正在执行写操作的 key（技能名 / 平台 id / 任务 id），用于行内禁用与转圈。
  */
+@Immutable
 data class CapabilityState(
     val section: CapabilitySection,
     val skillsTab: SkillsTab = SkillsTab.SKILLS,

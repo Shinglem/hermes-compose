@@ -1,5 +1,6 @@
 package dev.shinglem.hermes.feature.composer
 
+import androidx.compose.runtime.Immutable
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 
@@ -15,6 +16,7 @@ data class CompletionEntry(
 )
 
 /** 浮层状态；`start`/`end` 是接受时被替换的文本区间（左闭右开）。 */
+@Immutable
 data class CompletionState(
     val trigger: CompletionTrigger,
     val entries: List<CompletionEntry>,
@@ -87,6 +89,7 @@ fun activeToken(text: CharSequence, cursor: Int): ActiveToken? {
 }
 
 /** composer 的可见状态。 */
+@Immutable
 data class ComposerUiState(
     val value: TextFieldValue = TextFieldValue(""),
     val completion: CompletionState? = null,

@@ -1,5 +1,6 @@
 package dev.shinglem.hermes.feature.session
 
+import androidx.compose.runtime.Immutable
 import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.result.Loadable
 import dev.shinglem.hermes.core.result.valueOrNull
@@ -41,6 +42,7 @@ data class SessionSearchHit(
     val matchedRole: String?,
 )
 
+@Immutable
 data class SessionListState(
     val load: Loadable<List<SessionSummary>> = Loadable.Idle,
     /**
