@@ -55,6 +55,7 @@ import dev.shinglem.hermes.feature.editors.EditorLaunchContext
 import dev.shinglem.hermes.feature.editors.LocalEditorLaunchContext
 import dev.shinglem.hermes.feature.composer.ComposerController
 import dev.shinglem.hermes.component.sessionlist.DefaultSessionListComponent
+import dev.shinglem.hermes.component.root.DefaultRootComponent
 import dev.shinglem.hermes.component.sessionlist.SessionListComponent
 import dev.shinglem.hermes.component.capability.CapabilityComponent
 import dev.shinglem.hermes.component.capability.DefaultCapabilityComponent
@@ -279,6 +280,11 @@ fun AppShell(
     // 旧 ShellState 的消费方（6 个 settings Component 与 200+ 处 UI）仍按旧类型工作；
     // 这里用一个轻量投影把新 state 映射回旧形状，避免这一轮改上千行 UI（S8 统一改）。
     val newShellState: NewShellState by shellComponent.state.collectAsStateWithLifecycle()
+    // RootComponent 接管导航（S5）：mode 的事实源仍是 ShellComponent，这里只做投影。
+    val rootComponent = remember(context) {
+        DefaultRootComponent(componentContext = context, initialProfile = null)
+    }
+    LaunchedEffect(newShellState.mode) { rootComponent.syncFromMode(newShellState.mode.name) }
     val shellState: ShellState = remember(newShellState) { newShellState.toLegacy() }
     // `remember` 而不是 `viewModel` —— Component 有自己的生命周期，不是 androidx ViewModel。
     // profile 变化时按 key 重建：与旧 `setProfile` 的"彻底重置"语义一致，但不可能忘。

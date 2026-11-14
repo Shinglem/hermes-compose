@@ -113,6 +113,7 @@ private fun launcherExe(home: File): File? {
 /** 与 `composeApp/build.gradle.kts` 里的 `appName` 保持一致（jpackage 产物文件名）。 */
 private const val APP_NAME = "hermes-desktop-compose"
 
+@OptIn(com.arkivanov.decompose.ExperimentalDecomposeApi::class)
 fun main(args: Array<String>) {
     // BossTerm 的默认存储是 `~/.bossterm`（settings / 字体缓存 / 会话快照）。统一改到我们的数据目录，
     // 别在用户家目录留下第二个配置文件夹；终端设置本身由 state.json 注入，不走这个文件。
@@ -170,6 +171,22 @@ fun main(args: Array<String>) {
     // Koin 图（ADR-076）：S5 的 Component 树按类型取依赖。
     // 必须在 `AppShell` 组合之前起来 —— 那里的 `AppRoot` 会 `KoinApplication {}`。
     KoinStartup.start(container)
+
+    // Decompose 的"主线程"检查在 Tao 下是**误报**（ADR-077）。
+    //
+    // 它的 `MainThreadChecker` 默认按 JVM 的 `Dispatchers.Main` 判据走，但在 Tao 进程里
+    // `Dispatchers.Main` 是启动后才被 `TaoMainDispatcherFactory` 接管的；Decompose 的
+    // checker 是 `lazy` 单例，**第一次用之前**初始化好了就会一直用旧判据 —— 于是我们在
+    // 真正的 `main` 线程上调用 `ChildStack` 时收到
+    // `NotOnMainThreadException: Expected to be called on the main thread, but was main`。
+    //
+    // 关掉是安全的：本项目所有 Decompose 调用都在 Compose 组合里（即 `main` 线程），
+    // 而 `main` 本身就是单线程的 —— 检查被关掉不会让人写出跨线程的 Component 树。
+    // 反过来若保留这项检查，得先等 Tao 的 dispatcher 就绪再创建任何 Component，
+    // 那会把 Koin 与 Component 的创建时机绑到更脆的顺序上。
+    com.arkivanov.decompose.DecomposeSettings.update { current ->
+        current.copy(mainThreadCheckEnabled = false)
+    }
 
     // 原生通知（Windows toast）的实例身份按 <home> 哈希，与单实例命名同源：
     // 两份便携包各有独立的 AUMID 与开始菜单快捷方式，互不覆盖。

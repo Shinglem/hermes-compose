@@ -106,6 +106,24 @@ class DefaultRootComponent(
         RootDestination.Settings -> RootChild.Settings(configuration)
     }
 
+    /**
+     * 由外部 mode 驱动（ShellComponent 是 mode 的事实源，RootComponent 只做导航投影）。
+     *
+     * 这条路径**不写回** ShellComponent —— 迁移前 `openSettings()` 只改 UI 不写偏好，
+     * 而 `openCapabilities()` 会写。那两条语义差异保留在 ShellIntent 里，这里只跟随。
+     */
+    fun syncFromMode(mode: String) {
+        val target = when (mode) {
+            "CAPABILITIES" -> RootDestination.Capabilities
+            "SETTINGS" -> RootDestination.Settings
+            else -> RootDestination.Sessions
+        }
+        if (stack.value.active.configuration != target) {
+            _active.value = target
+            navigation.navigate(transformer = { listOf(target) }, onComplete = { _, _ -> })
+        }
+    }
+
     override fun select(destination: RootDestination) {
         if (stack.value.active.configuration == destination) return
         _active.value = destination

@@ -2453,3 +2453,69 @@ FileKit 的 Windows 实现是挂起函数 + COM，不占用调用线程。
 - 日志**有** DIAG 但行为不对 → 才是实现问题。
 
 定位完立刻删掉，别留在代码里（本轮已删干净，`git diff` 为空）。
+
+---
+
+## ADR-077 · Decompose 的主线程检查在 Tao 下是误报，必须关掉
+
+**现象**：S5 把 `RootComponent` 接进 `AppShell` 后，应用一启动就抛
+
+```
+com.arkivanov.decompose.mainthread.NotOnMainThreadException:
+    Expected to be called on the main thread, but was main
+```
+
+注意后半句 —— **它说的"main"就是 `main` 线程**。
+
+### 根因
+
+`CheckMainThreadKt.checkMainThread()` 的逻辑是：
+
+```
+if (DecomposeSettings.mainThreadCheckEnabled && mainThreadChecker?.isMainThread() != true) { 报错 }
+```
+
+`mainThreadChecker` 来自 `MainThreadCheckerProviderKt`，那是 `lazy` 单例。
+在 Compose Desktop 里它是 `Swing` 判据（`EventQueue.isDispatchThread()`）——
+**但 Tao 进程的 UI 线程是 `main`，不是 Swing EDT**（与 ADR-072 同一条事实）。
+
+于是：在真正的 `main` 线程上调用 `ChildStack` → `isMainThread()` 返回 false → 误报。
+
+### 为什么不能"修好判据"
+
+`MainThreadChecker` 是接口，但 `mainThreadChecker` 是 `private static final Lazy`，
+没有 SPI 注册文件 —— 无法替换。唯一可配置的是
+`DecomposeSettings.update { it.copy(mainThreadCheckEnabled = false) }`。
+
+（理论上可以"等 Tao dispatcher 就绪后再创建 Component"，但那会把 Koin 与 Component
+的创建时机绑到一个更脆的顺序上 —— 为了保留一项**误报**的检查去增加启动期的时序耦合，
+不划算。）
+
+### 关掉它安全吗
+
+安全。理由有两条：
+
+1. 本项目**所有** Decompose 调用都在 Compose 组合里（即 `main` 线程），
+   没有一处从后台线程操作 Component 树；
+2. `main` 本身就是单线程 —— 检查被关掉不会让人"写出跨线程的 Component 树而不知道"，
+   真那么写会在别处先炸（Compose 的状态写入有自己的一致性检查）。
+
+反过来说，**保留这项检查的代价是每次启动必崩**，而收益是零（它检查的东西在 Tao 下恒为假）。
+
+### 落在哪
+
+`Main.kt` 的 `main()`，在 `KoinStartup.start(container)` 之后、`nucleusApplication` 之前。
+注释里写清了"这是误报"与"为什么不等 Tao 就绪"，避免后来者误以为可以删掉。
+
+### 教训
+
+这是 **ADR-072 的第三次复发**：换到 Tao 之后，任何"按 JVM 平台惯例推断 UI 线程"的库
+都可能判错。已经踩过的三处：
+
+| 处 | 判据 | 结果 |
+|---|---|---|
+| `DesktopContainer` | `Dispatchers.Swing` | 与 `Dispatchers.Main` 分家（ADR-072） |
+| `kotlinx-coroutines-swing` | `MainDispatcherFactory` loadPriority | 只取最高分的 Tao factory |
+| **Decompose** | `EventQueue.isDispatchThread()` | **恒为 false**（本条） |
+
+判据统一成一句：**在 Tao 进程里，"UI 线程"是 `main`，任何按 Swing/AWT 推断的地方都要复查。**
