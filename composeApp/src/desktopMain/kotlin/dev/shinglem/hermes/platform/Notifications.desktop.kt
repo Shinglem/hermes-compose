@@ -1,6 +1,5 @@
 package dev.shinglem.hermes.platform
 
-import java.awt.SystemTray
 
 /**
  * 桌面通知。
@@ -32,8 +31,16 @@ actual object SystemNotifications {
     @Volatile
     private var fallbackActivate: (() -> Unit)? = null
 
+    /**
+     * 通知功能是否可用。
+     *
+     * **不再看 `SystemTray.isSupported()`**：托盘气泡那条通路已经废弃（见类注释），
+     * 现在的最低保障是应用内自绘卡片（Compose 渲染），它永远可用。
+     * 用托盘支持与否来判断，会在"任务栏没有通知区"的环境中把通知整个关掉 ——
+     * 而那种环境下自绘卡片其实还能正常工作。
+     */
     actual val supported: Boolean
-        get() = runCatching { SystemTray.isSupported() }.getOrDefault(false)
+        get() = true
 
     actual fun show(title: String, body: String, actions: List<NotificationAction>) {
         // 点标题 / 正文：有挂起动作就跳过去，否则把主窗口拉到前台。

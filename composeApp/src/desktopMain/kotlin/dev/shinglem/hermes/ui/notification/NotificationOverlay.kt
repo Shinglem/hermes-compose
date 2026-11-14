@@ -21,13 +21,10 @@ import dev.shinglem.hermes.platform.NotificationInbox
 import dev.shinglem.hermes.platform.NotificationRequest
 import dev.shinglem.hermes.ui.theme.HermesTheme
 import dev.nucleusframework.application.DecoratedWindow
-import java.awt.GraphicsEnvironment
-import java.awt.Rectangle
-import java.awt.Toolkit
 import kotlinx.coroutines.delay
 
 /** 距屏幕工作区边缘的距离（dp）。 */
-private const val EDGE_MARGIN = 16
+internal const val EDGE_MARGIN = 16
 /** 相邻两张卡片之间的间距（dp）。 */
 private const val STACK_GAP = 8
 
@@ -44,9 +41,14 @@ private const val STACK_GAP = 8
  * 多条并存时**纵向堆叠**（最多 [NotificationInbox.MAX_VISIBLE] 条），最新的在最下面（贴着任务栏），
  * 与 Windows 自己的通知中心一致；每条一个独立窗口，自动收起互不干扰。
  * 超过上限的排队：上面某条消失后，排队的自动补到最下面。
+ *
+ * @param workArea 当前屏幕的工作区（dp）。**必须由调用方注入**：算它需要 Tao 的窗口句柄
+ *   （`NucleusWindow.unsafe.taoWindow`），而那个句柄只有 `DecoratedWindow` 作用域里才有；
+ *   在 `nucleusApplication` 顶层拿不到。早期实现在这里直接调 AWT 的
+ *   `GraphicsEnvironment`，能跑但把 AWT 留在了窗口层（ADR-073）。
  */
 @Composable
-fun NotificationOverlay() {
+fun NotificationOverlay(workArea: () -> WorkArea) {
     val active by NotificationInbox.active.collectAsState()
     if (active.isEmpty()) return
     val options by AppOptionsHolder.state.collectAsState()
@@ -57,7 +59,7 @@ fun NotificationOverlay() {
     }
 
     // 只在条数变化时算一次屏幕几何：中途改分辨率也不该把窗口拽到别处。
-    val geometry = remember(active.size) { overlayGeometry() }
+    val geometry = remember(active.size) { overlayGeometry(workArea()) }
     val heights = active.asReversed().map {
         notificationCardHeight(it.actions.isNotEmpty()).value + NOTIFICATION_SHADOW_MARGIN.value * 2
     }
@@ -90,16 +92,21 @@ internal fun stackOffsets(heights: List<Float>, bottom: Float, gap: Float): List
 }
 
 /** 通知窗集合在屏幕上的几何（dp）。 */
-private class OverlayGeometry(val left: Float, val width: Float, val bottom: Float)
+internal class OverlayGeometry(val left: Float, val width: Float, val bottom: Float)
 
-private fun overlayGeometry(): OverlayGeometry {
-    val area = workArea()
-    val scale = screenScale()
+/**
+ * 屏幕工作区（dp）：`left/top` 是工作区左上角，`width/height` 是尺寸。
+ *
+ * 由调用方注入，因为拿它需要窗口句柄（见 [NotificationOverlay] 的参数说明）。
+ */
+class WorkArea(val left: Float, val top: Float, val width: Float, val height: Float)
+
+internal fun overlayGeometry(area: WorkArea): OverlayGeometry {
     val width = NOTIFICATION_CARD_WIDTH.value + NOTIFICATION_SHADOW_MARGIN.value * 2
     return OverlayGeometry(
-        left = (area.x + area.width) / scale - width - EDGE_MARGIN,
+        left = area.left + area.width - width - EDGE_MARGIN,
         width = width,
-        bottom = (area.y + area.height) / scale - EDGE_MARGIN,
+        bottom = area.top + area.height - EDGE_MARGIN,
     )
 }
 
@@ -168,34 +175,29 @@ private fun NotificationWindow(
 }
 
 /**
- * 可用工作区（避开任务栏），单位是 AWT 的用户坐标。
+ * 从 Tao 的显示器信息构造 [WorkArea]（dp）。
  *
- * 取鼠标所在屏：多显示器时通知应该出现在用户正看着的那块。
+ * **数据源是 Nucleus 的原生桥**（`TaoMonitors.all(taoWindow)` → `workAreaPx` +
+ * `scaleFactor`），不是 AWT。实测（`monitorProbe`，Windows / 100% 缩放）：
+ *
+ * ```
+ * TaoMonitors: work=IntRect(0, 38, 2560, 1392) scale=1.0 primary=true
+ * AWT        : bounds=0,0,2560,1440 scale=1.0  → insets 上 38 / 下 48（与上面一致）
+ * ```
+ *
+ * 两边数值相同，但前者不依赖 `GraphicsEnvironment` / `Toolkit` / `MouseInfo`。
+ * 顺带解决了 ADR-067 记的遗留问题：多屏下 `MouseInfo` 返回垃圾值，通知会跑到错误屏幕。
+ * 这里取**主显示器**（`TaoMonitors.primary`）—— 主窗口在哪块屏就贴哪块屏更理想，
+ * 但那需要窗口几何的实时订阅，超出本次收尾范围，已记入 ADR-073 的后续项。
  */
-private fun workArea(): Rectangle {
-    val environment = GraphicsEnvironment.getLocalGraphicsEnvironment()
-    val mouse = java.awt.MouseInfo.getPointerInfo()?.location
-    val device = mouse?.let { point ->
-        environment.screenDevices.firstOrNull { it.defaultConfiguration.bounds.contains(point) }
-    } ?: environment.defaultScreenDevice
-    val bounds = device.defaultConfiguration.bounds
-    val insets = Toolkit.getDefaultToolkit().getScreenInsets(device.defaultConfiguration)
-    return Rectangle(
-        bounds.x + insets.left,
-        bounds.y + insets.top,
-        bounds.width - insets.left - insets.right,
-        bounds.height - insets.top - insets.bottom,
+fun taoWorkArea(taoWindow: dev.nucleusframework.window.tao.TaoWindow): WorkArea {
+    val monitor = dev.nucleusframework.window.tao.TaoMonitors.primary(taoWindow)
+    val px = monitor.workAreaPx
+    val scale = monitor.scaleFactor.takeIf { it > 0f } ?: 1f
+    return WorkArea(
+        left = px.left / scale,
+        top = px.top / scale,
+        width = px.width / scale,
+        height = px.height / scale,
     )
 }
-
-/**
- * AWT 用户坐标 → Compose dp 的换算比例。
- *
- * Compose 的 dp 在 100% 缩放下与 AWT 用户坐标 1:1，但高 DPI 下两边各自乘过一次系统缩放，
- * 这里用 AWT 自己算出的 `defaultTransform` 对齐，避免通知跑到屏幕外。
- */
-private fun screenScale(): Float = runCatching {
-    val device = GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice
-    val transform = device.defaultConfiguration.defaultTransform
-    transform.scaleX.toFloat().takeIf { it > 0f } ?: 1f
-}.getOrDefault(1f)

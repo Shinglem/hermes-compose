@@ -2288,3 +2288,70 @@ FileKit 的 Windows 实现是挂起函数 + COM，不占用调用线程。
    删死代码前先查"它是不是某条路径的唯一入口"。
 3. **探针结论要落到"哪个实现被选中"**，不能停在"类能加载"。FileKit 的 jar 里
    同时有 AWT/Windows/Swing 三套实现，只看 classpath 会误判。
+
+---
+
+## ADR-074 · 剩余 AWT 依赖的处置：能换的都换了，换不了的说清原因
+
+**背景**：用户问「剩余的 awt 使用能否改为 compose 原生或者 nucleus」。逐项实测后的结论是
+**三项能换、一项换不了**，且"换不了"的那项有硬证据。
+
+### 逐项结论
+
+| 文件 | 结论 | 依据 |
+|---|---|---|
+| `NotificationOverlay` 屏幕几何 | ✅ **已换 Tao** | `TaoMonitors.primary(taoWindow).workAreaPx` + `scaleFactor`，实测值与 AWT 完全一致 |
+| `Links`（打开链接） | ✅ **已去掉 `Desktop.browse`** | 改走 `rundll32 url.dll,FileProtocolHandler`（与 `LocalFiles` 原本的兜底同一条路径） |
+| `LocalFiles`（打开文件） | ✅ **已去掉 `Desktop.open`** | 同上；它原本就有这条兜底，主路径纯属多余 |
+| `Clipboard` | ❌ **不能换** | Compose 的 desktop clipboard **底层就是 `java.awt.datatransfer.Clipboard`**（读 `PlatformClipboard_desktopKt` 字节码确认：`AwtClipboardManager` → `getSystemClipboard()` 返回 `java.awt.datatransfer.Clipboard`，且公开 `getAwtClipboard` / `getAsAwtTransferable`）。换 Compose API 只是换个入口，AWT 一个字节都不会少 |
+| `Main` 的 `JOptionPane` | ⬜ 保留 | 13 篇 §8.6 的既有决策：配置解析失败时 Compose 还没起来，自绘对话框只会多一层失败点 |
+
+### `TaoMonitors` 的实测（`monitorProbe`）
+
+```
+[tao] monitors=id=\\.\DISPLAY129 name=Generic PnP Monitor
+      bounds=IntRect(0, 0, 2560, 1440) work=IntRect(0, 38, 2560, 1392) scale=1.0 primary=true
+[awt] default bounds=java.awt.Rectangle[x=0,y=0,width=2560,height=1440] scale=1.0
+```
+
+两边数值一致（AWT 的 insets 上 38 / 下 48 换算后正是 `(0,38,2560,1392)`）。
+注意 `NativeTaoWindowsDecoBridge` 是 `internal`，公开路径是
+`NucleusWindow.unsafe.taoWindow` → `TaoMonitors.*`。
+
+**顺带解决 ADR-067 的遗留问题**：多屏下 `MouseInfo` 返回垃圾值导致通知跑到错误屏幕。
+新实现不碰 `MouseInfo`。但目前取的是**主显示器**，不是"主窗口所在显示器" ——
+后者需要窗口几何的实时订阅，记为后续项。
+
+### 通知几何的注入方式
+
+`NotificationOverlay` 改成 `NotificationOverlay(workArea: () -> WorkArea)`，
+因为算工作区需要 `TaoWindow` 句柄，而它只在 `DecoratedWindow` 作用域里有；
+通知窗与主窗口平级，拿不到那个 scope。做法是 `Main` 里主窗口组合时把工作区写进
+`mutableStateOf`，通知窗读它。**主窗口组合前**（`--silent` 首帧）退回 AWT 兜底 ——
+那段时间通常还没有通知要画，但保留兜底避免"通知跑到 (0,0)"。
+
+失败路径**不再静默**：`runCatching` 的 `onFailure` 会打 WARN，否则高 DPI 下通知算错位置只能靠猜。
+
+### 附带修的一个逻辑错误
+
+`SystemNotifications.supported` 原来返回 `SystemTray.isSupported()`。但托盘气泡通路
+已经在 ADR-073 里废弃，现在最低保障是应用内自绘卡片（永远可用）——
+用托盘支持与否判断，会在"任务栏没有通知区"的环境里把通知整个关掉。改成恒 `true`。
+
+### 最终状态
+
+生产代码里**真正**引用 AWT/javax.swing 的文件：**9 → 2**
+
+| 文件 | 引用 |
+|---|---|
+| `Clipboard.desktop.kt` | `Toolkit` / `DataFlavor` / `StringSelection` / `BufferedImage`（不可替代） |
+| `Main.kt` | `JOptionPane`（致命错误兜底）+ 首帧几何兜底 |
+
+其余文件（`AppFocus` / `FileDrop` / `FilePicker` / `Links` / `LocalFiles`）
+里的 `java.awt` 字样只出现在**注释**中（说明为什么不用它）。
+
+### 教训
+
+**"换成 X 的 API"要先确认 X 的底层是什么。** Compose 的 desktop clipboard 看起来是
+"原生 API"，实际只是 AWT 的一层壳 —— 不动字节码就判断"换过去能去掉 AWT"是错的。
+判据永远是 `javap` / 反编译，不是包名。

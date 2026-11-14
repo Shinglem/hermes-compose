@@ -876,3 +876,16 @@ tasks.register<JavaExec>("fileKitProbe") {
     jvmArgs("--enable-native-access=ALL-UNNAMED", "-Dfile.encoding=UTF-8")
     hermesRtDir?.let { dir -> setExecutable("$dir\\bin\\java.exe") }
 }
+
+// 探针：Nucleus 在 Windows 上的显示器几何（决定 NotificationOverlay 能否脱离 AWT）。
+tasks.register<JavaExec>("monitorProbe") {
+    group = "verification"
+    description = "探针：Nucleus 在 Windows 上能否给出显示器工作区与缩放"
+    mainClass.set("dev.shinglem.hermes.shell.spike.MonitorProbeMainKt")
+    dependsOn("desktopMainClasses")
+    val desktopMain = kotlin.targets.getByName("desktop").compilations.getByName("main")
+    classpath = files(desktopMain.output.classesDirs, desktopMain.runtimeDependencyFiles)
+    workingDir = layout.projectDirectory.asFile
+    jvmArgs("--enable-native-access=ALL-UNNAMED", "-Dfile.encoding=UTF-8")
+    hermesRtDir?.let { dir -> setExecutable("$dir\\bin\\java.exe") }
+}

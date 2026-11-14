@@ -27,6 +27,8 @@ import dev.shinglem.hermes.core.app.AutostartInfo
 import dev.shinglem.hermes.core.config.AppOptionsHolder
 import dev.shinglem.hermes.shell.window.rememberHermesTitleBarStyle
 import dev.shinglem.hermes.ui.notification.NotificationOverlay
+import dev.shinglem.hermes.ui.notification.WorkArea
+import dev.shinglem.hermes.ui.notification.taoWorkArea
 import dev.shinglem.hermes.ui.theme.HermesTheme
 import dev.shinglem.hermes.core.app.Elevation
 import dev.shinglem.hermes.core.app.ElevationRelaunch
@@ -273,7 +275,14 @@ fun main(args: Array<String>) {
         }
 
         // 通知窗：与主窗口平级（`nucleusApplication` 作用域），托盘模式下主窗口不显示也能弹。
-        NotificationOverlay()
+        //
+        // 几何来源有个先有鸡还是先有蛋的问题：算工作区需要 `TaoWindow` 句柄，而它只在
+        // `DecoratedWindow` 作用域里拿得到（`NucleusWindow.unsafe.taoWindow`）；通知窗本身
+        // 又不能拿到主窗口的 scope。做法：主窗口在组合时把 `TaoMonitors` 出来的工作区写进
+        // 这个 state，通知窗读它。主窗口没组合之前（`--silent` 首帧）退回 AWT 兜底 ——
+        // 那一小段时间里通常还没有任何通知要画。
+        val workArea = remember { mutableStateOf<WorkArea?>(null) }
+        NotificationOverlay(workArea = { workArea.value ?: awtWorkAreaFallback() })
 
         // 托盘：`composenativetray` 的原生桥（解决 CMP-1936 中文菜单乱码）。
         // 点图标先 `consumePendingAction()` 再决定显示/退出（沿用旧顺序）。
@@ -313,10 +322,20 @@ fun main(args: Array<String>) {
             icon = appIcon,
             minimumSize = DpSize(windowConfig.minWidth.dp, windowConfig.minHeight.dp),
         ) {
-            // `AppFocus` 的兜底（S6 收尾）：旧实现查 AWT `Window.getWindows()`，而 Tao 进程里
-            // 没有 AWT 窗口 → 恒判"不在前台"→ 每条通知都弹。这里改挂到 Nucleus 的窗口焦点。
+            // 通知窗的几何来源（ADR-073）：Tao 的原生显示器信息优先。
+            // 这里显式写回，供 `NotificationOverlay` 读；同时也把 `AppFocus` 的兜底挂上。
             LaunchedEffect(nucleusWindow) {
                 AppFocus.attachProbe { nucleusWindow.isFocused }
+                // 失败不能静默：退回 AWT 兜底后通知位置可能在高 DPI 下算错，没有日志就只能靠猜。
+                val area = runCatching {
+                    nucleusWindow.unsafe.taoWindow?.let { taoWorkArea(it) }
+                }.onFailure {
+                    Log.warn("notification geometry: Tao monitors unavailable, fall back to AWT (${it.message})")
+                }.getOrNull()
+                workArea.value = area
+                if (area != null) {
+                    Log.info("notification geometry: workArea=${area.left},${area.top} ${area.width}x${area.height}dp")
+                }
             }
             // 窗口内容整体包在应用主题里 —— 标题栏也必须跟着主题走。
             // Tao 的 `TitleBar` 不读 `MaterialTheme`，靠 `LocalTitleBarStyle` 取色；把主题开在
@@ -363,6 +382,27 @@ fun main(args: Array<String>) {
         }
     }
 }
+
+/**
+ * 主窗口还没组合时的兜底（`--silent` 首帧）。
+ *
+ * 这一段保留 AWT 是有意的：`NucleusWindow` 句柄要等 `DecoratedWindow` 组合才有，
+ * 而这时可能已经收到通知（开机自启后立刻后台跑完一轮）。用 AWT 只是读几何，
+ * 不涉及任何窗口模型，风险可控；拿到句柄后就换成 Tao 的数据源。
+ */
+private fun awtWorkAreaFallback(): WorkArea = runCatching {
+    val environment = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()
+    val device = environment.defaultScreenDevice
+    val bounds = device.defaultConfiguration.bounds
+    val insets = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(device.defaultConfiguration)
+    val scale = device.defaultConfiguration.defaultTransform.scaleX.toFloat().takeIf { it > 0f } ?: 1f
+    WorkArea(
+        left = (bounds.x + insets.left) / scale,
+        top = (bounds.y + insets.top) / scale,
+        width = (bounds.width - insets.left - insets.right) / scale,
+        height = (bounds.height - insets.top - insets.bottom) / scale,
+    )
+}.getOrDefault(WorkArea(0f, 0f, 1920f, 1080f))
 
 /** 位置还没定下来（`PlatformDefault` 且窗口未上屏）时不记，免得把 0,0 写进 state.json。 */
 private fun WindowState.toBounds(): WindowBounds? {

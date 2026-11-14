@@ -2,7 +2,7 @@
 
 > 本篇是 **v0.6.0 的权威可迭代版本**：现状实测问题 → 目标结构 → 阶段与退出条件 → 不做清单 →
 > 风险 → 验收口径 → 变更记录。**只留结论与可执行项，不写决策过程**；取舍理由一律进
-> [`07-decisions.md`](07-decisions.md)（ADR-057 ~ ADR-073）。
+> [`07-decisions.md`](07-decisions.md)（ADR-057 ~ ADR-074）。
 >
 > **怎么落地、怎么测**见详细设计两篇：
 > [`13-重构落地设计（v0.6.0）`](../详细设计/工程与代码/13-重构落地设计（v0.6.0）.md)（逐文件的改法）与
@@ -1002,6 +1002,7 @@ component/chat/
 | 2026-11-13 | **S6 主体完成**：`application{}`→`nucleusApplication{}`、`Window`→`DecoratedWindow`、Swing 托盘→`NucleusTray`、通知窗→`DecoratedWindow(transparent)`；删除自研 `SingleInstance.kt`(250)+`SingleInstanceTest.kt`(83)。真机验证：锁文件 `HermesCompose-28ee0fc6.lock` 已建、第二实例立即退出只剩 1 进程、主窗口正常（gateway 已连、sessions count=1）。新增 ADR-067（通知窗保留 AWT 屏幕几何，`taoAwtProbe` 实测可用但 `MouseInfo` 返回垃圾值）。**遗留**：托盘图标需人工看系统托盘确认；`DeepLinkHandler` 偶发 restore_request 读取 ERROR（Nucleus 内部，无深链时是噪音） | S6 实施 |
 | 2026-11-13 | **S6 两项用户反馈修正**（用户确认托盘与 `--silent` 均正常）：① **标题栏自绘**（ADR-068）—— Tao 的 `DecoratedWindow` 在 Windows 上无边框，不调 `TitleBar` 就没有标题栏也不能拖动；且它不读 `MaterialTheme`，必须显式传 `TitleBarStyle`（否则深灰底 + 深色字看不清）。`App.kt` 拆出 `AppContent` 让标题栏与内容共享同一主题。实测：双击最大化 / 拖动 / 亮暗主题切换均正常。② ~~第二实例提前退出~~ **已回退**（见下条）。591 测试全绿 | 用户反馈"窗口没有标题栏" + "第二次启动后端启动有点慢" |
 | 2026-11-14 | **回退"第二实例提前探测"**（ADR-066 补充）。用户指出"启动慢"不是第二实例的问题 —— 核实日志后确认：慢在**首实例冷启 daemon**（4 次实测 30.9/32.4/32.6/33.5s，波动 ±1.3s；热复用只要 ~1.5s），与单实例判定无关。而探测绕过了 Nucleus 的 `watchForRestoreRequests` 装配路径，属实质风险。已删 `SingleInstanceProbe.kt` + 其 8 个测试，恢复成只设 `configuration`、判定交给 `nucleusApplication`。**另外两项确认不改**：① 冷启额外耗时有本机另一个官方实例占着 `8642`（`api_server_port_in_use`）的影响，用户已确认那是自己开的；② 退出时 `gateway stop` 杀 daemon 是**预期行为**。583 测试全绿（回到探测前基线） | 用户指出「你绕过的部分无效，考虑回退，用回原生写法。应该和第二实例无关」 |
+| 2026-11-14 | **剩余 AWT 收尾（ADR-074）**：逐项实测后「三项能换、一项换不了」。① `NotificationOverlay` 屏幕几何 → Tao `TaoMonitors.primary(taoWindow).workAreaPx`+`scaleFactor`（`monitorProbe` 实测与 AWT 数值完全一致；顺带解决 ADR-067 的多屏 `MouseInfo` 垃圾值问题）；② `Links` 的 `Desktop.browse` → `rundll32`；③ `LocalFiles` 的 `Desktop.open` → 同上（它本来就有这条兜底）；④ `Clipboard` **不能换** —— Compose 的 desktop clipboard 底层就是 `java.awt.datatransfer.Clipboard`（`javap` 确认），换 API 只是换入口。附带修：`SystemNotifications.supported` 曾返回 `SystemTray.isSupported()`，而气泡通路已废弃 → 改成恒 true。生产代码真正引用 AWT 的文件 **9 → 2**（`Clipboard` + `Main.kt`）。685 测试全绿（+3） | 用户问「剩余的 awt 使用能否改为 compose 原生或者 nucleus」 |
 | 2026-11-14 | **S6 的 AWT 收尾补齐（ADR-073）**：用户问「现在是否还使用 swing 线程」时核查发现 13 篇 §8.6 只做了一半。① **删 `DesktopTray.kt`**（S6 起就没被实例化过）—— 而它是 `SystemNotifications.attach()` 的唯一调用方，导致**纯提示通知（"本轮完成"）一条都没弹过**，改成「原生 toast → 应用内卡片 6s」回退；② `FileDrop`/`FilePicker` 的 `java.awt.FileDialog` → **FileKit**（先补 `fileKitProbe` 确认 Windows 上是 `WindowsFilePicker` + JNA/COM，不是 AWT）；③ `AppFocus` 兜底 `Window.getWindows()` → `NucleusWindow.isFocused`（旧兜底在 Tao 下恒空 → 恒判"不在前台" → 每条通知都弹）；④ 删无用 `java.awt.Dimension` 与只为旧 Swing 托盘服务的 `UIManager.setLookAndFeel`。生产代码 AWT 文件 **9 → 4**（剩 `Clipboard`/`Links`/`Notifications`/`NotificationOverlay`，均属计划"保留"）。真机：FileKit 原生对话框弹出、中文标题正确、取消后无异常。682 测试全绿（+3） | 用户问「现在是否还使用 swing 线程」后的计划对照 |
 | 2026-11-14 | **UI 线程判定修正（ADR-072，推翻 ADR-071 的取值依据）**：实测 `taoSwingProbe` 证明 S6 迁 Tao 后 `Dispatchers.Main` = `main`（Compose 组合 + UI 事件回调），而 `Dispatchers.Swing` = `AWT-EventQueue-0`，**两者分家**（Nucleus 的 `TaoMainDispatcherFactory` loadPriority 100 > coroutines-swing 的 0）。`DesktopContainer` 从 v0.5.x 起写的 `Dispatchers.Swing` 在旧壳下碰巧等同 Main，换壳后变成真分叉 → `GatewayClient` 与 8 个 `ViewModel` 的事件/协程分居两条线程，共享的裸 map 无同步。修复：`UiDispatcher.context` = `Dispatchers.Main`，`DesktopContainer` scope 改用它；新增 `UiDispatcherTest` 两条断言钉住（改回 Swing 立刻失败）。真机验证：正常启动、gateway 已连、会话列表与 Markdown/终端渲染正常、无异常。679 测试全绿（+2） | 用户质疑「Swing EDT 为什么需要？现在应当没有使用 swing 了」 |
 | 2026-11-14 | **S4（部分）完成**：`ChatViewModel` 不做整块重写（原计划的 `ChatReducer` 吃三份流式实现留到 S8，理由见 ADR-071）。落地：新增 `DefaultChatComponent` 把 2147 行的 `ChatViewModel` 包起来（`viewModelScope` → Component scope，去掉 `ViewModel` 继承，`onCleared()` → 显式 `dispose()` 由 `Holder.onDestroy` 调）；**5 个 `var onXxx` → `Flow<ChatEffect>`**（同时修掉"通知中心与页面互相覆盖回调"这个真实 bug 源）；新增 `SessionRuntimeStore`（8 个平行 map → `SessionRuntime` 值对象 + **O(1) 反向索引**，+10 个测试）。**三条硬约束**：换 runtimeId 必须摘旧索引、重连只清连接作用域字段（迁移前的 `runtimeIds.clear()` 其实是错的）、`dirty` 不能被重连清掉。676 测试全绿（+10）。真机 UI 测试未做（本轮锁屏） | S4 排期 |
@@ -1015,7 +1016,7 @@ component/chat/
 
 | 文档 | 关系 |
 |---|---|
-| [`07-decisions.md`](07-decisions.md) | **ADR-057 ~ ADR-073** 记录本计划的全部取舍理由，本篇不复述 |
+| [`07-decisions.md`](07-decisions.md) | **ADR-057 ~ ADR-074** 记录本计划的全部取舍理由，本篇不复述 |
 | [`03-architecture.md`](03-architecture.md) | §1 分层图与 §9 桌面壳按本计划更新 |
 | [`02-selection.md`](02-selection.md) | 依赖表按本计划更新（增删项与版本核实记录） |
 | [`06-roadmap.md`](06-roadmap.md) | 只留指针，P0–P6 总路线不变 |
