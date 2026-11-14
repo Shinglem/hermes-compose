@@ -47,7 +47,7 @@ import org.jetbrains.compose.resources.stringResource
  */
 @Composable
 fun ProfileRail(
-    state: ShellState,
+    state: dev.shinglem.hermes.component.shell.ShellState,
     compact: Boolean,
     onSelectProfile: (String?) -> Unit,
     onOpenCapabilities: () -> Unit,

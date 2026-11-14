@@ -27,7 +27,7 @@ class StatusBarTest {
         skillCount = 58,
     )
 
-    private fun state(connection: ConnectionState) = ShellState(
+    private fun state(connection: ConnectionState) = dev.shinglem.hermes.component.shell.ShellState(
         profiles = Loadable.Ready(listOf(profile)),
         connection = connection,
         health = BackendHealth(

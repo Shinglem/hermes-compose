@@ -39,7 +39,7 @@ import dev.shinglem.hermes.ui.icon.AppIcons
 /** 通栏状态条（28dp）：profile · 后端启动状态 · 连接状态 · 后端版本。 */
 @Composable
 fun StatusBar(
-    state: ShellState,
+    state: dev.shinglem.hermes.component.shell.ShellState,
     onRetryConnection: () -> Unit,
     onShowBackendDetail: () -> Unit = {},
     showUnelevatedHint: Boolean = false,

@@ -85,9 +85,8 @@ import dev.shinglem.hermes.component.settings.DefaultSecurityComponent
 import dev.shinglem.hermes.component.shell.ShellComponent
 import dev.shinglem.hermes.component.shell.ShellState as NewShellState
 import dev.shinglem.hermes.component.shell.DefaultShellComponent
-import dev.shinglem.hermes.component.shell.toLegacy
+
 import dev.shinglem.hermes.component.shell.RealShellGateway
-import dev.shinglem.hermes.component.shell.toShellModeForShellComponent
 import dev.shinglem.hermes.component.backend.BackendIntent
 import dev.shinglem.hermes.component.backend.DefaultBackendComponent
 import dev.shinglem.hermes.component.backend.ProviderBackendGateway

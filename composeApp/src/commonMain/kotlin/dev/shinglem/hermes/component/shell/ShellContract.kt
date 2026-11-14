@@ -8,6 +8,7 @@ import dev.shinglem.hermes.core.backend.ProbeState
 import dev.shinglem.hermes.feature.shell.ProfileSummary
 import dev.shinglem.hermes.core.result.Loadable
 import dev.shinglem.hermes.core.result.valueOrNull
+import dev.shinglem.hermes.core.transport.BackendHealth
 import dev.shinglem.hermes.core.transport.ConnectionState
 
 
@@ -27,6 +28,8 @@ data class ShellState(
     val backend: BackendBootState = BackendBootState.Idle,
     val backendLogs: List<BackendLogLine> = emptyList(),
     val gatewayProbe: ProbeState = ProbeState.Idle,
+    /** 后端健康信息（版本号等）。迁移前在旧 ShellState 上，UI 有两处消费。 */
+    val health: BackendHealth? = null,
 ) {
     val profilesOrEmpty: List<ProfileSummary> get() = profiles.valueOrNull.orEmpty()
 

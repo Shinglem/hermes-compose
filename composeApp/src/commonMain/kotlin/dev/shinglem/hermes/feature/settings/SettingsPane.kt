@@ -1,5 +1,18 @@
 package dev.shinglem.hermes.feature.settings
 
+import dev.shinglem.hermes.component.settings.CustomEndpointEffect
+import dev.shinglem.hermes.component.settings.ModelSettingsEffect
+import dev.shinglem.hermes.component.settings.MoaEffect
+import dev.shinglem.hermes.component.settings.ProviderKeysEffect
+import dev.shinglem.hermes.component.settings.ProfilesEffect
+import dev.shinglem.hermes.component.settings.SecurityEffect
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.clickable
 import dev.shinglem.hermes.component.updater.UpdaterState as UpdateState
 import androidx.compose.foundation.layout.Arrangement
@@ -166,6 +179,45 @@ fun SettingsDetailPane(
         )
     }
 
+    // 设置页各域的一次性提示（Toast）统一走这里的 Snackbar：
+    // 6 个 Component 各自 publish，但它们的 UI 页面从来没接过 effects —— 结果是
+    // "保存成功"只有 state 里的 notice，切走再回来就没了。这里收一次，全局生效。
+    val snackbarHostState = remember { SnackbarHostState() }
+    val toastScope = rememberCoroutineScope()
+    LaunchedEffect(security, profiles, providerKeys, moa, modelSettings, customEndpoints) {
+        launch {
+            security?.effects?.collect { effect ->
+                if (effect is SecurityEffect.Toast) toastScope.launch { snackbarHostState.showSnackbar(effect.text) }
+            }
+        }
+        launch {
+            profiles?.effects?.collect { effect ->
+                if (effect is ProfilesEffect.Toast) toastScope.launch { snackbarHostState.showSnackbar(effect.text) }
+            }
+        }
+        launch {
+            providerKeys?.effects?.collect { effect ->
+                if (effect is ProviderKeysEffect.Toast) toastScope.launch { snackbarHostState.showSnackbar(effect.text) }
+            }
+        }
+        launch {
+            moa?.effects?.collect { effect ->
+                if (effect is MoaEffect.Toast) toastScope.launch { snackbarHostState.showSnackbar(effect.text) }
+            }
+        }
+        launch {
+            modelSettings?.effects?.collect { effect ->
+                if (effect is ModelSettingsEffect.Toast) toastScope.launch { snackbarHostState.showSnackbar(effect.text) }
+            }
+        }
+        launch {
+            customEndpoints?.effects?.collect { effect ->
+                if (effect is CustomEndpointEffect.Toast) toastScope.launch { snackbarHostState.showSnackbar(effect.text) }
+            }
+        }
+    }
+
+    Box(modifier) {
     when (state.selected) {
         SettingsPage.Memory -> {
             MemoryPage(
@@ -559,5 +611,10 @@ fun SettingsDetailPane(
             }
             Button(onClick = onSave, enabled = !state.restarting) { Text("保存") }
         }
+    }
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+        )
     }
 }

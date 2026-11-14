@@ -29,8 +29,7 @@ import dev.shinglem.hermes.component.shell.DefaultShellComponent
 import dev.shinglem.hermes.component.shell.RealShellGateway
 import dev.shinglem.hermes.component.shell.ShellComponent
 import dev.shinglem.hermes.component.shell.ShellState as NewShellState
-import dev.shinglem.hermes.component.shell.toLegacy
-import dev.shinglem.hermes.component.shell.toShellModeForShellComponent
+
 import dev.shinglem.hermes.component.settings.MaintenanceComponent
 import dev.shinglem.hermes.component.subagent.DefaultSubagentComponent
 import dev.shinglem.hermes.component.subagent.RpcSubagentGateway
@@ -64,7 +63,7 @@ import kotlinx.coroutines.SupervisorJob
 @Suppress("LongParameterList")
 class AppShellDeps(
     val shellComponent: ShellComponent,
-    val shellState: ShellState,
+    val shellState: dev.shinglem.hermes.component.shell.ShellState,
     val rootComponent: dev.shinglem.hermes.component.root.DefaultRootComponent,
     val sessionListComponent: dev.shinglem.hermes.component.sessionlist.SessionListComponent,
     val sessionViewModel: SessionListViewModel,
@@ -222,7 +221,7 @@ fun rememberAppShellDeps(container: AppContainer, context: ComponentContext): Ap
     // 旧 ShellState 的消费方（6 个 settings Component 与 200+ 处 UI）仍按旧类型工作；
     // 这里用一个轻量投影把新 state 映射回旧形状，避免这一轮改上千行 UI（S8 统一改）。
     val newShellState: NewShellState by shellComponent.state.collectAsStateWithLifecycle()
-    val shellState: ShellState = remember(newShellState) { newShellState.toLegacy() }
+    val shellState: NewShellState = newShellState
     // RootComponent 接管导航（S5）：mode 的事实源仍是 ShellComponent，这里只做投影。
     val rootComponent = remember(context) {
         dev.shinglem.hermes.component.root.DefaultRootComponent(
