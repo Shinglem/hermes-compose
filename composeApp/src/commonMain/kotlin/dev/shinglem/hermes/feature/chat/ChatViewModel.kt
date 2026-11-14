@@ -1067,7 +1067,7 @@ class ChatViewModel(
     ): ModelSwitchOutcome = try {
         action()
     } catch (refused: AppError.Server) {
-        if (refused.reason !in STALE_FENCE_REASONS) throw refused
+        if (!shouldRetryOnStaleFence(refused.reason)) throw refused
         Log.info("session.mutate refused (${refused.reason}); re-resuming ${key.sessionId} and retrying")
         refreshFence(key)
         action()
