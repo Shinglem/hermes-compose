@@ -123,16 +123,15 @@ class ChatViewModel(
     private val crossSessionApprovals = mutableMapOf<String, PendingApproval>()
     private val crossSessionClarify = mutableMapOf<String, PendingClarify>()
 
-    /** `clarify` 的作答结果：null = 取消（回空结果），map 为空 = 全部跳过。 */
-    private val clarifyDecisions = mutableMapOf<String, CompletableDeferred<Map<String, String>?>>()
-
-    /** clarify 的帧 id → 业务 `request_id`（`request.cancel` 带的是前者）。 */
-    private val clarifyFrameIds = mutableMapOf<String, String>()
-
-    private val approvalDecisions = mutableMapOf<String, CompletableDeferred<String>>()
-
-    /** JSON-RPC 帧 id → 队列里的 `request_id`：`request.cancel` 带的是前者。 */
-    private val approvalFrameIds = mutableMapOf<String, String>()
+    /**
+     * 等待用户决定的 `approval` / `clarify` 请求（S8：原 4 张平行表合并成 2 张）。
+     *
+     * 原来每次登记要同时写 `decisions[requestId]` 与 `frameIds[frameId]`，摘除要同时删两张；
+     * 少写一处就是"卡片点了没反应"或"`request.cancel` 撤不掉"，且两者都不报错。
+     * 现在成对关系由 [PendingRequests] 保证。
+     */
+    private val approvalRequests = PendingRequests<String>()
+    private val clarifyRequests = PendingRequests<Map<String, String>?>()
 
     /** 用户手动关掉的后台任务行：直到 registry 也不再报告该 id 才忘记。 */
     private val dismissedTasks = mutableSetOf<String>()
@@ -862,7 +861,7 @@ class ChatViewModel(
     /** 审批卡片点击。 */
     fun resolveApproval(requestId: String, choice: String) {
         // 本连接收到的请求：有等待中的响应帧，直接交付决策即可。
-        approvalDecisions[requestId]?.let { decision ->
+        approvalRequests[requestId]?.decision?.let { decision ->
             decision.complete(choice)
             return
         }
@@ -906,8 +905,8 @@ class ChatViewModel(
      */
     private fun cancelApproval(cancelled: ChatStreamEvent.ApprovalCancelled) {
         // `request.cancel` 带的是 JSON-RPC 帧 id；映射不到就当它已经是队列 id。
-        val requestId = approvalFrameIds.remove(cancelled.requestId) ?: cancelled.requestId
-        approvalDecisions[requestId]?.complete(CHOICE_DENY)
+        val requestId = approvalRequests.businessIdOf(cancelled.requestId) ?: cancelled.requestId
+        approvalRequests.completeByRequestId(requestId, CHOICE_DENY)
         forgetPendingRequest(requestId)
     }
 
@@ -1200,12 +1199,8 @@ class ChatViewModel(
         gateway.removeServerRequestHandler(CLARIFY_REQUEST)
         // 两个待决表都要取消：漏掉 clarify 的那些 `CompletableDeferred` 会永远挂着，
         // 而 `awaitClarifyDecision` 的协程也就永远不结束（原 `onCleared()` 只清了审批那一半）。
-        approvalDecisions.values.forEach { it.cancel() }
-        approvalDecisions.clear()
-        approvalFrameIds.clear()
-        clarifyDecisions.values.forEach { it.cancel() }
-        clarifyDecisions.clear()
-        clarifyFrameIds.clear()
+        approvalRequests.cancelAll()
+        clarifyRequests.cancelAll()
     }
 
     // ── 切走 / 切回：快照与脏标记 ────────────────────────────────────────
@@ -1627,7 +1622,7 @@ class ChatViewModel(
             val method = (payload?.get("method") as? JsonPrimitive)?.contentOrNull
             if (id != null) {
                 forgetPendingRequest(id)
-                approvalDecisions.remove(id)?.complete(CHOICE_DENY)
+                approvalRequests.completeByRequestId(id, CHOICE_DENY)
                 Log.info("request.cancel method=$method id=$id")
             }
             return
@@ -1764,8 +1759,7 @@ class ChatViewModel(
         val parsed = obj.toPendingApproval(fromRequest = true) ?: return null
         val request = parsed.copy(sessionKey = keyFor(parsed.runtimeSessionId))
         val decision = CompletableDeferred<String>()
-        approvalDecisions[request.requestId] = decision
-        approvalFrameIds[frameId] = request.requestId
+        approvalRequests.register(PendingRequest<String>(frameId, request.requestId, decision))
         _state.update { it.copy(pendingApprovals = it.pendingApprovals + request) }
         // 非前台时的系统通知只发一次（补拉 / 重连会重复拿到同一条）。
         if (notifiedApprovals.add(request.requestId)) {
@@ -1780,8 +1774,7 @@ class ChatViewModel(
             // 后端自己的审批超时是 300s；这里必须比它长，否则会在后端还在等的时候先替用户拒绝。
             withTimeoutOrNull(APPROVAL_TIMEOUT_MS) { decision.await() } ?: CHOICE_DENY
         } finally {
-            approvalDecisions.remove(request.requestId)
-            approvalFrameIds.remove(frameId)
+            approvalRequests.removeByRequestId(request.requestId)
             _state.update { current ->
                 current.copy(pendingApprovals = current.pendingApprovals.filterNot { it.requestId == request.requestId })
             }
@@ -1801,15 +1794,13 @@ class ChatViewModel(
         val parsed = obj.toPendingClarify(frameId) ?: return buildJsonObject { }
         val request = parsed.copy(sessionKey = keyFor(parsed.runtimeSessionId))
         val decision = CompletableDeferred<Map<String, String>?>()
-        clarifyDecisions[request.requestId] = decision
-        clarifyFrameIds[frameId] = request.requestId
+        clarifyRequests.register(PendingRequest(frameId, request.requestId, decision))
         _state.update { it.copy(pendingClarify = it.pendingClarify + request) }
         emit(ChatEffect.ClarifyRequested(request, keyFor(request.runtimeSessionId)))
         val answers = try {
             withTimeoutOrNull(CLARIFY_TIMEOUT_MS) { decision.await() }
         } finally {
-            clarifyDecisions.remove(request.requestId)
-            clarifyFrameIds.remove(frameId)
+            clarifyRequests.removeByRequestId(request.requestId)
             _state.update { current ->
                 current.copy(
                     pendingClarify = current.pendingClarify.filterNot { it.requestId == request.requestId },
@@ -1837,7 +1828,7 @@ class ChatViewModel(
     /** 作答一个 `clarify`；批量请求的 [answers] 键是 `qid`。 */
     fun answerClarify(requestId: String, answers: Map<String, String>) {
         // 实时路径：响应帧还挂着，直接交付。
-        clarifyDecisions[requestId]?.let { decision ->
+        clarifyRequests[requestId]?.decision?.let { decision ->
             decision.complete(answers)
             return
         }
@@ -1876,8 +1867,7 @@ class ChatViewModel(
 
     /** 取消 `clarify`：回空结果，后端按"用户放弃"处理。 */
     fun cancelClarify(requestId: String) {
-        val businessId = clarifyFrameIds.remove(requestId) ?: requestId
-        clarifyDecisions[businessId]?.complete(null)
+        clarifyRequests.takeDecisionByFrameId(requestId)?.complete(null)
     }
 
     /**
