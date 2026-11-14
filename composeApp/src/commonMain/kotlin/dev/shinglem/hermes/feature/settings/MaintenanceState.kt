@@ -48,11 +48,24 @@ class MaintenanceViewModel(
     private val scope: kotlinx.coroutines.CoroutineScope,
 ) {
 
-    private val _memory = MutableStateFlow(MemoryUiState())
-    val memory: StateFlow<MemoryUiState> = _memory.asStateFlow()
+    /** 记忆域（`MaintenanceMemoryController`，本类只做转发）。 */
+    private val memoryController = MaintenanceMemoryController(
+        repository = repository,
+        configRepository = configRepository,
+        hermesHome = hermesHome,
+        scope = scope,
+        profile = { profile },
+    )
 
-    private val _ops = MutableStateFlow(OpsUiState())
-    val ops: StateFlow<OpsUiState> = _ops.asStateFlow()
+    /** 诊断与维护域（`MaintenanceOpsController`，本类只做转发）。 */
+    private val opsController = MaintenanceOpsController(
+        repository = repository,
+        scope = scope,
+        profile = { profile },
+    )
+
+    val memory: StateFlow<MemoryUiState> = memoryController.state
+    val ops: StateFlow<OpsUiState> = opsController.state
 
     private val _credentials = MutableStateFlow(CredentialPoolUiState())
     val credentials: StateFlow<CredentialPoolUiState> = _credentials.asStateFlow()
@@ -92,358 +105,43 @@ class MaintenanceViewModel(
     private fun applyScope(next: String?) {
         profile = next
         _profileKey.value = next
-        _memory.value = MemoryUiState()
-        _ops.value = OpsUiState()
+        memoryController.reset()
+        opsController.reset()
         _credentials.value = CredentialPoolUiState()
         _usage.value = UsageUiState(days = _usage.value.days)
         _sessions.value = SessionMaintenanceUiState()
         _integrations.value = IntegrationUiState()
     }
 
-    // ---- 记忆 ----------------------------------------------------------
+    // ---- 记忆（转发到 MaintenanceMemoryController）----------------------
 
-    fun refreshMemory() {
-        if (_memory.value.loading) return
-        _memory.update { it.copy(loading = true, error = null) }
-        scope.launch {
-            try {
-                val status = repository.memoryStatus(profile)
-                val config = configRepository.read(profile)
-                _memory.update { it.copy(loading = false, status = status, config = config) }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (throwable: Throwable) {
-                _memory.update { it.copy(loading = false, error = throwable.toUserNotice("/api/memory")) }
-            }
-        }
-    }
+    fun refreshMemory() = memoryController.refreshMemory()
+    fun editMemoryConfig(path: String, text: String) = memoryController.editMemoryConfig(path, text)
+    fun saveMemoryConfig() = memoryController.saveMemoryConfig()
+    fun askResetMemory(target: String) = memoryController.askResetMemory(target)
+    fun dismissResetMemory() = memoryController.dismissResetMemory()
+    fun confirmResetMemory() = memoryController.confirmResetMemory()
+    fun dismissMemoryNotice() = memoryController.dismissMemoryNotice()
+    fun discardMemoryConfig() = memoryController.discardMemoryConfig()
+    fun openMemoryFile(which: String) = memoryController.openMemoryFile(which)
+    fun editMemoryFileText(text: String) = memoryController.editMemoryFileText(text)
+    fun saveMemoryFile() = memoryController.saveMemoryFile()
+    fun closeMemoryFile() = memoryController.closeMemoryFile()
 
-    /** 改一个内置层配置项（`memory.*`），只记在草稿里，保存时才发稀疏 patch。 */
-    fun editMemoryConfig(path: String, text: String) {
-        _memory.update { it.copy(configEdits = it.configEdits + (path to text), notice = null, error = null) }
-    }
+    // ---- 诊断与维护（转发到 MaintenanceOpsController）-------------------
 
-    /** 保存内置层配置：只发改动项，然后回读（后端会补默认值）。 */
-    fun saveMemoryConfig() {
-        val state = _memory.value
-        if (state.configSaving || state.configEdits.isEmpty()) return
-        val patch = buildConfigPatch(state.configEdits, MEMORY_FIELDS)
-        if (patch.isEmpty()) {
-            _memory.update { it.copy(error = "没有可保存的改动（数值需要是数字）") }
-            return
-        }
-        _memory.update { it.copy(configSaving = true, notice = null, error = null) }
-        scope.launch {
-            try {
-                configRepository.patch(profile, patch)
-                val config = configRepository.read(profile)
-                _memory.update {
-                    it.copy(
-                        configSaving = false,
-                        config = config,
-                        configEdits = emptyMap(),
-                        notice = "已保存，对后续对话生效",
-                    )
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (throwable: Throwable) {
-                _memory.update { it.copy(configSaving = false, error = throwable.toUserNotice("/api/config")) }
-            }
-        }
-    }
-
-    fun askResetMemory(target: String) {
-        _memory.update { it.copy(pendingReset = target, notice = null, error = null) }
-    }
-
-    fun dismissResetMemory() {
-        _memory.update { it.copy(pendingReset = null) }
-    }
-
-    fun confirmResetMemory() {
-        val target = _memory.value.pendingReset ?: return
-        _memory.update { it.copy(pendingReset = null, busy = "reset:$target", error = null) }
-        scope.launch {
-            try {
-                val result = repository.resetMemory(target, profile)
-                val status = repository.memoryStatus(profile)
-                _memory.update {
-                    it.copy(
-                        busy = null,
-                        status = status,
-                        notice = if (result.deleted.isEmpty()) {
-                            "没有可删除的记忆文件"
-                        } else {
-                            "已删除 ${result.deleted.joinToString("、")}"
-                        },
-                    )
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (throwable: Throwable) {
-                _memory.update {
-                    it.copy(busy = null, error = throwable.toUserNotice("/api/memory/reset"))
-                }
-            }
-        }
-    }
-
-    fun dismissMemoryNotice() {
-        _memory.update { it.copy(notice = null, error = null) }
-    }
-
-    /** 丢弃未保存的内置层改动。 */
-    fun discardMemoryConfig() {
-        _memory.update { it.copy(configEdits = emptyMap(), error = null) }
-    }
-
-    // ---- 记忆文件内容（`/api/fs/read-text` / `write-text`）----------------
-
-    /** 打开某个内置记忆文件到编辑器（[which] = `memory` / `user`）。 */
-    fun openMemoryFile(which: String) {
-        val path = memoryFilePath(which)
-        _memory.update {
-            it.copy(editingFile = which, filePath = path, fileText = "", fileLoading = true, error = null)
-        }
-        scope.launch {
-            try {
-                val file = repository.readTextFile(path, profile)
-                _memory.update {
-                    it.copy(
-                        fileLoading = false,
-                        fileText = file.text,
-                        filePath = file.path.ifBlank { path },
-                    )
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (throwable: Throwable) {
-                _memory.update { it.copy(fileLoading = false, error = throwable.toUserNotice("/api/fs/read-text")) }
-            }
-        }
-    }
-
-    fun editMemoryFileText(text: String) {
-        _memory.update { it.copy(fileText = text) }
-    }
-
-    /** 保存编辑器内容，然后重读体积（文件大小会变）。 */
-    fun saveMemoryFile() {
-        val state = _memory.value
-        val path = state.filePath
-        if (path.isBlank() || state.fileSaving) return
-        _memory.update { it.copy(fileSaving = true, error = null) }
-        scope.launch {
-            try {
-                repository.writeTextFile(path, state.fileText, profile)
-                val status = repository.memoryStatus(profile)
-                _memory.update {
-                    it.copy(
-                        fileSaving = false,
-                        status = status,
-                        editingFile = null,
-                        filePath = "",
-                        fileText = "",
-                        notice = "已写入 ${memoryFileName(state.editingFile)}",
-                    )
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (throwable: Throwable) {
-                _memory.update { it.copy(fileSaving = false, error = throwable.toUserNotice("/api/fs/write-text")) }
-            }
-        }
-    }
-
-    fun closeMemoryFile() {
-        _memory.update { it.copy(editingFile = null, filePath = "", fileText = "") }
-    }
-
-    private fun memoryFileName(which: String?): String = if (which == "user") "USER.md" else "MEMORY.md"
-
-    private fun memoryFilePath(which: String): String {
-        val home = hermesHome.trimEnd('\\', '/')
-        val dir = if (profile.isNullOrBlank()) "$home/memories" else "$home/profiles/$profile/memories"
-        return "$dir/${memoryFileName(which)}"
-    }
-
-    // ---- 诊断与维护 ----------------------------------------------------
-
-    fun refreshOps() {
-        _ops.update { it.copy(loading = true, error = null) }
-        scope.launch {
-            try {
-                val checkpoints = repository.checkpoints(profile)
-                val curator = runCatching { repository.curator(profile) }.getOrNull()
-                _ops.update { it.copy(loading = false, checkpoints = checkpoints, curator = curator) }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (throwable: Throwable) {
-                _ops.update { it.copy(loading = false, error = throwable.toUserNotice("/api/ops/checkpoints")) }
-            }
-        }
-    }
-
-    fun runAction(action: MaintenanceAction) {
-        if (_ops.value.running != null) return
-        _ops.update {
-            it.copy(running = action.label, log = emptyList(), exitCode = null, notice = null, error = null)
-        }
-        scope.launch {
-            try {
-                val started = when (action) {
-                    MaintenanceAction.DOCTOR -> repository.runDoctor(profile)
-                    MaintenanceAction.SECURITY_AUDIT -> repository.runSecurityAudit(profile)
-                    MaintenanceAction.BACKUP -> repository.runBackup(profile)
-                    MaintenanceAction.CURATOR_RUN -> repository.runCurator(profile)
-                    MaintenanceAction.PRUNE_CHECKPOINTS -> repository.pruneCheckpoints(profile)
-                    MaintenanceAction.DUMP -> repository.runDump(profile)
-                }
-                val status = repository.awaitAction(started.name)
-                _ops.update {
-                    it.copy(
-                        running = null,
-                        log = status.lines,
-                        exitCode = status.exitCode,
-                        backupArchive = started.archive ?: it.backupArchive,
-                        notice = if (status.running) {
-                            "动作仍在后台运行，稍后刷新看日志"
-                        } else {
-                            when (status.exitCode) {
-                                null, 0 -> "已完成"
-                                else -> "已结束（退出码 ${status.exitCode}），详见日志"
-                            }
-                        },
-                    )
-                }
-                if (action == MaintenanceAction.PRUNE_CHECKPOINTS) {
-                    val checkpoints = runCatching { repository.checkpoints(profile) }.getOrNull()
-                    _ops.update { it.copy(checkpoints = checkpoints ?: it.checkpoints) }
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (throwable: Throwable) {
-                _ops.update { it.copy(running = null, error = throwable.toUserNotice(action.label)) }
-            }
-        }
-    }
-
-    fun askPruneCheckpoints() {
-        _ops.update { it.copy(confirmPrune = true) }
-    }
-
-    fun dismissPruneCheckpoints() {
-        _ops.update { it.copy(confirmPrune = false) }
-    }
-
-    fun confirmPruneCheckpoints() {
-        _ops.update { it.copy(confirmPrune = false) }
-        runAction(MaintenanceAction.PRUNE_CHECKPOINTS)
-    }
-
-    fun toggleCuratorPaused(paused: Boolean) {
-        scope.launch {
-            try {
-                val next = repository.setCuratorPaused(paused, profile)
-                _ops.update { it.copy(curator = it.curator?.copy(paused = next)) }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (throwable: Throwable) {
-                _ops.update { it.copy(error = throwable.toUserNotice("/api/curator/paused")) }
-            }
-        }
-    }
-
-    fun dismissOpsNotice() {
-        _ops.update { it.copy(notice = null, error = null) }
-    }
-
-    /** 把服务端生成的备份 zip 下载到本机（`%LOCALAPPDATA%\hermes-compose\backups`）。 */
-    fun downloadBackup() {
-        val archive = _ops.value.backupArchive ?: return
-        if (_ops.value.downloading) return
-        _ops.update { it.copy(downloading = true, notice = null, error = null) }
-        scope.launch {
-            try {
-                val bytes = repository.downloadBackup(archive, profile)
-                val name = archive.substringAfterLast('/').substringAfterLast('\\')
-                    .ifBlank { "hermes-backup.zip" }
-                val target = appDataDir.trimEnd('\\', '/') + "/backups/" + name
-                if (writeBytesToFile(target, bytes)) {
-                    _ops.update {
-                        it.copy(downloading = false, downloadedPath = target, notice = "已下载到 $target")
-                    }
-                } else {
-                    _ops.update { it.copy(downloading = false, error = "写入失败：$target") }
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (throwable: Throwable) {
-                _ops.update { it.copy(downloading = false, error = throwable.toUserNotice("/api/ops/backup/download")) }
-            }
-        }
-    }
-
-    fun editImportArchive(path: String) {
-        _ops.update { it.copy(importArchive = path) }
-    }
-
-    /** 从备份恢复（服务端路径；`force` 由后端非交互跑 import）。 */
-    fun importBackup() {
-        val archive = _ops.value.importArchive.trim()
-        if (archive.isBlank() || _ops.value.importing) return
-        _ops.update { it.copy(importing = true, notice = null, error = null) }
-        scope.launch {
-            try {
-                val started = repository.importBackup(archive, force = true, profile = profile)
-                val status = repository.awaitAction(started.name)
-                _ops.update {
-                    it.copy(
-                        importing = false,
-                        log = status.lines,
-                        exitCode = status.exitCode,
-                        notice = if (status.running) {
-                            "恢复仍在后台运行，稍后看日志"
-                        } else {
-                            "恢复已结束（退出码 ${status.exitCode ?: 0}）"
-                        },
-                    )
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (throwable: Throwable) {
-                _ops.update { it.copy(importing = false, error = throwable.toUserNotice("/api/ops/import")) }
-            }
-        }
-    }
-
-    /** 调试分享：同步返回链接（会脱敏日志，可关）。 */
-    fun runDebugShare() {
-        if (_ops.value.sharing) return
-        _ops.update { it.copy(sharing = true, debugUrls = emptyList(), notice = null, error = null) }
-        scope.launch {
-            try {
-                val result = repository.debugShare(lines = 200, redact = true, profile = profile)
-                val urls = collectHttpUrls(result.toString())
-                _ops.update {
-                    it.copy(
-                        sharing = false,
-                        debugUrls = urls,
-                        notice = if (urls.isEmpty()) "未返回链接（后端可能未配置分享服务）" else "已生成分享链接",
-                    )
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (throwable: Throwable) {
-                _ops.update { it.copy(sharing = false, error = throwable.toUserNotice("/api/ops/debug-share")) }
-            }
-        }
-    }
-
-    fun dismissDebugUrls() {
-        _ops.update { it.copy(debugUrls = emptyList(), notice = null) }
-    }
+    fun refreshOps() = opsController.refreshOps()
+    fun runAction(action: MaintenanceAction) = opsController.runAction(action)
+    fun askPruneCheckpoints() = opsController.askPruneCheckpoints()
+    fun dismissPruneCheckpoints() = opsController.dismissPruneCheckpoints()
+    fun confirmPruneCheckpoints() = opsController.confirmPruneCheckpoints()
+    fun toggleCuratorPaused(paused: Boolean) = opsController.toggleCuratorPaused(paused)
+    fun dismissOpsNotice() = opsController.dismissOpsNotice()
+    fun downloadBackup() = opsController.downloadBackup()
+    fun editImportArchive(path: String) = opsController.editImportArchive(path)
+    fun importBackup() = opsController.importBackup()
+    fun runDebugShare() = opsController.runDebugShare()
+    fun dismissDebugUrls() = opsController.dismissDebugUrls()
 
     // ---- 凭据池 --------------------------------------------------------
 
