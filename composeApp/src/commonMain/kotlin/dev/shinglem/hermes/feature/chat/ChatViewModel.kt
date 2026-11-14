@@ -1,5 +1,6 @@
 package dev.shinglem.hermes.feature.chat
 
+import dev.shinglem.hermes.component.chat.ChatEffect
 import dev.shinglem.hermes.core.contract.RpcMethods
 import dev.shinglem.hermes.core.transport.ConnectionState
 import dev.shinglem.hermes.core.transport.SessionFence
@@ -61,29 +62,17 @@ class ChatViewModel(
     private val models: ModelRepository,
     private val preferences: AppPreferences,
     private val scope: CoroutineScope,
+    /**
+     * 一次性事件出口（S5：5 个 `var onXxx` 收成一条通道）。
+     *
+     * 迁移前是 5 个可空回调 —— 它们的问题是**后写覆盖前写**：UI 与通知中心都赋值时，
+     * 后赋的那个静默盖掉前一个（这是迁移前的真实 bug 来源）。收成一个通道后，
+     * 广播语义由 `DefaultChatComponent` 的 SharedFlow 保证。
+     */
+    private val emit: (ChatEffect) -> Unit,
 ) : ComposerSessionContext {
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
-
-    /**
-     * 一条 prompt 被后端接受后的回调（用于刷新会话列表）。
-     *
-     * 放在这里而不是 UI 层轮询：后端要到第一条 prompt 才给会话生成列表行，
-     * 这是唯一准确的时机。
-     */
-    var onSessionPersisted: (() -> Unit)? = null
-
-    /** 一轮结束的回调（通知中心接线用；`failed` 为真表示这轮失败）。 */
-    var onTurnFinished: ((failed: Boolean, text: String) -> Unit)? = null
-
-    /** 收到审批请求（系统通知接线用；同一 `requestId` 只会回调一次）。 */
-    var onApprovalRequested: ((PendingApproval, SessionKey?) -> Unit)? = null
-
-    /** 收到 `clarify` 请求（系统通知接线用）。 */
-    var onClarifyRequested: ((PendingClarify, SessionKey?) -> Unit)? = null
-
-    /** 分支/复制成功后回调：外层据此刷新列表并选中新会话。 */
-    var onBranched: ((BranchFrom) -> Unit)? = null
 
     /** 已读过的 transcript（含向上翻页的结果）；切回不重复请求。 */
     private val cache = mutableMapOf<SessionKey, LoadedTranscript>()
@@ -464,7 +453,7 @@ class ChatViewModel(
                     startTurnWatchdog(key, runtimeId)
                 }
                 // 后端在第一条 prompt 之后才给会话生成列表行 —— 这时刷新列表才看得到它。
-                onSessionPersisted?.invoke()
+                emit(ChatEffect.SessionPersisted)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
@@ -496,7 +485,7 @@ class ChatViewModel(
                         streaming = state.streaming ?: StreamingState(startedAt = Clock.System.now()),
                     )
                 }
-                onSessionPersisted?.invoke()
+                emit(ChatEffect.SessionPersisted)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
@@ -564,7 +553,7 @@ class ChatViewModel(
                 val status = repository.steer(key.profile, runtimeId, text, generations[key])
                 Log.info("session.steer accepted status=$status")
                 _state.update { state -> state.appendLocalUser(nextLocalId("user"), text) }
-                onSessionPersisted?.invoke()
+                emit(ChatEffect.SessionPersisted)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
@@ -653,7 +642,7 @@ class ChatViewModel(
             val rewound = repository.rewindTo(key.profile, runtimeId, rowId, fence(key))
             adoptFence(key, rewound.revision, rewound.generation)
             _state.update { state -> state.appendLocalUser(nextLocalId("user"), draft.text) }
-            onSessionPersisted?.invoke()
+            emit(ChatEffect.SessionPersisted)
             repository.submitPrompt(
                 profile = key.profile,
                 runtimeSessionId = runtimeId,
@@ -673,7 +662,7 @@ class ChatViewModel(
                 text = draft.text,
             )
             _state.update { state -> state.appendLocalUser(nextLocalId("user"), draft.text) }
-            onSessionPersisted?.invoke()
+            emit(ChatEffect.SessionPersisted)
         }
     }
 
@@ -727,7 +716,7 @@ class ChatViewModel(
                     throughMessageId = draft.messageId.toLongOrNull(),
                     fence = fence(key),
                 )
-                onBranched?.invoke(result)
+                emit(ChatEffect.Branched(result))
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
@@ -1451,7 +1440,7 @@ class ChatViewModel(
                 _state.update { it.copy(pendingApprovals = it.pendingApprovals + approval) }
                 // 切回该会话后快照会把它补成真正的卡片，跨会话登记表里的那条就过期了。
                 crossSessionApprovals.remove(approval.requestId)
-                onApprovalRequested?.invoke(approval, key)
+                emit(ChatEffect.ApprovalRequested(approval, key))
                 1
             }
             "clarify" -> {
@@ -1473,7 +1462,7 @@ class ChatViewModel(
                     executionGeneration = prompt.executionGeneration ?: generations[key],
                 )
                 _state.update { it.copy(pendingClarify = it.pendingClarify + clarify) }
-                onClarifyRequested?.invoke(clarify, key)
+                emit(ChatEffect.ClarifyRequested(clarify, key))
                 1
             }
             // 新增"等待用户"的类型必须在这里显式加分支（见 11-后端API调用规范.md §5）：
@@ -1514,7 +1503,7 @@ class ChatViewModel(
                 crossSessionApprovals[approval.requestId] = approval
                 if (notifiedApprovals.add(approval.requestId)) {
                     Log.info("pending approval for other session ${otherKey.sessionId}: ${prompt.promptId}")
-                    onApprovalRequested?.invoke(approval, otherKey)
+                    emit(ChatEffect.ApprovalRequested(approval, otherKey))
                 }
             }
 
@@ -1537,7 +1526,7 @@ class ChatViewModel(
                 )
                 crossSessionClarify[clarify.requestId] = clarify
                 Log.info("pending clarify for other session ${otherKey.sessionId}: ${prompt.promptId}")
-                onClarifyRequested?.invoke(clarify, otherKey)
+                emit(ChatEffect.ClarifyRequested(clarify, otherKey))
             }
         }
     }
@@ -1820,7 +1809,7 @@ class ChatViewModel(
         // 一轮结束后刷新上下文占用（不在流式路径里刷）。
         refreshUsage()
         val closingText = segments.filterIsInstance<StreamSegment.Answer>().lastOrNull()?.text.orEmpty()
-        onTurnFinished?.invoke(completed.failed, closingText.ifBlank { completed.text })
+        emit(ChatEffect.TurnFinished(completed.failed, closingText.ifBlank { completed.text }))
     }
 
     private suspend fun awaitApprovalDecision(frameId: String, params: JsonElement?): JsonElement? {
@@ -1833,7 +1822,7 @@ class ChatViewModel(
         _state.update { it.copy(pendingApprovals = it.pendingApprovals + request) }
         // 非前台时的系统通知只发一次（补拉 / 重连会重复拿到同一条）。
         if (notifiedApprovals.add(request.requestId)) {
-            onApprovalRequested?.invoke(request, keyFor(request.runtimeSessionId))
+            emit(ChatEffect.ApprovalRequested(request, keyFor(request.runtimeSessionId)))
         }
         // 告诉后端卡片已上屏：它的超时时钟从这里才开始算（先前的时钟只在等客户端上屏）。
         acknowledgeApproval(
@@ -1868,7 +1857,7 @@ class ChatViewModel(
         clarifyDecisions[request.requestId] = decision
         clarifyFrameIds[frameId] = request.requestId
         _state.update { it.copy(pendingClarify = it.pendingClarify + request) }
-        onClarifyRequested?.invoke(request, keyFor(request.runtimeSessionId))
+        emit(ChatEffect.ClarifyRequested(request, keyFor(request.runtimeSessionId)))
         val answers = try {
             withTimeoutOrNull(CLARIFY_TIMEOUT_MS) { decision.await() }
         } finally {
@@ -2058,7 +2047,7 @@ class ChatViewModel(
             // 补拉的条目同样要弹通知（"请求发出时本端不在线"是最容易错过的场景）。
             added.forEach { approval ->
                 if (notifiedApprovals.add(approval.requestId)) {
-                    onApprovalRequested?.invoke(approval, key)
+                    emit(ChatEffect.ApprovalRequested(approval, key))
                 }
             }
             // 补拉的条目不带 session_id（是队列原始数据），用这次的 runtime 直接确认。

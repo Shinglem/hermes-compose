@@ -15,8 +15,6 @@ import dev.shinglem.hermes.core.transport.ConnectionState
 import dev.shinglem.hermes.core.transport.GatewayClient
 import dev.shinglem.hermes.core.transport.RestClient
 import dev.shinglem.hermes.feature.settings.BrowserArgsReconciler
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow

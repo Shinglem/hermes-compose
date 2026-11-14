@@ -2,8 +2,6 @@ package dev.shinglem.hermes.feature.composer
 
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import dev.shinglem.hermes.core.contract.AttachedImageDto
 import dev.shinglem.hermes.core.prefs.AppPreferences
 import dev.shinglem.hermes.core.log.Log

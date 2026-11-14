@@ -65,28 +65,16 @@ class DefaultChatComponent(
 
     private val holder: Holder = componentContext.instanceKeeper.getOrCreate(key = STORE_KEY) {
         val scope = CoroutineScope(SupervisorJob() + executorContext)
-        val model = ChatViewModel(repository, gateway, models, preferences, scope)
-        // 一次性事件走 **SharedFlow 广播**而不是 Channel：
-        // Channel 是"队列"语义，第二个收集者会和第一个抢事件（各拿一部分）；
-        // SharedFlow 是"广播"，UI 与通知中心各收一份全量。
-        // `extraBufferCapacity = 64`：收集者短暂忙时不丢；`replay = 0`：
-        // 不补发历史（订阅前的事件收不到，见 ChatComponent.effects 的注释）。
+        // 一次性事件出口：ChatViewModel 通过它发 ChatEffect（S5 之前是 5 个 var onXxx）。
         val effects = MutableSharedFlow<ChatEffect>(
             replay = 0,
             extraBufferCapacity = 64,
             onBufferOverflow = BufferOverflow.SUSPEND,
         )
-        model.onSessionPersisted = { effects.tryEmit(ChatEffect.SessionPersisted) }
-        model.onTurnFinished = { failed, text ->
-            effects.tryEmit(ChatEffect.TurnFinished(failed, text))
+        val model = ChatViewModel(repository, gateway, models, preferences, scope) { effect ->
+            effects.tryEmit(effect)
         }
-        model.onApprovalRequested = { approval, key ->
-            effects.tryEmit(ChatEffect.ApprovalRequested(approval, key))
-        }
-        model.onClarifyRequested = { clarify, key ->
-            effects.tryEmit(ChatEffect.ClarifyRequested(clarify, key))
-        }
-        model.onBranched = { from -> effects.tryEmit(ChatEffect.Branched(from)) }
+        // 5 个回调已收成 ChatViewModel 的 emit 参数（S5），这里只传一个通道。
         Holder(model, scope, effects)
     }
 
