@@ -193,34 +193,14 @@ fun AppShell(
 
     var showBackendDetail by remember { mutableStateOf(false) }
     // 后端起好再读：与迁移前 `LaunchedEffect(profile, isConnected, mode)` 的把关一致
-    // （local 后端 ready 之前请求一定失败）。
-    LaunchedEffect(securityComponent, shellState.isConnected, shellState.mode) {
+    // （local 后端 ready 之前请求一定失败）。六个设置域的处理完全一样，合并成一个 effect。
+    LaunchedEffect(shellState.isConnected, shellState.mode) {
         if (shellState.mode == ShellMode.SETTINGS && shellState.isConnected) {
             securityComponent.onConnectedChanged(true)
-        }
-    }
-    LaunchedEffect(providerKeysComponent, shellState.isConnected, shellState.mode) {
-        if (shellState.mode == ShellMode.SETTINGS && shellState.isConnected) {
             providerKeysComponent.onConnectedChanged(true)
-        }
-    }
-    LaunchedEffect(customEndpointComponent, shellState.isConnected, shellState.mode) {
-        if (shellState.mode == ShellMode.SETTINGS && shellState.isConnected) {
             customEndpointComponent.onConnectedChanged(true)
-        }
-    }
-    LaunchedEffect(profilesComponent, shellState.isConnected, shellState.mode) {
-        if (shellState.mode == ShellMode.SETTINGS && shellState.isConnected) {
             profilesComponent.onConnectedChanged(true)
-        }
-    }
-    LaunchedEffect(modelSettingsComponent, shellState.isConnected, shellState.mode) {
-        if (shellState.mode == ShellMode.SETTINGS && shellState.isConnected) {
             modelSettingsComponent.onConnectedChanged(true)
-        }
-    }
-    LaunchedEffect(moaComponent, shellState.isConnected, shellState.mode) {
-        if (shellState.mode == ShellMode.SETTINGS && shellState.isConnected) {
             moaComponent.onConnectedChanged(true)
         }
     }
@@ -318,6 +298,17 @@ fun AppShell(
         }
     }
 
+    // `remind` / `remindApproval` 已搬到 ShellNotifier（判据可测）；这里只保留"实时值"读取。
+    val notifier = ShellNotifier(
+        enabled = container.preferences.notificationsEnabled,
+        supported = SystemNotifications.supported,
+        gate = reminders,
+        selectedSessionId = { sessionViewModel.state.value.selectedId },
+        onJump = { key -> notifyScope.launch { jumpToSession(key) } },
+        onResolveApproval = { requestId, choice ->
+            chatComponent.onIntent(ChatIntent.ResolveApproval(requestId, choice))
+        },
+    )
     fun remind(
         id: String,
         target: SessionKey?,
@@ -325,64 +316,16 @@ fun AppShell(
         body: String,
         actions: List<NotificationAction> = emptyList(),
         foreground: Boolean = AppFocus.isForeground,
-        /** 这张卡片是不是已经渲染在用户眼前的会话里（判据见 NotificationRules）。 */
         onScreen: Boolean = false,
-    ) {
-        if (!container.preferences.notificationsEnabled || !SystemNotifications.supported) {
-            Log.info("remind skipped id=$id (enabled=${container.preferences.notificationsEnabled} supported=${SystemNotifications.supported})")
-            return
-        }
-        val selected = sessionViewModel.state.value.selectedId
-        val remind = shouldRemindForSession(
-            target = target,
-            foreground = foreground,
-            selectedSessionId = selected,
-            onScreen = onScreen,
-        )
-        if (!remind) {
-            Log.info("remind skipped id=$id (foreground=$foreground onScreen=$onScreen target=${target?.sessionId} selected=$selected)")
-            return
-        }
-        if (!reminders.shouldRemind(id)) {
-            Log.info("remind skipped id=$id (already reminded)")
-            return
-        }
-        Log.info("remind show id=$id actions=${actions.size} foreground=$foreground onScreen=$onScreen target=${target?.sessionId} selected=$selected")
-        SystemNotifications.setPendingAction(target?.let { key -> { notifyScope.launch { jumpToSession(key) } } })
-        SystemNotifications.show(title, body.take(180), actions)
-    }
-
-    /** 审批提醒：带上「允许一次 / 拒绝」按钮，通知里就能就地处理（不必先切窗口）。 */
+    ) = notifier.remind(id, target, title, body, actions, foreground, onScreen)
     fun remindApproval(
         approval: PendingApproval,
         target: SessionKey?,
         foreground: Boolean = AppFocus.isForeground,
-        /**
-         * 卡片已经在界面上（当前会话的审批）——此时再弹系统通知就是纯噪音。
-         *
-         * **读实时值**（`chatComponent.state.value`）而不是组合期的 `chatState`：
-         * 后者是 `by` 委托，在 `LaunchedEffect` 里会被冻结成首帧快照，判定恒为 false，
-         * 这条兜底就失效了（迁移前这里读的是 `viewModel.state.value`）。
-         */
         onScreen: Boolean = chatComponent.state.value.visibleApprovals.any {
             it.requestId == approval.requestId
         },
-    ) {
-        remind(
-            id = "approval:${approval.requestId}",
-            target = target,
-            title = "${ProductInfo.DISPLAY_NAME} · 等待确认",
-            body = approval.command.trim()
-                .ifBlank { approval.description.trim() }
-                .ifBlank { "有一个命令等待确认" },
-            actions = listOf(
-                NotificationAction("允许一次") { chatComponent.onIntent(ChatIntent.ResolveApproval(approval.requestId, "once")) },
-                NotificationAction("拒绝") { chatComponent.onIntent(ChatIntent.ResolveApproval(approval.requestId, "deny")) },
-            ),
-            foreground = foreground,
-            onScreen = onScreen,
-        )
-    }
+    ) = notifier.remindApproval(approval, target, foreground, onScreen)
 
     // Chat 域的一次性事件统一在这里消费（S4：5 个 `var onXxx` → 一个 effects 流）。
     //
@@ -645,360 +588,31 @@ fun AppShell(
             )
 
             when (shellState.mode) {
-                ShellMode.SETTINGS -> AdaptiveListDetail(
+                ShellMode.SETTINGS -> SettingsModeContent(
+                    deps = deps,
+                    container = container,
+                    terminalSettings = terminalSettings,
+                    autostartInfo = autostartInfo,
+                    orphanTasks = orphanTasks,
+                    composerScope = composerScope,
                     modifier = Modifier.weight(1f),
-                    listPaneWidth = 240.dp,
-                    list = { onNavigateToDetail ->
-                        SettingsNavPane(
-                            state = settingsState,
-                            onSelect = settingsViewModel::select,
-                            onToggleSection = settingsViewModel::toggleSection,
-                            onNavigateToDetail = onNavigateToDetail,
-                        )
-                    },
-                    detail = { singlePane, onBack ->
-                        Column(modifier = Modifier.fillMaxSize()) {
-                            if (singlePane) {
-                                DetailBackBar(
-                                    title = stringResource(Res.string.rail_settings),
-                                    onBack = onBack,
-                                )
-                            }
-                            val showScopeBar = settingsState.selected.isProfileScoped() &&
-                                !settingsState.selected.hasOwnProfileScope()
-                            if (showScopeBar) {
-                                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-                                    ProfileScopeChips(
-                                        ProfileScope(
-                                            choices = maintenanceProfileChoices,
-                                            activeKey = maintenanceScopeKey ?: DEFAULT_PROFILE_KEY,
-                                            onSelect = maintenance::setScopeProfile,
-                                        ),
-                                    )
-                                }
-                            }
-                            SettingsDetailPane(
-                                scope = dev.shinglem.hermes.feature.settings.SettingsDetailScope(
-                                    state = settingsState,
-                                    onEdit = settingsViewModel::edit,
-                                    onSave = settingsViewModel::save,
-                                    onRestart = settingsViewModel::restart,
-                                    onDismissSaved = settingsViewModel::dismissSaved,
-                                    terminalSettings = terminalSettings,
-                                    onTerminalSettingsChange = container.terminalViewModel::updateSettings,
-                                    providerKeys = providerKeysComponent,
-                                    customEndpoints = customEndpointComponent,
-    
-                                    profiles = profilesComponent,
-    
-                                    modelSettings = modelSettingsComponent,
-                                    moa = moaComponent,
-                                    security = securityComponent,
-                                    officialDesktop = container.officialDesktop,
-                                    autostart = autostartInfo,
-                                    orphanTasks = orphanTasks,
-                                    notificationsEnabled = settingsState.notificationsEnabled,
-                                    onNotificationsToggle = settingsViewModel::setNotificationsEnabled,
-                                    nativeNotifications = settingsState.nativeNotifications,
-                                    onNativeNotificationsToggle = settingsViewModel::setNativeNotifications,
-                                    browserHeaded = settingsState.browserHeaded,
-                                    onBrowserHeadedToggle = settingsViewModel::setBrowserHeaded,
-                                    browserArgs = settingsState.browserArgs,
-                                    onBrowserArgsChange = settingsViewModel::setBrowserArgs,
-                                    editors = settingsState.editors,
-                                    onEditorsSave = settingsViewModel::setEditors,
-                                    updateState = updateState,
-                                    onCheckUpdate = { updaterComponent.onIntent(UpdaterIntent.Check()) },
-                                    backendVersion = shellState.health?.version.orEmpty(),
-                                    dataDir = appDataDir,
-                                    logDir = container.config.app.log.dir,
-                                    maintenance = maintenance,
-                                    backendAdmin = backendComponent,
-                                    profileChoices = maintenanceProfileChoices,
-                                    onSelectScopeProfile = maintenance::setScopeProfile,
-                                    onDeleteOrphanTask = { name ->
-                                        composerScope.launch(Dispatchers.IO) {
-                                            if (container.deleteOrphanTask(name)) {
-                                                container.orphanTasks.update { list -> list.filterNot { it.name == name } }
-                                            }
-                                        }
-                                    },
-                                    modifier = Modifier.weight(1f),
-                                ),
-                            )
-                        }
-                    },
+                )
+                ShellMode.SESSIONS -> SessionsModeContent(
+                    deps = deps,
+                    container = container,
+                    selectedSession = selectedSession,
+                    terminalState = terminalState,
+                    terminalContent = terminalContent,
+                    onQuoteTerminalSelection = onQuoteTerminalSelection,
+                    composerScope = composerScope,
+                    modifier = Modifier.weight(1f),
                 )
 
-                ShellMode.SESSIONS -> AdaptiveListDetail(
-                    modifier = Modifier.weight(1f),
-                    list = { onNavigateToDetail ->
-                        SessionListPane(
-                            state = sessionState,
-                            callbacks = SessionListCallbacks(
-                                onQueryChange = sessionViewModel::setQuery,
-                                onSelect = { id ->
-                                    sessionViewModel.select(id)
-                                    onNavigateToDetail()
-                                },
-                                onToggleGroup = sessionViewModel::toggleGroup,
-                                onTogglePinnedGroup = sessionViewModel::togglePinnedGroup,
-                                onRetry = { sessionViewModel.refresh(shellState.activeProfile) },
-                                onCreate = { sessionViewModel.create(shellState.activeProfile) },
-                                onDismissCreateError = sessionViewModel::dismissCreateError,
-                                onDismissRowError = sessionViewModel::dismissRowError,
-                                onStartRename = sessionViewModel::startRename,
-                                onRenameTitleChange = sessionViewModel::updateRenameDraft,
-                                onCommitRename = sessionViewModel::commitRename,
-                                onCancelRename = sessionViewModel::cancelRename,
-                                onTogglePin = sessionViewModel::togglePin,
-                                onAskArchive = sessionViewModel::askArchive,
-                                onCommitArchive = sessionViewModel::commitArchive,
-                                onCancelArchive = sessionViewModel::cancelArchive,
-                                onToggleArchivedSection = sessionViewModel::toggleArchivedSection,
-                                onRestoreArchived = sessionViewModel::restoreArchived,
-                                onAskDelete = sessionViewModel::askDelete,
-                                onCommitDelete = sessionViewModel::commitDelete,
-                                onCancelDelete = sessionViewModel::cancelDelete,
-                                onDuplicate = sessionViewModel::duplicate,
-                                onExportJson = { id -> sessionViewModel.exportSession(id, markdown = false) },
-                                onExportMarkdown = { id -> sessionViewModel.exportSession(id, markdown = true) },
-                                onContentQueryChange = sessionViewModel::setContentQuery,
-                                onDismissNotice = sessionViewModel::dismissNotice,
-                            ),
-                        )
-                    },
-                    detail = { singlePane, onBack ->
-                        Column(modifier = Modifier.fillMaxSize()) {
-                            if (singlePane) {
-                                DetailBackBar(
-                                    title = selectedSession?.displayTitle
-                                        ?: stringResource(Res.string.chat_untitled),
-                                    onBack = onBack,
-                                )
-                            }
-                            CompositionLocalProvider(
-                                LocalEditorLaunchContext provides EditorLaunchContext(
-                                    editors = settingsState.editors,
-                                    cwd = chatState.cwd,
-                                    userHome = remember { System.getProperty("user.home").orEmpty() },
-                                ),
-                            ) {
-                            ChatPane(
-                                summary = selectedSession,
-                                state = chatState,
-                                composer = remember(composerState) {
-                                    ComposerController(
-                                        state = composerState,
-                                        onValueChange = composerViewModel::onValueChange,
-                                        onAcceptCompletion = composerViewModel::acceptCompletion,
-                                        onMoveCompletion = composerViewModel::moveSelection,
-                                        onDismissCompletion = composerViewModel::dismissCompletion,
-                                        onStepHistory = composerViewModel::stepHistory,
-                                        onPasteSpecial = { text, selection ->
-                                            composerScope.launch {
-                                                composerViewModel.handlePasteSpecial(text, selection)
-                                            }
-                                        },
-                                        onPickFiles = {
-                                            composerScope.launch { composerViewModel.pickAndAttach() }
-                                        },
-                                        onDropFiles = { paths ->
-                                            composerScope.launch { composerViewModel.attachPaths(paths) }
-                                        },
-                                    )
-                                },
-                                onRetry = {
-                                    val id = sessionState.selectedId
-                                    // 刚新建的会话还没有 transcript，重新加载只会再拿一次 404。
-                                    if (id != null && id == sessionState.justCreatedId) {
-                                        chatComponent.onIntent(ChatIntent.AdoptEmpty(shellState.activeProfile, id))
-                                    } else {
-                                        chatComponent.onIntent(ChatIntent.Reload(shellState.activeProfile, id))
-                                    }
-                                },
-                                onReload = {
-                                    val id = sessionState.selectedId
-                                    if (id != null && id == sessionState.justCreatedId) {
-                                        chatComponent.onIntent(ChatIntent.AdoptEmpty(shellState.activeProfile, id))
-                                    } else {
-                                        chatComponent.onIntent(ChatIntent.Reload(shellState.activeProfile, id))
-                                    }
-                                },
-                                onSend = { text ->
-                                    // 附件必须随这一轮提交：`image.attach_bytes` 在 gateway 路线下
-                                    // 只把字节落进 <profile>/cache/images，不建队列，
-                                    // 不回传就永远到不了模型（待修复问题 #19）。
-                                    val attachments = composerViewModel.state.value.attachments
-                                        .mapNotNull { it.toPromptAttachment() }
-                                    chatComponent.onIntent(ChatIntent.Send(text, attachments))
-                                    composerViewModel.markSent(text)
-                                },
-                                onStop = { chatComponent.onIntent(ChatIntent.Stop) },
-                                onApprove = { id, choice -> chatComponent.onIntent(ChatIntent.ResolveApproval(id, choice)) },
-                                onClarifyAnswer = { id, answers -> chatComponent.onIntent(ChatIntent.AnswerClarify(id, answers)) },
-                                onClarifyCancel = { id -> chatComponent.onIntent(ChatIntent.CancelClarify(id)) },
-                                onQuote = composerViewModel::quote,
-                                modifier = Modifier.weight(1f),
-                                onConfirmModelSwitch = { chatComponent.onIntent(ChatIntent.ConfirmModelSwitch) },
-                                onDismissModelConfirm = { chatComponent.onIntent(ChatIntent.DismissModelConfirm) },
-                                onDismissModelError = { chatComponent.onIntent(ChatIntent.DismissModelError) },
-                                onLoadOlder = { chatComponent.onIntent(ChatIntent.LoadOlder) },
-                                onRewind = { item ->
-                                    // 历史消息的 id 是后端 row id；本地刚发的 `local:` 不能拿去截断。
-                                    if (!item.id.startsWith("local:")) {
-                                        chatComponent.onIntent(ChatIntent.BeginRewind(item.id, item.text))
-                                    }
-                                },
-                                onBranch = { item ->
-                                    if (!item.id.startsWith("local:")) {
-                                        val title = selectedSession?.displayTitle.orEmpty()
-                                        chatComponent.onIntent(ChatIntent.BeginBranch(item.id, title))
-                                    }
-                                },
-                                onConfirmRewind = { chatComponent.onIntent(ChatIntent.ConfirmRewind) },
-                                onCancelRewind = { chatComponent.onIntent(ChatIntent.CancelRewind) },
-                                onConfirmBranch = { chatComponent.onIntent(ChatIntent.ConfirmBranch) },
-                                onCancelBranch = { chatComponent.onIntent(ChatIntent.CancelBranch) },
-                                onShowUsageDetail = { chatComponent.onIntent(ChatIntent.LoadUsageDetail) },
-                                onDismissUsageError = { chatComponent.onIntent(ChatIntent.DismissUsageError) },
-                                onOpenSubagents = { subagentComponent.onIntent(SubagentIntent.Open) },
-                                onKillBackgroundTask = { id -> chatComponent.onIntent(ChatIntent.KillBackgroundTask(id)) },
-                                onSteerQueued = { id -> chatComponent.onIntent(ChatIntent.SteerQueued(id)) },
-                                onCancelQueued = { id -> chatComponent.onIntent(ChatIntent.CancelQueued(id)) },
-                                onReconnect = { chatComponent.onIntent(ChatIntent.Reconnect) },
-                                onDismissBackgroundTask = { id -> chatComponent.onIntent(ChatIntent.DismissBackgroundTask(id)) },
-                                modelBar = {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                                    ) {
-                                        ModelPill(
-                                            catalog = chatState.modelCatalog,
-                                            model = chatState.model,
-                                            provider = chatState.provider,
-                                            loading = chatState.modelCatalogLoading,
-                                            busy = chatState.modelSwitching,
-                                            enabled = true,
-                                            onRequestCatalog = { chatComponent.onIntent(ChatIntent.LoadModelCatalog) },
-                                            onSelect = { entry ->
-                                                chatComponent.onIntent(ChatIntent.SwitchModel(entry.provider, entry.model))
-                                            },
-                                        )
-                                        ReasoningPill(
-                                            effort = chatState.reasoningEffort,
-                                            supported = chatState.modelCatalog
-                                                ?.reasoningSupported(chatState.provider, chatState.model)
-                                                ?: true,
-                                            busy = chatState.modelSwitching,
-                                            enabled = true,
-                                            onSelect = { effort -> chatComponent.onIntent(ChatIntent.SetReasoning(effort)) },
-                                        )
-                                    }
-                                },
-                            )
-                            }
-                            TerminalPanel(
-                                state = terminalState,
-                                onToggle = container.terminalViewModel::toggle,
-                                onNewTab = { container.terminalViewModel.newTab(null) },
-                                onSelectTab = container.terminalViewModel::selectTab,
-                                onCloseTab = container.terminalViewModel::closeTab,
-                                onHeightFraction = container.terminalViewModel::setHeightFraction,
-                                content = terminalContent,
-                                onRenameTab = container.terminalViewModel::renameTab,
-                                onQuoteSelection = onQuoteTerminalSelection,
-                            )
-                        }
-                    },
-                )
-
-                ShellMode.CAPABILITIES -> AdaptiveListDetail(
-                    modifier = Modifier.weight(1f),
-                    // 能力分类只有三项，用会话列表那套 430dp 会留大片空白。
-                    listPaneWidth = 280.dp,
-                    list = { onNavigateToDetail ->
-                        CapabilityNavPane(
-                            state = capabilityState,
-                            onSelect = { section ->
-                                capabilityViewModel.selectSection(section)
-                                onNavigateToDetail()
-                            },
-                        )
-                    },
-                    detail = { singlePane, onBack ->
-                        Column(modifier = Modifier.fillMaxSize()) {
-                            if (singlePane) {
-                                DetailBackBar(
-                                    title = stringResource(Res.string.capabilities_title),
-                                    onBack = onBack,
-                                )
-                            }
-                            CapabilityDetailPane(
-                                state = capabilityState,
-                                onSkillsTab = capabilityViewModel::selectSkillsTab,
-                                onSkillQuery = capabilityViewModel::setSkillQuery,
-                                onToggleSkill = capabilityViewModel::toggleSkill,
-                                onToggleToolset = capabilityViewModel::toggleToolset,
-                                onToggleSkillDetail = capabilityViewModel::toggleSkillDetail,
-                                onCatalogCategory = capabilityViewModel::setCatalogCategory,
-                                onToggleCatalogItem = capabilityViewModel::toggleCatalogItem,
-                                onInstallCatalog = capabilityViewModel::installCatalogSkill,
-                                onTogglePlatformDetail = capabilityViewModel::togglePlatformDetail,
-                                onPlatformField = capabilityViewModel::setPlatformField,
-                                onSavePlatform = capabilityViewModel::savePlatform,
-                                onTestPlatform = capabilityViewModel::testPlatform,
-                                onCreateCron = capabilityViewModel::startCreateCron,
-                                onEditCron = capabilityViewModel::startEditCron,
-                                onStartBlueprint = capabilityViewModel::startBlueprint,
-                                onBlueprintValue = capabilityViewModel::updateBlueprintValue,
-                                onSaveBlueprint = { key, values ->
-                                    capabilityViewModel.instantiateBlueprint(key, values)
-                                },
-                                onCancelBlueprint = capabilityViewModel::cancelBlueprint,
-                                onCancelCronDraft = capabilityViewModel::cancelCronDraft,
-                                onCronDraftChange = capabilityViewModel::updateCronDraft,
-                                onSaveCronDraft = capabilityViewModel::saveCronDraft,
-                                onSetCronPaused = capabilityViewModel::setCronPaused,
-                                onTriggerCron = capabilityViewModel::triggerCron,
-                                onDeleteCron = capabilityViewModel::deleteCron,
-                                onToggleCronRuns = capabilityViewModel::toggleCronRuns,
-                                onRefresh = {
-                                    capabilityViewModel.selectSection(capabilityState.section)
-                                },
-                                onDismissNotice = capabilityViewModel::dismissNotice,
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                    },
-                )
+                ShellMode.CAPABILITIES -> CapabilitiesModeContent(deps = deps, modifier = Modifier.weight(1f))
             }
         }
     }
 }
 
-/** 单栏退化时，详情窗格顶部的返回条。 */
-@Composable
-private fun DetailBackBar(title: String, onBack: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp, top = 4.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton(onClick = onBack) {
-            Icon(
-                imageVector = AppIcons.ArrowBack,
-                contentDescription = stringResource(Res.string.common_back),
-            )
-        }
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-    }
-}
-
 /** rail 收成纯图标列的宽度分界。 */
-private val RailCompactBreakpoint = 960.dp
+internal val RailCompactBreakpoint = 960.dp
