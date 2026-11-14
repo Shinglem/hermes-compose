@@ -8,10 +8,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlin.coroutines.CoroutineContext
 
 /**
@@ -27,12 +28,22 @@ import kotlin.coroutines.CoroutineContext
  * 内部行为**零改动** —— 这是有意的：`ChatViewModel` 的六条线（流式/审批/快照/
  * 模型/用量/后台）交织在一起，任何一处改写都要连带验证其余五条。
  *
- * ### 回调为什么能安全转成 Channel
+ * ### ⚠️ [executorContext] 必须是**单线程**的 `Dispatchers.Swing`
  *
- * 原实现里那 5 个 `var` 是"单消费者"的（外层 UI 赋值、`onDispose` 置 null）。
- * 现在 [effects] 只有 UI 一个消费者，语义等价；但多了一层保护：
- * **Channel 是 BUFFERED 的**，UI 重组期间发出的事件不会丢（旧实现里赋值/清空
- * 之间有窗口，通知中心与页面互相覆盖就是这么来的）。
+ * 这不是保守选择，是**硬约束**。迁移前 `ChatViewModel : ViewModel()` 的全部协程跑在
+ * `viewModelScope` 上，desktop 下即 `Dispatchers.Main.immediate`（= Swing EDT，
+ * `build.gradle.kts` 专门加了 `kotlinx-coroutines-swing`）。也就是说它的全部代码路径
+ * 被**隐式串行化在一条线程**上，而它持有一大把裸 `mutableMapOf` / `StringBuilder` /
+ * `var localSeq`（`runtimeIds` / `savedStates` / `deltaBuffer` / …），全靠那条线程做互斥。
+ *
+ * 更关键：**server→client 请求处理器不在这个 scope 里** —— `GatewayClient` 用
+ * container 的 `Dispatchers.Swing` 调 `answerServerRequest`，进而在
+ * `awaitApprovalDecision` / `awaitClarifyDecision` 里写 `approvalDecisions` 并读
+ * `runtimeIds`。如果这里换成 `Dispatchers.Default`（多线程 pool），两边就真正并发，
+ * `runtimeIds` 的遍历会 `ConcurrentModificationException`、`deltaBuffer` 会串字。
+ *
+ * 所以**不要**把它改成 `Dispatchers.Default`；等 S8 把那些裸 map 收进
+ * `SessionRuntimeStore` + 加同步之后，才谈得上换多线程。
  */
 class DefaultChatComponent(
     private val componentContext: ComponentContext,
@@ -40,27 +51,42 @@ class DefaultChatComponent(
     gateway: dev.shinglem.hermes.core.transport.GatewayClient,
     models: dev.shinglem.hermes.feature.model.ModelRepository,
     preferences: dev.shinglem.hermes.core.prefs.AppPreferences,
-    executorContext: CoroutineContext = Dispatchers.Default,
+    /**
+     * **必须**传单线程 dispatcher（desktop 侧传 `Dispatchers.Swing`）。
+     *
+     * 故意不给默认值：它在本类所在的 `commonMain` 里不可用（`Dispatchers.Swing`
+     * 是 `kotlinx-coroutines-swing` 的 JVM 扩展），而"随手用 `Dispatchers.Default`"
+     * 会**改变并发模型**并引入数据竞争 —— 详见类注释。强制调用方显式选择，
+     * 就不会有人在不知情的情况下踩这个坑。
+     */
+    executorContext: CoroutineContext,
 ) : ChatComponent, ComponentContext by componentContext {
 
     private val holder: Holder = componentContext.instanceKeeper.getOrCreate(key = STORE_KEY) {
         val scope = CoroutineScope(SupervisorJob() + executorContext)
         val model = ChatViewModel(repository, gateway, models, preferences, scope)
-        // 一次性事件走 Channel：BUFFERED 保证 UI 重组期间不丢；
-        // 与 S2 的 `labelsAsFlow()` 同一套纪律（一次性事件不进 State）。
-        val channel = Channel<ChatEffect>(Channel.BUFFERED)
-        model.onSessionPersisted = { channel.trySend(ChatEffect.SessionPersisted) }
+        // 一次性事件走 **SharedFlow 广播**而不是 Channel：
+        // Channel 是"队列"语义，第二个收集者会和第一个抢事件（各拿一部分）；
+        // SharedFlow 是"广播"，UI 与通知中心各收一份全量。
+        // `extraBufferCapacity = 64`：收集者短暂忙时不丢；`replay = 0`：
+        // 不补发历史（订阅前的事件收不到，见 ChatComponent.effects 的注释）。
+        val effects = MutableSharedFlow<ChatEffect>(
+            replay = 0,
+            extraBufferCapacity = 64,
+            onBufferOverflow = BufferOverflow.SUSPEND,
+        )
+        model.onSessionPersisted = { effects.tryEmit(ChatEffect.SessionPersisted) }
         model.onTurnFinished = { failed, text ->
-            channel.trySend(ChatEffect.TurnFinished(failed, text))
+            effects.tryEmit(ChatEffect.TurnFinished(failed, text))
         }
         model.onApprovalRequested = { approval, key ->
-            channel.trySend(ChatEffect.ApprovalRequested(approval, key))
+            effects.tryEmit(ChatEffect.ApprovalRequested(approval, key))
         }
         model.onClarifyRequested = { clarify, key ->
-            channel.trySend(ChatEffect.ClarifyRequested(clarify, key))
+            effects.tryEmit(ChatEffect.ClarifyRequested(clarify, key))
         }
-        model.onBranched = { from -> channel.trySend(ChatEffect.Branched(from)) }
-        Holder(model, scope, channel)
+        model.onBranched = { from -> effects.tryEmit(ChatEffect.Branched(from)) }
+        Holder(model, scope, effects)
     }
 
     /**
@@ -74,7 +100,7 @@ class DefaultChatComponent(
 
     override val state: StateFlow<dev.shinglem.hermes.feature.chat.ChatState> = model.state
 
-    override val effects: Flow<ChatEffect> = holder.channel.receiveAsFlow()
+    override val effects: Flow<ChatEffect> = holder.effects.asSharedFlow()
 
     override val profile: String? get() = model.profile
 
@@ -124,15 +150,17 @@ class DefaultChatComponent(
     private class Holder(
         val model: ChatViewModel,
         val scope: CoroutineScope,
-        val channel: Channel<ChatEffect>,
+        val effects: MutableSharedFlow<ChatEffect>,
     ) : InstanceKeeper.Instance {
         override fun onDestroy() {
             // **先**让 ViewModel 退订 server-request handler、取消所有待决的
             // `CompletableDeferred`，**再**取消 scope。顺序反过来的话，在途的审批决策
             // 会永远挂着（`gateway.removeServerRequestHandler` 之后再也不会被应答）。
+            //
+            // SharedFlow 没有 close：收集者随各自的 scope（composition）一起结束，
+            // 不需要在销毁时主动关闭。
             model.dispose()
             scope.cancel()
-            channel.close()
         }
     }
 

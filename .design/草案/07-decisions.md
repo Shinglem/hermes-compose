@@ -2104,3 +2104,29 @@ Maintenance 是 60 个动作、6 块独立状态；Chat 是六条线交织的流
 **S8 接手时的正确顺序**：先换 map（行为等价，可逐字段对照）→ 再删 `SessionShadow`
 （`applyShadowEvent` 变成 `ChatReducer` 的一个分支）→ 最后并 `ChatReducer`。
 一步一验证，不要一次全做。
+
+### 审查发现的 4 个问题（已全部修复，2026-11-14）
+
+独立代码审查（`code-review` agent）在提交后查出 1 个 Critical + 3 个 Medium，全部真实：
+
+| # | 严重度 | 问题 | 修复 |
+|---|---|---|---|
+| 1 | **Critical** | `executorContext` 默认 `Dispatchers.Default` 改变了并发模型。迁移前 `viewModelScope` 在 desktop 下是 **Swing EDT**（`kotlinx-coroutines-swing` 专为此加的），而 `ChatViewModel` 持有一大把裸 `mutableMapOf` / `StringBuilder` / `var localSeq`，全靠"同一条线程"做互斥。更致命：`GatewayClient` 的 server-request handler 跑在 container 的 `Dispatchers.Swing` 上，会并发写 `approvalDecisions` 并读 `runtimeIds` → `ConcurrentModificationException` / 流式正文串字 | 新增 `platform/UiDispatcher`（expect/actual，desktop = `Dispatchers.Swing`）；`DefaultChatComponent` 的 `executorContext` **去掉默认值强制显式传**（`commonMain` 引用不到 `Dispatchers.Swing`，这反而是更好的设计——不会有人不知情地传 `Default`） |
+| 2 | Medium | effects 收集器里的 `chatState` 被冻结成首帧：`LaunchedEffect` 的 block 只在 key 变化时重建，`by` 委托值不会更新。导致 `remindApproval` / `remind` 的 `onScreen` 判定恒为 false，**"已显示在界面上就不弹通知"这条兜底失效**（`NotificationRules` 依赖它） | `remindApproval` 的 `onScreen` 默认参数与 `ClarifyRequested` 分支都改读 `chatComponent.state.value`（= 迁移前 `viewModel.state.value` 的实时语义） |
+| 3 | Medium | `rememberDefaultComponentContext()` 只 `resume()` 从不 `destroy()`，所以 `InstanceKeeper.onDestroy` / `scope.cancel()` / `ChatViewModel.dispose()` **一条都不会执行**——提交说明里"已修复 dispose 未调用"其实没生效 | 加 `DisposableEffect { onDispose { registry.destroy() } }`，真正推进到 DESTROYED |
+| 4 | Medium | `SessionRuntimeStore.put` 摘旧索引时只判"与自己的新 id 不同"，没判 `byRuntime[stale]` 是否仍指向自己。runtime id 并非会话独占（`ChatViewModel` 注释承认重连/重开时会复用），会把**另一个会话仍在用的索引**删掉 | 加归属校验 `if (byRuntime[stale] == runtime.key)`；补 1 个测试覆盖"共用同一旧 id" |
+
+**另有 1 个契约与实现不符**（也是审查发现的）：`ChatComponent.effects` 的注释写"可以多消费者"，
+但实现是 `Channel.receiveAsFlow()`（队列语义，第二个收集者会**抢事件**）。
+改成 `MutableSharedFlow(replay = 0, extraBufferCapacity = 64)` —— 真广播，每个收集者收全量；
+同时把 KDoc 写清"是广播不是队列、且 `replay = 0` 意味着收集前的事件收不到"。
+
+**审查确认无问题的项**：Intent 的 28 个动作与 `when` 分支一一对应（sealed 保证穷尽）；
+AppShell 的 32 处替换逐条对照无语义塌陷（`justCreatedId → AdoptEmpty` / 否则 `Reload` 保持原样）；
+`Holder.onDestroy` 的三步顺序（先 `dispose()` 再 `scope.cancel()`）正确；
+`ChatViewModel.dispose()` 覆盖完整（两个 handler + 两个待决表 + 两个 frameIds 表）。
+
+**教训**：「把 `viewModelScope` 换成注入的 scope」看起来是纯搬家，实际**改变了并发模型**。
+`viewModelScope` 在 desktop 下是单线程 EDT，这是一个**没说出口的隐含契约** ——
+凡是持有非线程安全状态、又没有显式同步的 ViewModel，迁移时必须显式选择单线程 dispatcher，
+而不是接受任何 `Dispatchers.Default` 形式的默认值。

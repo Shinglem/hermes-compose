@@ -69,8 +69,13 @@ internal class SessionRuntimeStore {
     fun put(runtime: SessionRuntime) {
         // 同一个会话换了 runtimeId（重连后必然发生）：旧的反向索引必须摘掉，
         // 否则旧 id 会一直指向这个会话，事件被错误归属。
+        //
+        // **摘之前必须校验归属**：runtime id 并非与会话一一独占 —— 重连 / 重开同一会话时
+        // 同一个 id 可能先被别的 stored key 登记过（`ChatViewModel` 的注释承认这一点）。
+        // 只判"与自己的新 id 不同"就 `removing`，会把**另一个会话仍在用的索引**删掉，
+        // 之后那个会话的事件全部认不出归属。
         runtimes[runtime.key]?.runtimeId?.takeIf { it != runtime.runtimeId }?.let { stale ->
-            byRuntime = byRuntime.removing(stale)
+            if (byRuntime[stale] == runtime.key) byRuntime = byRuntime.removing(stale)
         }
         runtimes = runtimes.putting(runtime.key, runtime)
         byRuntime = byRuntime.putting(runtime.runtimeId, runtime.key)

@@ -57,6 +57,19 @@ sealed interface ChatEffect {
 interface ChatComponent {
     val state: StateFlow<ChatState>
 
+    /**
+     * 一次性事件流。
+     *
+     * ### 是**广播**，不是队列
+     *
+     * 实现是 `SharedFlow(replay = 0, extraBufferCapacity = 64)`：**每个收集者都会收到
+     * 全部事件**（fan-out）。这与"单消费者队列"（`Channel.receiveAsFlow`）不同 ——
+     * 后者第二个收集者会和第一个**抢事件**，两边各拿到一部分，症状是"通知有时弹有时不弹"。
+     *
+     * 所以：可以安全地给 UI 和通知中心各加一个收集者。但要注意
+     * **`replay = 0`**：收集者开始收集之前发出的事件收不到（不存在"补发"）。
+     * 因此各方的收集器都应该在 composition 一开始就挂上，而不是"用到时才 collect"。
+     */
     val effects: Flow<ChatEffect>
 
     fun onIntent(intent: ChatIntent)

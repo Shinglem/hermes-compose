@@ -64,9 +64,32 @@ class SessionRuntimeStoreTest {
         assertEquals(1, store.size, "同一会话不该占两条")
     }
 
+    /**
+     * 旧 runtimeId 已被**另一个会话**复用时，不能把对方的索引一起删掉。
+     *
+     * 真实场景：重连 / 重开同一会话时，同一个 runtime id 可能先被别的 stored key 登记过
+     * （`ChatViewModel` 的注释承认这一点）。若 `put` 只判"与自己的新 id 不同"就
+     * `removing`，另一个会话的事件会全部认不出归属。
+     */
     @Test
-    fun `remove 同时清反向索引`() {
+    fun `换 runtimeId 时不影响共用同一旧 id 的其它会话`() {
         val store = SessionRuntimeStore()
+        // s1 先登记 rt-shared
+        store.put(runtime("s1", runtimeId = "rt-shared"))
+        // s2 也登记同一个 id（覆盖索引：现在 rt-shared -> s2）
+        store.put(runtime("s2", runtimeId = "rt-shared"))
+        assertEquals(key("s2"), store.byRuntimeId("rt-shared"))
+
+        // s1 换到新 id：不该把 rt-shared 的索引删掉（那是 s2 的）
+        store.put(runtime("s1", runtimeId = "rt-new"))
+
+        assertEquals(key("s2"), store.byRuntimeId("rt-shared"), "另一个会话仍在用的索引不能被删")
+        assertEquals(key("s1"), store.byRuntimeId("rt-new"))
+        assertEquals(2, store.size)
+    }
+
+    @Test
+    fun `remove 同时清反向索引`() {        val store = SessionRuntimeStore()
         store.put(runtime("s1", runtimeId = "rt1"))
         store.remove(key("s1"))
 

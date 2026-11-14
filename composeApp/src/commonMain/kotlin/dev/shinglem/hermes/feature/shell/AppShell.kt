@@ -93,6 +93,7 @@ import dev.shinglem.hermes.feature.subagent.SubagentViewModel
 import dev.shinglem.hermes.platform.AppFocus
 import dev.shinglem.hermes.platform.NotificationAction
 import dev.shinglem.hermes.platform.SystemNotifications
+import dev.shinglem.hermes.platform.UiDispatcher
 import dev.shinglem.hermes.platform.TerminalQuoteBridge
 import dev.shinglem.hermes.platform.appDataDir
 import dev.shinglem.hermes.feature.session.SessionListCallbacks
@@ -159,6 +160,9 @@ fun AppShell(
             gateway = container.gateway,
             models = container.modelRepository,
             preferences = container.preferences,
+            // **必须**是 UI 线程：ChatViewModel 与 GatewayClient 共享大量非线程安全
+            // 的可变状态，靠"同一条线程"做互斥（见 DefaultChatComponent 的类注释）。
+            executorContext = UiDispatcher.context,
         )
     }
     val composerViewModel: ComposerViewModel = viewModel {
@@ -445,8 +449,14 @@ fun AppShell(
         approval: PendingApproval,
         target: SessionKey?,
         foreground: Boolean = AppFocus.isForeground,
-        /** 卡片已经在界面上（当前会话的审批）——此时再弹系统通知就是纯噪音。 */
-        onScreen: Boolean = chatState.visibleApprovals.any {
+        /**
+         * 卡片已经在界面上（当前会话的审批）——此时再弹系统通知就是纯噪音。
+         *
+         * **读实时值**（`chatComponent.state.value`）而不是组合期的 `chatState`：
+         * 后者是 `by` 委托，在 `LaunchedEffect` 里会被冻结成首帧快照，判定恒为 false，
+         * 这条兜底就失效了（迁移前这里读的是 `viewModel.state.value`）。
+         */
+        onScreen: Boolean = chatComponent.state.value.visibleApprovals.any {
             it.requestId == approval.requestId
         },
     ) {
@@ -504,7 +514,10 @@ fun AppShell(
                     title = "${ProductInfo.DISPLAY_NAME} · 等待回答",
                     body = effect.clarify.questions.firstOrNull()?.question?.trim().orEmpty()
                         .ifBlank { "agent 正在等你回答一个问题" },
-                    onScreen = chatState.visibleClarify.any {
+                    // **必须读实时值**：`chatState` 是组合期的 `by` 委托，在这个
+                    // `LaunchedEffect` 里会被冻结成首帧的 ChatState（key 不变就不重组）。
+                    // 迁移前这里读的是 `viewModel.state.value`，是调用时的实时值。
+                    onScreen = chatComponent.state.value.visibleClarify.any {
                         it.requestId == effect.clarify.requestId
                     },
                 )
