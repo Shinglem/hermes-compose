@@ -155,184 +155,42 @@ fun AppShell(
     componentContext: ComponentContext? = null,
 ) {
     val context = componentContext ?: rememberDefaultComponentContext()
-    val shellComponent: ShellComponent = remember(context) {
-        DefaultShellComponent(
-            componentContext = context,
-            gateway = RealShellGateway(
-                gateway = container.gateway,
-                profileRepository = container.profileRepository,
-                restClient = container.restClient,
-                preferences = container.preferences,
-                backend = container.backend,
-                // 只有管理员运行才需要那条开关；非提权时传 null，对账完全不做（不动用户配置）。
-                browserArgsReconciler = container.browserArgsReconciler.takeIf { container.elevated },
-            ),
-            initial = NewShellState(
-                mode = container.preferences.mode.toShellModeForShellComponent(),
-                activeProfile = container.preferences.activeProfile,
-                backendKind = container.backend.kind,
-                backend = container.backend.state.value,
-                backendLogs = container.backend.logs.value,
-            ),
-        )
-    }
-    // 会话列表：S5 起由 Component 持有（**过渡形态** —— 内部仍是 SessionListViewModel，
-    // 30+ 个动作逐个搬进 Reducer 是纯机械劳动，留到 S8；见 DefaultSessionListComponent 注释）。
-    val sessionListComponent: SessionListComponent = remember(context) {
-        DefaultSessionListComponent(
-            componentContext = context,
-            repository = container.sessionRepository,
-            preferences = container.preferences,
-            chat = container.chatRepository,
-        )
-    }
-    val sessionViewModel: SessionListViewModel = sessionListComponent.model
-    // Chat 域：S4 起由 Component 持有（内部仍是原 ChatViewModel 的状态机，
-    // 只是 scope 与 5 个回调交给 Component —— 见 DefaultChatComponent 的类注释）。
-    val chatComponent = remember(context) {
-        DefaultChatComponent(
-            componentContext = context,
-            repository = container.chatRepository,
-            gateway = container.gateway,
-            models = container.modelRepository,
-            preferences = container.preferences,
-            // **必须**是 UI 线程：ChatViewModel 与 GatewayClient 共享大量非线程安全
-            // 的可变状态，靠"同一条线程"做互斥（见 DefaultChatComponent 的类注释）。
-            executorContext = UiDispatcher.context,
-        )
-    }
-    // Composer：S5 起由 Component 持有（**过渡形态** —— 内部仍是 ComposerViewModel，
-    // 只是 scope 从 viewModelScope 换成注入的 UI 线程 scope，见 DefaultComposerComponent 的类注释）。
-    val composerComponent: ComposerComponent = remember(context) {
-        DefaultComposerComponent(
-            componentContext = context,
-            repository = container.composerRepository,
-            // Composer 的 `@` / `/` 补全要用 chat 的运行时（profile + runtimeId），
-            // 走 `ComposerSessionContext` 接口。
-            sessions = chatComponent.model,
-            preferences = container.preferences,
-        )
-    }
-    val composerViewModel: ComposerViewModel = composerComponent.model
-    val backendComponent = remember(context) {
-        DefaultBackendComponent(
-            componentContext = context,
-            gateway = ProviderBackendGateway(container.backend, container.gateway),
-        )
-    }
-    // 能力页：S5 起由 Component 持有（**过渡形态** —— 内部仍是 CapabilityViewModel，
-    // 20+ 个动作逐个搬进 Reducer 是纯机械劳动，留到 S8；见 DefaultCapabilityComponent 注释）。
-    val capabilityComponent: CapabilityComponent = remember(context) {
-        DefaultCapabilityComponent(
-            componentContext = context,
-            repository = container.capabilityRepository,
-        )
-    }
-    val capabilityViewModel: CapabilityViewModel = capabilityComponent.model
-    // 设置页：S5 起 scope 由 componentScope 提供（去掉 viewModelScope 兜底）。
-    val componentScope = remember(context) {
-        kotlinx.coroutines.CoroutineScope(
-            kotlinx.coroutines.SupervisorJob() + dev.shinglem.hermes.platform.UiDispatcher.context,
-        )
-    }
-    val settingsViewModel: SettingsViewModel = remember(context) {
-        SettingsViewModel(
-            store = container.settingsStore,
-            config = container.config,
-            restarter = container.restarter,
-            preferences = container.preferences,
-            debugAvailable = container.officialDesktop != null,
-            externalScope = componentScope,
-        )
-    }
-    val subagentComponent: dev.shinglem.hermes.component.subagent.SubagentComponent = remember(context) {
-        DefaultSubagentComponent(
-            componentContext = context,
-            gateway = RpcSubagentGateway(container.gateway) {
-                chatComponent.runtimeId?.let {
-                    dev.shinglem.hermes.component.subagent.RuntimeRef(chatComponent.profile, it)
-                }
-            },
-        )
-    }
-    val updaterComponent = remember(context) {
-        DefaultUpdaterComponent(
-            componentContext = context,
-            gateway = RestUpdaterGateway(container.restClient),
-        )
-    }
-    // 维护页组：S2 起由 Component 持有（内部仍是原 MaintenanceViewModel 的状态机，
-    // 只是 scope 由 Component 管 —— 见 DefaultMaintenanceComponent 的类注释）。
-    //
-    // maintenanceState 供 6 个页面直接读；动作仍走 ViewModel 的方法引用
-    // （60 多个动作逐条包成 Intent 只会增加噪音，见 MaintenanceComponent 的类注释）。
-    val maintenanceComponent = remember(context) {
-        DefaultMaintenanceComponent(
-            componentContext = context,
-            repository = container.maintenanceRepository,
-            configRepository = container.configRepository,
-            hermesHome = container.hermesHome,
-        )
-    }
-    val maintenance = maintenanceComponent.model
+    val deps = rememberAppShellDeps(container, context)
+    val shellComponent = deps.shellComponent
+    val shellState = deps.shellState
+    val sessionListComponent = deps.sessionListComponent
+    val sessionViewModel = deps.sessionViewModel
+    val sessionState = deps.sessionState
+    val chatComponent = deps.chatComponent
+    val chatState = deps.chatState
+    val composerComponent = deps.composerComponent
+    val composerViewModel = deps.composerViewModel
+    val composerState = deps.composerState
+    val backendComponent = deps.backendComponent
+    val capabilityComponent = deps.capabilityComponent
+    val capabilityViewModel = deps.capabilityViewModel
+    val capabilityState = deps.capabilityState
+    val componentScope = deps.componentScope
+    val settingsViewModel = deps.settingsViewModel
+    val settingsState = deps.settingsState
+    val subagentComponent = deps.subagentComponent
+    val subagentState = deps.subagentState
+    val updaterComponent = deps.updaterComponent
+    val updateState = deps.updateState
+    val maintenanceComponent = deps.maintenanceComponent
+    val maintenance = deps.maintenance
+    val maintenanceScopeKey = deps.maintenanceScopeKey
+    val maintenanceProfileChoices = deps.maintenanceProfileChoices
+    val securityComponent = deps.securityComponent
+    val providerKeysComponent = deps.providerKeysComponent
+    val customEndpointComponent = deps.customEndpointComponent
+    val moaComponent = deps.moaComponent
+    val modelSettingsComponent = deps.modelSettingsComponent
+    val profilesComponent = deps.profilesComponent
 
-    // 旧 ShellState 的消费方（6 个 settings Component 与 200+ 处 UI）仍按旧类型工作；
-    // 这里用一个轻量投影把新 state 映射回旧形状，避免这一轮改上千行 UI（S8 统一改）。
-    val newShellState: NewShellState by shellComponent.state.collectAsStateWithLifecycle()
     // RootComponent 接管导航（S5）：mode 的事实源仍是 ShellComponent，这里只做投影。
-    val rootComponent = remember(context) {
-        DefaultRootComponent(componentContext = context, initialProfile = null)
-    }
-    LaunchedEffect(newShellState.mode) { rootComponent.syncFromMode(newShellState.mode.name) }
-    val shellState: ShellState = remember(newShellState) { newShellState.toLegacy() }
-    // `remember` 而不是 `viewModel` —— Component 有自己的生命周期，不是 androidx ViewModel。
-    // profile 变化时按 key 重建：与旧 `setProfile` 的"彻底重置"语义一致，但不可能忘。
-    val securityComponent = remember(context, shellState.activeProfile) {
-        DefaultSecurityComponent(
-            componentContext = context,
-            repository = ConfigSecurityGateway(container.configRepository),
-            profile = shellState.activeProfile,
-        )
-    }
-    val providerKeysComponent = remember(context, shellState.activeProfile) {
-        DefaultProviderKeysComponent(
-            componentContext = context,
-            gateway = ConfigProviderKeysGateway(container.providerRepository),
-            profile = shellState.activeProfile,
-        )
-    }
-    val customEndpointComponent = remember(context, shellState.activeProfile) {
-        DefaultCustomEndpointComponent(
-            componentContext = context,
-            gateway = ConfigCustomEndpointGateway(container.customEndpointRepository),
-            profile = shellState.activeProfile,
-        )
-    }
-    val moaComponent = remember(context, shellState.activeProfile) {
-        DefaultMoaComponent(
-            componentContext = context,
-            gateway = ConfigMoaGateway(container.modelAdminRepository),
-            profile = shellState.activeProfile,
-        )
-    }
-    val modelSettingsComponent = remember(context, shellState.activeProfile) {
-        DefaultModelSettingsComponent(
-            componentContext = context,
-            gateway = ConfigModelSettingsGateway(
-                models = container.modelRepository,
-                admin = container.modelAdminRepository,
-                config = container.configRepository,
-            ),
-            profile = shellState.activeProfile,
-        )
-    }
-    // 配置档案页管理的是"所有档案"，不随 activeProfile 重建。
-    val profilesComponent = remember(context) {
-        DefaultProfilesComponent(
-            componentContext = context,
-            gateway = ConfigProfilesGateway(container.profilesAdminRepository),
-        )
-    }
+    LaunchedEffect(deps.mode) { deps.rootComponent.syncFromMode(deps.mode) }
+
     var showBackendDetail by remember { mutableStateOf(false) }
     // 后端起好再读：与迁移前 `LaunchedEffect(profile, isConnected, mode)` 的把关一致
     // （local 后端 ready 之前请求一定失败）。
@@ -367,31 +225,8 @@ fun AppShell(
         }
     }
     var paletteOpen by remember { mutableStateOf(false) }
-    val sessionState by sessionViewModel.state.collectAsStateWithLifecycle()
-    val chatState by chatComponent.state.collectAsStateWithLifecycle()
-    val composerState by composerViewModel.state.collectAsStateWithLifecycle()
-    val capabilityState by capabilityViewModel.state.collectAsStateWithLifecycle()
-    val settingsState by settingsViewModel.state.collectAsStateWithLifecycle()
-    val subagentState by subagentComponent.state.collectAsStateWithLifecycle()
-    // UI 层仍按旧形状消费（SubagentEntry → SubagentItem 只是改名）。
-    val updateState by updaterComponent.state.collectAsStateWithLifecycle()
     val terminalState by container.terminalViewModel.state.collectAsStateWithLifecycle()
     val terminalSettings by container.terminalViewModel.settings.collectAsStateWithLifecycle()
-    val maintenanceScopeKey by maintenance.profileKey.collectAsStateWithLifecycle()
-
-    val maintenanceProfileChoices = remember(shellState.profilesOrEmpty) {
-        val defaultKey = NewShellState.DEFAULT_PROFILE
-        val defaultLabel = shellState.profilesOrEmpty
-            .firstOrNull { it.isDefault || it.name == defaultKey }
-            ?.label
-            ?: defaultKey
-        buildList {
-            add(ProfileChoice(defaultKey, defaultLabel))
-            shellState.profilesOrEmpty
-                .filterNot { it.isDefault || it.name == defaultKey }
-                .forEach { add(ProfileChoice(it.name, it.label)) }
-        }
-    }
     val autostartInfo by container.autostart.collectAsStateWithLifecycle()
     val orphanTasks by container.orphanTasks.collectAsStateWithLifecycle()
     val composerScope = rememberCoroutineScope()
