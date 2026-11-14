@@ -76,7 +76,15 @@ import dev.shinglem.hermes.component.settings.DefaultCustomEndpointComponent
 import dev.shinglem.hermes.component.settings.DefaultMoaComponent
 import dev.shinglem.hermes.component.settings.DefaultProviderKeysComponent
 import dev.shinglem.hermes.component.settings.DefaultSecurityComponent
-import dev.shinglem.hermes.feature.settings.BackendAdminViewModel
+import dev.shinglem.hermes.component.shell.ShellComponent
+import dev.shinglem.hermes.component.shell.ShellState as NewShellState
+import dev.shinglem.hermes.component.shell.DefaultShellComponent
+import dev.shinglem.hermes.component.shell.toLegacy
+import dev.shinglem.hermes.component.shell.RealShellGateway
+import dev.shinglem.hermes.component.shell.toShellModeForShellComponent
+import dev.shinglem.hermes.component.backend.BackendIntent
+import dev.shinglem.hermes.component.backend.DefaultBackendComponent
+import dev.shinglem.hermes.component.backend.ProviderBackendGateway
 import dev.shinglem.hermes.feature.settings.DEFAULT_PROFILE_KEY
 import dev.shinglem.hermes.feature.settings.ProfileChoice
 import dev.shinglem.hermes.feature.settings.ProfileScope
@@ -139,15 +147,25 @@ fun AppShell(
     componentContext: ComponentContext? = null,
 ) {
     val context = componentContext ?: rememberDefaultComponentContext()
-    val shellViewModel: ShellViewModel = viewModel {
-        ShellViewModel(
-            gateway = container.gateway,
-            profileRepository = container.profileRepository,
-            restClient = container.restClient,
-            preferences = container.preferences,
-            backend = container.backend,
-            // 只有管理员运行才需要那条开关；非提权时传 null，对账完全不做（不动用户配置）。
-            browserArgsReconciler = container.browserArgsReconciler.takeIf { container.elevated },
+    val shellComponent: ShellComponent = remember(context) {
+        DefaultShellComponent(
+            componentContext = context,
+            gateway = RealShellGateway(
+                gateway = container.gateway,
+                profileRepository = container.profileRepository,
+                restClient = container.restClient,
+                preferences = container.preferences,
+                backend = container.backend,
+                // 只有管理员运行才需要那条开关；非提权时传 null，对账完全不做（不动用户配置）。
+                browserArgsReconciler = container.browserArgsReconciler.takeIf { container.elevated },
+            ),
+            initial = NewShellState(
+                mode = container.preferences.mode.toShellModeForShellComponent(),
+                activeProfile = container.preferences.activeProfile,
+                backendKind = container.backend.kind,
+                backend = container.backend.state.value,
+                backendLogs = container.backend.logs.value,
+            ),
         )
     }
     val sessionViewModel: SessionListViewModel = viewModel {
@@ -176,8 +194,11 @@ fun AppShell(
             preferences = container.preferences,
         )
     }
-    val backendAdminViewModel: BackendAdminViewModel = viewModel {
-        BackendAdminViewModel(backend = container.backend, gateway = container.gateway)
+    val backendComponent = remember(context) {
+        DefaultBackendComponent(
+            componentContext = context,
+            gateway = ProviderBackendGateway(container.backend, container.gateway),
+        )
     }
     val capabilityViewModel: CapabilityViewModel = viewModel {        CapabilityViewModel(container.capabilityRepository)
     }
@@ -216,8 +237,10 @@ fun AppShell(
     }
     val maintenance = maintenanceComponent.model
 
-    val shellState by shellViewModel.state.collectAsStateWithLifecycle()
-    // S2：安全三页改用 Decompose Component + MVIKotlin Store（ADR-069）。
+    // 旧 ShellState 的消费方（6 个 settings Component 与 200+ 处 UI）仍按旧类型工作；
+    // 这里用一个轻量投影把新 state 映射回旧形状，避免这一轮改上千行 UI（S8 统一改）。
+    val newShellState: NewShellState by shellComponent.state.collectAsStateWithLifecycle()
+    val shellState: ShellState = remember(newShellState) { newShellState.toLegacy() }
     // `remember` 而不是 `viewModel` —— Component 有自己的生命周期，不是 androidx ViewModel。
     // profile 变化时按 key 重建：与旧 `setProfile` 的"彻底重置"语义一致，但不可能忘。
     val securityComponent = remember(context, shellState.activeProfile) {
@@ -312,7 +335,7 @@ fun AppShell(
     val maintenanceScopeKey by maintenance.profileKey.collectAsStateWithLifecycle()
 
     val maintenanceProfileChoices = remember(shellState.profilesOrEmpty) {
-        val defaultKey = ShellViewModel.DEFAULT_PROFILE
+        val defaultKey = NewShellState.DEFAULT_PROFILE
         val defaultLabel = shellState.profilesOrEmpty
             .firstOrNull { it.isDefault || it.name == defaultKey }
             ?.label
@@ -406,10 +429,10 @@ fun AppShell(
     var pendingJump by remember { mutableStateOf<SessionKey?>(null) }
 
     fun jumpToSession(key: SessionKey) {
-        if (key.profile != null && key.profile != shellViewModel.state.value.activeProfile) {
+        if (key.profile != null && key.profile != shellComponent.state.value.activeProfile) {
             // 跨 profile：先记下目标，等列表刷新到新 profile 再选中。
             pendingJump = key
-            shellViewModel.selectProfile(key.profile)
+            shellComponent.onIntent(dev.shinglem.hermes.component.shell.ShellIntent.SelectProfile(key.profile))
         } else {
             sessionViewModel.select(key.sessionId)
         }
@@ -620,7 +643,7 @@ fun AppShell(
                         AppShortcut.NEW_SESSION -> sessionViewModel.create(shellState.activeProfile)
                         AppShortcut.PREV_SESSION -> sessionViewModel.cycleSelection(-1)
                         AppShortcut.NEXT_SESSION -> sessionViewModel.cycleSelection(1)
-                        AppShortcut.OPEN_SETTINGS -> shellViewModel.openSettings()
+                        AppShortcut.OPEN_SETTINGS -> shellComponent.onIntent(dev.shinglem.hermes.component.shell.ShellIntent.OpenSettings)
                         AppShortcut.COMMAND_PALETTE -> paletteOpen = !paletteOpen
                         AppShortcut.TERMINAL_TOGGLE -> container.terminalViewModel.toggle()
                         AppShortcut.TERMINAL_NEW_TAB -> container.terminalViewModel.newTab()
@@ -634,7 +657,7 @@ fun AppShell(
         bottomBar = {
             StatusBar(
                 state = shellState,
-                onRetryConnection = shellViewModel::retryConnection,
+                onRetryConnection = { shellComponent.onIntent(dev.shinglem.hermes.component.shell.ShellIntent.RetryConnection) },
                 onShowBackendDetail = { showBackendDetail = true },
                 showUnelevatedHint = container.elevateRequested && !container.elevated,
             )
@@ -644,7 +667,7 @@ fun AppShell(
             BackendDetailDialog(
                 state = shellState.backend,
                 logs = shellState.backendLogs,
-                onRetry = shellViewModel::retryBackend,
+                onRetry = { shellComponent.onIntent(dev.shinglem.hermes.component.shell.ShellIntent.RetryBackend) },
                 onDismiss = { showBackendDetail = false },
             )
         }
@@ -663,12 +686,12 @@ fun AppShell(
                 )
                 add(
                     CommandItem("open-settings", "打开设置", "Ctrl+,", AppIcons.Tune) {
-                        shellViewModel.openSettings()
+                        shellComponent.onIntent(dev.shinglem.hermes.component.shell.ShellIntent.OpenSettings)
                     },
                 )
                 add(
                     CommandItem("open-capabilities", "打开能力页", null, AppIcons.Capabilities) {
-                        shellViewModel.openCapabilities()
+                        shellComponent.onIntent(dev.shinglem.hermes.component.shell.ShellIntent.OpenCapabilities)
                     },
                 )
                 add(
@@ -700,7 +723,7 @@ fun AppShell(
                 )
                 add(
                     CommandItem("check-update", "检查后端更新", null, AppIcons.Update) {
-                        shellViewModel.openSettings()
+                        shellComponent.onIntent(dev.shinglem.hermes.component.shell.ShellIntent.OpenSettings)
                         settingsViewModel.select(SettingsPage.About)
                         updaterComponent.onIntent(UpdaterIntent.Check())
                     },
@@ -736,9 +759,9 @@ fun AppShell(
             ProfileRail(
                 state = shellState,
                 compact = railCompact,
-                onSelectProfile = shellViewModel::selectProfile,
-                onOpenCapabilities = shellViewModel::openCapabilities,
-                onOpenSettings = shellViewModel::openSettings,
+                onSelectProfile = { name -> shellComponent.onIntent(dev.shinglem.hermes.component.shell.ShellIntent.SelectProfile(name)) },
+                onOpenCapabilities = { shellComponent.onIntent(dev.shinglem.hermes.component.shell.ShellIntent.OpenCapabilities) },
+                onOpenSettings = { shellComponent.onIntent(dev.shinglem.hermes.component.shell.ShellIntent.OpenSettings) },
             )
 
             when (shellState.mode) {
@@ -808,7 +831,7 @@ fun AppShell(
                                 dataDir = appDataDir,
                                 logDir = container.config.app.log.dir,
                                 maintenance = maintenance,
-                                backendAdmin = backendAdminViewModel,
+                                backendAdmin = backendComponent,
                                 profileChoices = maintenanceProfileChoices,
                                 onSelectScopeProfile = maintenance::setScopeProfile,
                                 onDeleteOrphanTask = { name ->

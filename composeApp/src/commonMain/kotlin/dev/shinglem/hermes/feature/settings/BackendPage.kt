@@ -1,5 +1,10 @@
 package dev.shinglem.hermes.feature.settings
 
+import dev.shinglem.hermes.component.backend.describeBoot
+import dev.shinglem.hermes.component.backend.describeConnection
+import dev.shinglem.hermes.component.backend.BackendComponent
+import dev.shinglem.hermes.component.backend.BackendEffect
+import dev.shinglem.hermes.component.backend.BackendIntent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -16,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -38,11 +44,20 @@ import dev.shinglem.hermes.core.backend.BackendKind
  */
 @Composable
 fun BackendPage(
-    viewModel: BackendAdminViewModel,
+    component: BackendComponent,
     modifier: Modifier = Modifier,
 ) {
-    val state by viewModel.state.collectAsState()
+    val state by component.state.collectAsState()
     val clipboard = LocalClipboardManager.current
+    // 诊断文本由 Component 生成、经 Effect 送上来；UI 只负责写剪贴板。
+    LaunchedEffect(component) {
+        component.effects.collect { effect ->
+            when (effect) {
+                is BackendEffect.CopyToClipboard ->
+                    clipboard.setText(AnnotatedString(effect.text))
+            }
+        }
+    }
 
     Column(
         modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),
@@ -77,19 +92,19 @@ fun BackendPage(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Button(onClick = viewModel::start, enabled = !state.busy && !state.running) {
+            Button(onClick = { component.onIntent(BackendIntent.Start) }, enabled = !state.busy && !state.running) {
                 Text("启动")
             }
-            OutlinedButton(onClick = viewModel::stop, enabled = !state.busy && state.running) {
+            OutlinedButton(onClick = { component.onIntent(BackendIntent.Stop) }, enabled = !state.busy && state.running) {
                 Text("停止")
             }
-            OutlinedButton(onClick = viewModel::restart, enabled = !state.busy) {
+            OutlinedButton(onClick = { component.onIntent(BackendIntent.Restart) }, enabled = !state.busy) {
                 Text("重启")
             }
-            OutlinedButton(onClick = viewModel::revalidate, enabled = !state.busy) {
+            OutlinedButton(onClick = { component.onIntent(BackendIntent.Revalidate) }, enabled = !state.busy) {
                 Text("重新解析地址")
             }
-            OutlinedButton(onClick = viewModel::reconnect, enabled = !state.busy) {
+            OutlinedButton(onClick = { component.onIntent(BackendIntent.Reconnect) }, enabled = !state.busy) {
                 Text("重连")
             }
             if (state.busy) {
@@ -105,7 +120,7 @@ fun BackendPage(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(onClick = viewModel::dismissNotice) { Text("关闭") }
+                TextButton(onClick = { component.onIntent(BackendIntent.DismissNotice) }) { Text("关闭") }
             }
         }
 
@@ -123,11 +138,11 @@ fun BackendPage(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "后端输出（最近 ${BackendAdminState.DIAGNOSTIC_LOG_LINES} 行）",
+                text = "后端输出（最近 ${dev.shinglem.hermes.component.backend.BackendState.DIAGNOSTIC_LOG_LINES} 行）",
                 style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier.weight(1f),
             )
-            TextButton(onClick = { clipboard.setText(AnnotatedString(viewModel.diagnostics())) }) {
+            TextButton(onClick = { component.onIntent(BackendIntent.CopyDiagnostics) }) {
                 Text("复制诊断信息")
             }
         }

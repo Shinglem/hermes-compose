@@ -77,7 +77,7 @@ fun ProfileRail(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 state.profilesOrEmpty
-                    .filterNot { it.isDefault || it.name == ShellViewModel.DEFAULT_PROFILE }
+                    .filterNot { it.isDefault || it.name == DEFAULT_PROFILE }
                     .forEach { profile ->
                         RailItem(
                             label = profile.label,
