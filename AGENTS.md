@@ -308,7 +308,7 @@ New-Item -ItemType SymbolicLink -Path .github\skills -Target '../.ai/skill'
    [`dev-desktop-gui-e2e-testing`](.ai/skill/dev-desktop-gui-e2e-testing/SKILL.md) §3.5。
 7. **改过用户环境就要还原**：临时改 `config_custom.json`（提权开关、主题）先备份、验完还原；
    临时脚本、临时截图、临时置顶窗口一并清理。报告里写清"被测环境动过什么"。
-8. **v0.6.0 重构已完成（2026-11-15）**，`feature/v0.6.0-refactor` 分支上是新基线：
+8. **v0.6.0 重构已完成并合入 `main`（2026-11-15）**，`main` 就是新基线：
    Component + Store 架构、桌面壳 = Nucleus Tao、业务代码零 AWT、823 个测试全绿。
    当前架构看 `.design/草案/03-architecture.md`；当时的计划与踩坑在
    `.design/归档/v0.6.0-重构/`（只读，用于查"为什么"）。
