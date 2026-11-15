@@ -200,6 +200,26 @@ val hermesJmodsDir: File? = run {
  *
  * 基线是**官方 Temurin 27**，不再有 JBR 专有模块（浏览器 / OpenGL 那几个随 JBR 一起退役）。
  * 公式引擎 `ratex` 的 native dll 走普通 Maven 依赖（`ratex-native-*`），与 jmods 无关。
+ *
+ * ### v0.6.0 依赖大改后的复核（2026-11-15）
+ *
+ * 这一版新增了 decompose / mvikotlin / koin / nucleus-application / composenativetray /
+ * filekit / kotlinx-collections-immutable，**曾经担心要重新裁剪**。实测结论：**不需要**。
+ *
+ * 判据是两条硬证据，不是"看依赖名字像不像"：
+ * 1. `jdeps --print-module-deps --ignore-missing-deps --multi-release base` 喂**真实**
+ *    runtime classpath（`printRuntimeClasspath` 的 159 个 jar，不是 `release-test/lib`
+ *    那份旧快照）→ 得到 `java.base,java.desktop,java.instrument,java.logging,
+ *    java.management,java.prefs,jdk.javadoc,jdk.security.auth,jdk.unsupported`；
+ *    与声明的差集只有 `jdk.javadoc`（已豁免）和 `jdk.security.auth` —— 后者是
+ *    `jdk.javadoc` 的**传递需求**（`jdk.javadoc requires jdk.compiler transitive`，
+ *    而 jdeps 把它算进了最小集），不需要单独声明。
+ * 2. 用本清单重新 jlink（同样的 `--strip-debug --no-header-files --no-man-pages
+ *    --compress=zip-6 --include-locales=en,zh`）→ 模块清单与现有 `rt/` **完全相同**
+ *    （16 个模块），体积 51.0 vs 50.1 MB、177 vs 176 文件；再用这份新运行时跑新代码，
+ *    零 `NoClassDefFoundError`。
+ *
+ * 结论：裁剪范围**没变**。真正变的是"怎么验证"—— 见 [printRuntimeClasspath]。
  */
 val runtimeModules = listOf(
     "java.base",
@@ -866,3 +886,20 @@ tasks.register<JavaExec>("clipboardAcceptance") {
 }
 
 
+
+/**
+ * 把 desktop runtime classpath 的 jar 路径逐行打出来（供 jdeps / 本地核查）。
+ *
+ * 为什么需要它：`jdeps --print-module-deps` 必须喂**真实**的运行时 classpath 才有意义。
+ * 拿 `release-test/lib` 当 classpath 会漏掉新加的依赖（那份是上一次打包的快照），
+ * 于是"模块闭包没变"这种结论是假的 —— 实测踩过：用旧 lib 得到的结果里连
+ * decompose / mvikotlin / koin / nucleus 都不在。
+ */
+val printRuntimeClasspath by tasks.registering {
+    group = "verification"
+    description = "打印 desktop runtime classpath 里的 jar 路径（每行一个，前缀 CP=）"
+    doLast {
+        val cfg = kotlin.targets.getByName("desktop").compilations.getByName("main").runtimeDependencyFiles
+        cfg?.files?.filter { it.name.endsWith(".jar") }?.forEach { println("CP=" + it.absolutePath) }
+    }
+}

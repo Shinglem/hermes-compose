@@ -159,16 +159,29 @@ jobs:
       # jdeps 只看得见静态可达的模块；反射 / ServiceLoader 用到的模块必须手写在
       # composeApp/build.gradle.kts 的 runtimeModules 里。这一步保证「代码里新引入的
       # 模块不会悄悄跑出裁剪范围」—— 否则 jlink 照样成功，成品启动时才 NoClassDefFoundError。
+      #
+      # classpath 必须用 **Gradle 解析出来的当前依赖图**（`printRuntimeClasspath`），
+      # 不能用 `release-test\lib` —— 后者是 `syncReleaseTest` 拷进去的快照，且这条 CI 跑
+      # 在 `syncReleaseTest` 之前/之后都可能拿不到最新 jar（实测：用旧 lib 时 decompose /
+      # mvikotlin / koin / nucleus 全都不在 classpath 里，jdeps 自然"看不出变化"，
+      # 校验假通过）。App.jar 同理用 Gradle 的产物，不用 release-test 里那份。
       - name: 用 jdeps 校验模块闭包
         run: |
           $ErrorActionPreference = 'Stop'
-          $app = (Resolve-Path 'release-test\bin\App.jar').Path
-          $libDir = (Resolve-Path 'release-test\lib').Path
-          $cp = (Get-ChildItem $libDir -Filter *.jar | ForEach-Object { $_.FullName }) -join ';'
-          Write-Host "classpath: $((Get-ChildItem $libDir -Filter *.jar).Count) 个 jar"
+          $cpLines = & .\gradlew.bat :composeApp:printRuntimeClasspath --console=plain -q
+          if ($LASTEXITCODE -ne 0) { throw "读取 runtimeClasspath 失败，exit=$LASTEXITCODE" }
+          $cpJars = ($cpLines | Select-String '^CP=').Line -replace '^CP=','' | Where-Object { $_ }
+          if (-not $cpJars) { throw "runtimeClasspath 为空（printRuntimeClasspath 输出解析失败）" }
+          Write-Host "classpath: $($cpJars.Count) 个 jar"
 
+          $app = (Resolve-Path 'composeApp\build\libs\composeApp-desktop.jar').Path
+          $cp = $cpJars -join ';'
+
+          # `--multi-release base`：不写死版本号。原来写的是 `25`，而工具链是 Temurin **27**，
+          # 于是多版本 jar（Ktor / coroutines 等都有 META-INF/versions）里 26/27 的那份被忽略，
+          # 分析结果并不能代表真实运行时。
           $raw = & "$env:JAVA_HOME\bin\jdeps.exe" --print-module-deps --ignore-missing-deps `
-                   --multi-release 25 -cp $cp $app 2>&1
+                   --multi-release base -cp $cp $app 2>&1
           $found = ($raw | Where-Object { $_ -match '^[a-z][a-zA-Z0-9._]*(\s*,\s*[a-z][a-zA-Z0-9._]*)*$' } |
                     Select-Object -Last 1) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
           if (-not $found) { throw "jdeps 没有输出模块列表：$($raw -join ' ')" }
