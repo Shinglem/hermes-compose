@@ -128,4 +128,54 @@ class NotificationComponentTest {
         job.cancel()
         assertEquals(1, received.size, "事件没带 session_id 时宁可提醒也别漏")
     }
+
+    /**
+     * S8 回归：**正看着会话时不能把去重名额吃掉**。
+     *
+     * `gate.shouldRemind` 有副作用（把 id 记进 reminded 集合），所以它必须**最后**判。
+     * 顺序颠倒时：这条被判"不必提醒"却已占掉名额，之后用户切走会话 / 切 profile /
+     * 窗口切到后台触发重算，会因"已经提醒过"而跳过 —— 这条审批**永远不会补提醒**，
+     * 后端最终按超时拒绝（默认拒绝命令）。
+     */
+    @Test
+    fun `正看着时跳过但不占去重名额 之后仍能补提醒`() = runTest {
+        val c = component()
+        val received = mutableListOf<NotificationEffect>()
+        val job = backgroundScope.launch { c.effects.collect { received += it } }
+        kotlinx.coroutines.yield()
+
+        // 第一次：用户正看着这个会话 → 不该弹。
+        c.remindApproval(
+            requestId = "req-1",
+            target = key,
+            title = "等待确认",
+            body = "rm -rf",
+            actions = emptyList(),
+            foreground = true,
+            selectedSessionId = key.sessionId,
+            onScreen = true,
+        )
+        kotlinx.coroutines.yield()
+        assertEquals(0, received.size, "正看着 + 已在屏上 → 不该弹")
+
+        // 之后用户切走（foreground=false、selected 变成别的会话）→ 必须补上。
+        c.remindApproval(
+            requestId = "req-1",
+            target = key,
+            title = "等待确认",
+            body = "rm -rf",
+            actions = emptyList(),
+            foreground = false,
+            selectedSessionId = "another-session",
+            onScreen = false,
+        )
+        kotlinx.coroutines.yield()
+        job.cancel()
+
+        assertEquals(
+            1,
+            received.size,
+            "第一次跳过时不能占掉去重名额，否则这条审批永远不会补提醒",
+        )
+    }
 }

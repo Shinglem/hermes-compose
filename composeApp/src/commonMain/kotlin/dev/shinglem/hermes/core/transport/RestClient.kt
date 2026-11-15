@@ -228,8 +228,14 @@ class RestClient(
         )
     }
 
-    suspend fun health(): BackendHealth {
-        val element = get("/api/status", Timeouts.HEALTH_MS)
+    /**
+     * 当前后端基址（由 `targetProvider` 解析，随本地后端就绪与否变化）。
+     *
+     * 心跳探活要显式传地址给 [probeStatus]（它按任意 baseUrl 探），所以需要这个入口。
+     */
+    fun currentBaseUrl(): String = targetProvider().baseUrl
+
+    suspend fun health(): BackendHealth {        val element = get("/api/status", Timeouts.HEALTH_MS)
         val obj = element as? JsonObject ?: throw AppError.Protocol("/api/status is not an object")
         return BackendHealth(
             version = obj["version"]?.jsonPrimitive?.contentOrNull.orEmpty(),

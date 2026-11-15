@@ -10,7 +10,9 @@ import dev.shinglem.hermes.core.backend.BackendBootState
 import dev.shinglem.hermes.core.error.asAppError
 import dev.shinglem.hermes.core.log.Log
 import dev.shinglem.hermes.core.result.valueOrNull
+import dev.shinglem.hermes.core.transport.BackendHealth
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
@@ -35,6 +37,14 @@ internal class ShellExecutor(
     private var browserArgsReconciled = false
 
     /**
+     * 最近一次 `/api/health` 的结果。
+     *
+     * 探活循环在 Gateway 里（放 Executor 会让 `runTest` 的 `advanceUntilIdle()` 永不 idle），
+     * 这里只是把它的 StateFlow 合并进主快照。
+     */
+    private var lastHealth: BackendHealth? = null
+
+    /**
      * 懒订阅：MVIKotlin 的 Executor 在构造期不能 dispatch
      * （`Value was not initialized`），所以由 `Observe` intent 触发。
      */
@@ -46,8 +56,10 @@ internal class ShellExecutor(
             gateway.backendState,
             gateway.backendLogs,
             gateway.gatewayProbe,
-        ) { connection, backend, logs, probe -> Quad(connection, backend, logs, probe) }
+            gateway.health,
+        ) { connection, backend, logs, probe, health -> Snapshot(connection, backend, logs, probe, health) }
             .onEach { snapshot ->
+                lastHealth = snapshot.health
                 dispatch(
                     ShellResult.ExternalSnapshot(
                         connection = snapshot.connection,
@@ -55,6 +67,7 @@ internal class ShellExecutor(
                         backend = snapshot.backend,
                         backendLogs = snapshot.logs,
                         gatewayProbe = snapshot.probe,
+                        health = snapshot.health,
                     ),
                 )
                 handleSideEffects(snapshot.connection, snapshot.backend)
@@ -62,11 +75,12 @@ internal class ShellExecutor(
             .launchIn(scope)
     }
 
-    private data class Quad(
+    private data class Snapshot(
         val connection: dev.shinglem.hermes.core.transport.ConnectionState,
         val backend: BackendBootState,
         val logs: List<dev.shinglem.hermes.core.backend.BackendLogLine>,
         val probe: dev.shinglem.hermes.core.backend.ProbeState,
+        val health: BackendHealth?,
     )
 
     /**
@@ -82,7 +96,10 @@ internal class ShellExecutor(
     ) {
         if (connection is dev.shinglem.hermes.core.transport.ConnectionState.Connected) {
             if (!profilesLoaded) {
-                profilesLoaded = true
+                // **不要在这里先置 true**：迁移前是 `try` 成功后置位，失败后下一次
+                // `Connected` 会重试。提前置位会让"启动时后端还没就绪 → profiles.list 失败"
+                // 变成该进程生命周期内**永不再加载**，而 UI 没有手动刷新入口 ——
+                // profile rail 会空到重启。
                 reloadProfiles()
             }
             reconcileBrowserArgsOnce()
@@ -104,7 +121,12 @@ internal class ShellExecutor(
                 // 点档案 = 去这个档案的会话（ADR-044）：在设置/能力页点 profile 也要有反应。
                 dispatch(ShellResult.ModeChanged(ShellMode.SESSIONS))
             }
-            ShellIntent.OpenCapabilities -> dispatch(ShellResult.ModeChanged(ShellMode.CAPABILITIES))
+            // 能力页是常驻去处：写偏好，重启回到这里（迁移前 `openCapabilities()` 会写）。
+            // 设置页**不写**（一次性去处，重启回会话）—— 语义差异有意保留。
+            ShellIntent.OpenCapabilities -> {
+                gateway.persistMode(ShellMode.CAPABILITIES)
+                dispatch(ShellResult.ModeChanged(ShellMode.CAPABILITIES))
+            }
             ShellIntent.OpenSettings -> dispatch(ShellResult.ModeChanged(ShellMode.SETTINGS))
             ShellIntent.RetryBackend -> scope.launch {
                 try {
@@ -124,6 +146,8 @@ internal class ShellExecutor(
         scope.launch {
             try {
                 val profiles = gateway.loadProfiles()
+                // 成功后才置位：失败时保持 false，下一次 `Connected` 会重试。
+                profilesLoaded = true
                 // profile 被删时回落：`state.json` 记的是"上次用的 profile"，切后端之后
                 // 那个名字可能根本不存在 —— 继续沿用会让会话/技能全空。
                 val current = state().activeProfile
@@ -157,5 +181,13 @@ internal class ShellExecutor(
             runCatching { gateway.reconcileBrowserArgsOnce() }
                 .onFailure { Log.warn("浏览器参数对账异常：${it.message}") }
         }
+    }
+
+    private companion object {
+        /** 心跳间隔：5s 足够看出"后端死了"，又不会把日志/CPU 刷起来（迁移前同值）。 */
+        const val HEARTBEAT_INTERVAL_MS = 5_000L
+
+        /** `/api/health` 只是版本号之类的附加信息，30s 一次足够。 */
+        const val HEALTH_INTERVAL_MS = 30_000L
     }
 }

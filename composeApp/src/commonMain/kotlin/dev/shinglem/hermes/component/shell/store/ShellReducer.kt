@@ -16,6 +16,8 @@ internal class ShellReducer : Reducer<ShellState, ShellResult> {
             backend = msg.backend,
             backendLogs = msg.backendLogs,
             gatewayProbe = msg.gatewayProbe,
+            // health 失败时是 null：保留上一次成功的结果，别把版本号刷成空。
+            health = msg.health ?: health,
         )
 
         // 已有列表时不退回 Loading：切 profile 时会闪一下空白（迁移前踩过）。

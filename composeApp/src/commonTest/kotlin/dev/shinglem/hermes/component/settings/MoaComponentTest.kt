@@ -242,6 +242,27 @@ class MoaComponentTest {
         assertTrue(!beta.state.value.dirty, "新 profile 不该继承上一个仓库的编辑")
     }
 
+    /**
+     * 只切换"当前查看哪个预设"不该标脏：`selected` 不参与保存（`save()` 只发
+     * `defaultPreset` / `activePreset` / `presets`）。标脏会让用户一进页面切个预设就看到
+     * "有未保存的改动"、保存按钮变亮（迁移前 `select()` 不置脏）。
+     */
+    @Test
+    fun `切换预设不标脏`() = runTest {
+        val gateway = FakeGateway(
+            config = config(mapOf("default" to preset(), "other" to preset("other"))),
+        )
+        val subject = component(gateway)
+        subject.onConnectedChanged(true)
+        assertTrue(!subject.state.value.dirty, "前置条件：刚加载完不该是脏的")
+
+        subject.onIntent(MoaIntent.Select("other"))
+
+        val state = subject.state.value
+        assertEquals("other", state.selected, "确实切换了查看目标")
+        assertTrue(!state.dirty, "只是换查看目标，没有未保存的改动")
+    }
+
     @Test
     fun `读取失败落成 Failed`() = runTest {
         val gateway = FakeGateway(failRead = AppError.Unknown("offline"))

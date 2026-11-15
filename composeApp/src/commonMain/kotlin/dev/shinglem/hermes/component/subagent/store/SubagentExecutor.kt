@@ -68,6 +68,11 @@ internal class SubagentExecutor(
         scope.launch {
             try {
                 val dto = gateway.list(ctx.sessionId, ctx.profile)
+                // 按 id 回填已拉到的 `tail`：迁移前是
+                // `dto.subagents.map { it.toEntry(tail = current.tailOf(it.subagentId)) }`。
+                // 不回填的话每次 `Open`（内部就调 refresh）或点「刷新」都会把用户已经读到
+                // 的输出清空，得重新点「读取输出」。
+                val tails = state().entries.associate { it.id to it.tail }
                 dispatch(
                     SubagentResult.Loaded(
                         dto.subagents.map {
@@ -81,6 +86,7 @@ internal class SubagentExecutor(
                                 lastTool = it.lastTool,
                                 model = it.model,
                                 acceptingSteer = it.acceptingSteer ?: true,
+                                tail = tails[it.subagentId].orEmpty(),
                             )
                         },
                     ),

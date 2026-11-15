@@ -97,6 +97,15 @@ internal sealed interface MoaResult {
     data class Saved(val config: MoaConfigDto) : MoaResult
     data class SaveFailed(val message: String) : MoaResult
     data object BannersCleared : MoaResult
+
+    /**
+     * 只切换"当前查看哪个预设"，**不置脏**。
+     *
+     * 与 [PresetsEdited] 分开是因为 `selected` 不参与保存（`save()` 只发
+     * `defaultPreset` / `activePreset` / `presets`），把它当编辑会让用户一进页面切个
+     * 预设就看到"有未保存的改动"、保存按钮变亮（迁移前 `select()` 不置脏）。
+     */
+    data class Selected(val name: String) : MoaResult
 }
 
 sealed interface MoaEffect {

@@ -5,6 +5,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.decompose.DefaultComponentContext
+import com.arkivanov.decompose.childContext
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import com.arkivanov.essenty.lifecycle.destroy
 import com.arkivanov.essenty.lifecycle.resume
@@ -48,4 +49,51 @@ fun rememberDefaultComponentContext(): ComponentContext {
         }
     }
     return context
+}
+
+/**
+ * 一个**只给某个域用**的子上下文（[parent] 的子节点），随 [key] 变化重建。
+ *
+ * ### 为什么必须有它（实测事故）
+ *
+ * 各域 Component 都用 `componentContext.instanceKeeper.getOrCreate(key = "<域常量>")`
+ * 持有 Store。若多个 Component 共用**同一个** `ComponentContext`，那么 `getOrCreate`
+ * 的缓存键只有那个域常量 —— 与 profile 无关。于是：
+ *
+ * - 上层 `remember(context, activeProfile) { DefaultXxxComponent(..., profile) }`
+ *   看起来"profile 变了就重建"，实际新建的只是外壳；
+ * - 新 Component 从**旧** InstanceKeeper 里取回**旧 Store**（Executor 里 `profile`
+ *   是构造参数 `val`），页面继续显示旧 profile 的配置，保存也写进旧 profile。
+ *
+ * `getOrCreate` 按 key 复用、不校验 factory，所以这种错配不会报错，只会静默串数据。
+ *
+ * `childContext` 会建一个**独立的** InstanceKeeper 与 Lifecycle，父级销毁时级联销毁 ——
+ * 所以旧 profile 的 Store 会随旧子上下文一起 `onDestroy`，不会残留在图里。
+ */
+@Composable
+fun rememberChildComponentContext(
+    parent: ComponentContext,
+    key: String,
+): ComponentContext = remember(parent, key) { parent.childContext(key) }
+
+/**
+ * 按 domain + profile 派生一个子上下文并构建 Component（[rememberChildComponentContext] 的便捷封装）。
+ *
+ * 用于"这个 Component 内部用 `instanceKeeper.getOrCreate(key = <域常量>)` 持有 Store"的场景：
+ * 子上下文的 InstanceKeeper 自带 domain+profile 前缀，所以换 profile 时**一定**拿到新 Store，
+ * 旧 Store 随旧子上下文销毁。直接传根 context 会导致跨 profile 串数据（见
+ * [rememberChildComponentContext] 的注释）。
+ *
+ * [factory] 只在 `own` 变化时才执行（`remember(own)`），所以闭包捕获的 `profile`
+ * 与 `own` 里的 profile 始终一致。
+ */
+@Composable
+fun <T> rememberPerProfileComponent(
+    parent: ComponentContext,
+    domain: String,
+    profile: String?,
+    factory: (ComponentContext) -> T,
+): T {
+    val own = rememberChildComponentContext(parent, "$domain:${profile ?: "default"}")
+    return remember(own) { factory(own) }
 }

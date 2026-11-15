@@ -16,3 +16,14 @@ const val DEFAULT_PROFILE: String = "default"
 /** 偏好里的 mode 字符串 → 枚举。 */
 fun String.toShellModeForShellComponent(): ShellMode =
     if (this == AppPreferences.MODE_CAPABILITIES) ShellMode.CAPABILITIES else ShellMode.SESSIONS
+
+/**
+ * 枚举 → 偏好的 mode 字符串。
+ *
+ * 只有 `CAPABILITIES` 会被持久化（迁移前的 `openCapabilities()`）；`SETTINGS` 是一次性
+ * 去处，重启应回到会话，所以映射回 `MODE_SESSIONS`（见 [toShellModeForShellComponent]）。
+ */
+fun ShellMode.toPreference(): String = when (this) {
+    ShellMode.CAPABILITIES -> AppPreferences.MODE_CAPABILITIES
+    ShellMode.SESSIONS, ShellMode.SETTINGS -> AppPreferences.MODE_SESSIONS
+}

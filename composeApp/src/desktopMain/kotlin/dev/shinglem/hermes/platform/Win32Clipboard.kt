@@ -58,7 +58,10 @@ internal class Win32Clipboard private constructor(
         if (ptr.address() == 0L) return@withOpen null
         try {
             val size = globalSize.invokeWithArguments(data) as Long
-            if (size <= 0L) return@withOpen null
+            // 与图片路径一样必须有上限：`GlobalSize` 由**外部进程**决定，不受本进程控制。
+            // `size.toInt()` 在超过 Int.MAX_VALUE 时会变负（NegativeArraySizeException），
+            // 而超大的文本会让"逐字节 get"的拷贝在 UI 线程上跑上百 MB。
+            if (size <= 0L || size > MAX_TEXT_BYTES) return@withOpen null
             val view = ptr.reinterpret(size)
             val bytes = ByteArray(size.toInt())
             for (i in bytes.indices) bytes[i] = view.get(ValueLayout.JAVA_BYTE, i.toLong())
@@ -152,6 +155,15 @@ internal class Win32Clipboard private constructor(
          * 超过这个体积的多半不是截图，读它只会让 UI 卡住。
          */
         private const val MAX_IMAGE_BYTES = 64L * 1024 * 1024
+
+        /**
+         * 文本上限：8 MB。
+         *
+         * `GlobalSize` 由**外部进程**决定，不受本进程控制；无上限时一次异常粘贴就能让
+         * "逐字节 get" 的拷贝在 UI 线程上跑上百 MB，或 `size.toInt()` 截断成负数。
+         * 正常复制一篇文章远小于这个量级。
+         */
+        private const val MAX_TEXT_BYTES = 8L * 1024 * 1024
 
         /** 非 Windows 或 FFM 不可用时为 null，调用方退化成"什么都没有"。 */
         val instance: Win32Clipboard? by lazy {

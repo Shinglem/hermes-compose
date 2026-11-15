@@ -2,6 +2,8 @@ package dev.shinglem.hermes.shell.entry
 
 import dev.nucleusframework.core.runtime.SingleInstanceManager
 import java.io.File
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
 /**
  * 把 `<home>` 映射成 Nucleus 的单实例配置（ADR-066）。
@@ -61,4 +63,36 @@ internal object SingleInstanceConfig {
      * 保持一致才能让升级用户的日志/支持记录对得上（虽然换了机制，标识没换）。
      */
     const val PREFIX = "HermesCompose"
+
+    /**
+     * **只读**探测：是否已有别的实例持有这把锁（不改变"判定交给 Nucleus"的原则）。
+     *
+     * ### 为什么需要这个探测
+     *
+     * 真正的单实例判定在 `nucleusApplication` 内部（`acquireSingleInstanceLock`），
+     * 而**提权重启**必须发生在它之前（要先决定"这一进程要不要 runas 后退出"）。
+     * 没有探测时，只要已有一份在跑，每次双击都会先吃一个 UAC 弹窗才被判为第二实例 ——
+     * 旧实现是先 `isRunning()` 再提权，顺序是对的。
+     *
+     * ### 为什么探测结果**只用来决定提权**，不用来提前退出
+     *
+     * 提前退出会绕过 Nucleus 的 `onRestoreRequest` —— 那是唯一能把已有窗口拉到前台的路径
+     * （ADR-066 踩过）。所以探测为"已占用"时：**跳过提权**、照常往下走，
+     * 让 Nucleus 判第二实例并发出 restore 请求。
+     *
+     * 实现上就是试 `tryLock`：拿得到 ⇒ 没人持有（立刻释放，交给 Nucleus 正式拿）；
+     * 拿不到（返回 null 或 `OverlappingFileLockException`）⇒ 已有实例。
+     * 任何异常都按"未占用"处理 —— 探测失败不该阻止应用启动。
+     */
+    fun isHeldElsewhere(configuration: SingleInstanceManager.Configuration): Boolean = runCatching {
+        FileChannel.open(
+            configuration.lockFilePath,
+            StandardOpenOption.CREATE,
+            StandardOpenOption.WRITE,
+        ).use { channel ->
+            val lock = channel.tryLock() ?: return@use true
+            runCatching { lock.release() }
+            false
+        }
+    }.getOrDefault(false)
 }

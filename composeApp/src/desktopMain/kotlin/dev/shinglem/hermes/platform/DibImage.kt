@@ -38,6 +38,20 @@ internal object DibImage {
     /** `BITMAPINFOHEADER` 固定部分长度：biSize(4) + 宽高(8) + planes/bitcount(4) + 压缩等(16)。 */
     private const val BITMAPINFOHEADER_SIZE = 40
 
+    /** `BI_BITFIELDS` + 40 字节头时，红/绿/蓝三个掩码紧跟在头之后（各 4 字节）。 */
+    private const val BITFIELDS_MASK_BYTES = 12
+
+    /**
+     * 单边尺寸上限。剪贴板位的图不可能这么宽/高，超过就是坏数据（或恶意构造）。
+     *
+     * 有这个上限才能保证下面的 `width * 4 * height` 不会在 Int 上回绕 —— 三处
+     * `stride * height` 都是 Int 运算，回绕会让"够不够长"的守卫变成比较负数而永远为假。
+     */
+    private const val MAX_DIMENSION = 65_536
+
+    /** 像素总数上限（约 1 亿 ⇒ RGBA 400 MB 上限，超过只可能是坏数据）。 */
+    private const val MAX_PIXELS = 100_000_000L
+
     private const val BI_RGB = 0
     private const val BI_BITFIELDS = 3
 
@@ -57,12 +71,23 @@ internal object DibImage {
         // biSizeImage 可能是 0（BI_RGB 时允许），所以不用它算长度。
         if (width <= 0 || rawHeight == 0) return null
         if (compression != BI_RGB && compression != BI_BITFIELDS) return null
+        // 尺寸上限必须**在** `stride * height` 之前校验：三个尺寸都来自外部进程写的字节，
+        // `width * 4 * height` 会在 Int 上回绕成负数（守卫失效）或得到一个约 1–2 GB 的值。
+        if (width > MAX_DIMENSION) return null
 
         val height = kotlin.math.abs(rawHeight)
+        if (height > MAX_DIMENSION) return null
+        if (width.toLong() * height > MAX_PIXELS) return null
+
         val bottomUp = rawHeight > 0
 
-        // `CF_DIBV5` 的 header 更长，像素起点跟着 headerSize 走；BITFIELDS 的掩码已在 header 内。
-        val dataOffset = headerSize
+        // `CF_DIBV5` / `BITMAPV4HEADER` 的掩码在 header 内；但 `BITMAPINFOHEADER`（40 字节）
+        // + `BI_BITFIELDS` 时三个 DWORD 掩码紧跟在 40 字节头**之后**，像素起点要再往后 12。
+        val dataOffset = if (compression == BI_BITFIELDS && headerSize == BITMAPINFOHEADER_SIZE) {
+            (headerSize + BITFIELDS_MASK_BYTES).takeIf { it <= dib.size } ?: return null
+        } else {
+            headerSize
+        }
         val rgba = when (bitCount) {
             32 -> toRgba32(dib, dataOffset, width, height, bottomUp)
             24 -> toRgba24(dib, dataOffset, width, height, bottomUp)
@@ -79,14 +104,17 @@ internal object DibImage {
         height: Int,
         bottomUp: Boolean,
     ): ByteArray? {
-        val stride = width * 4
-        if (dib.size < offset + stride * height) return null
-        val out = ByteArray(stride * height)
+        // Long 运算：`width * 4 * height` 在 Int 上会回绕（调用方已限制尺寸，这里再兜一层）。
+        val stride = width.toLong() * 4
+        val total = stride * height
+        if (offset.toLong() + total > dib.size || total > Int.MAX_VALUE) return null
+        val strideInt = stride.toInt()
+        val out = ByteArray(total.toInt())
         var anyAlpha = false
         for (y in 0 until height) {
             val srcY = if (bottomUp) height - 1 - y else y
-            val srcRow = offset + srcY * stride
-            val dstRow = y * stride
+            val srcRow = offset + srcY * strideInt
+            val dstRow = y * strideInt
             for (x in 0 until width) {
                 val s = srcRow + x * 4
                 val d = dstRow + x * 4
@@ -113,15 +141,20 @@ internal object DibImage {
         height: Int,
         bottomUp: Boolean,
     ): ByteArray? {
-        // 行按 4 字节对齐：每行占 ((width*3 + 3) / 4) * 4 字节。
-        val stride = ((width * 3 + 3) / 4) * 4
-        if (dib.size < offset + stride * height) return null
-        val outStride = width * 4
-        val out = ByteArray(outStride * height)
+        // 行按 4 字节对齐：每行占 ((width*3 + 3) / 4) * 4 字节。Long 运算防 Int 回绕。
+        val stride = ((width.toLong() * 3 + 3) / 4) * 4
+        val total = stride * height
+        if (offset.toLong() + total > dib.size) return null
+        val outStride = width.toLong() * 4
+        val outTotal = outStride * height
+        if (outTotal > Int.MAX_VALUE) return null
+        val out = ByteArray(outTotal.toInt())
+        val strideInt = stride.toInt()
+        val outStrideInt = outStride.toInt()
         for (y in 0 until height) {
             val srcY = if (bottomUp) height - 1 - y else y
-            val srcRow = offset + srcY * stride
-            val dstRow = y * outStride
+            val srcRow = offset + srcY * strideInt
+            val dstRow = y * outStrideInt
             for (x in 0 until width) {
                 val s = srcRow + x * 3
                 val d = dstRow + x * 4
@@ -139,8 +172,12 @@ internal object DibImage {
         val bitmap = Bitmap()
         try {
             if (!bitmap.installPixels(info, rgba, width * 4)) return null
-            val image = Image.makeFromBitmap(bitmap)
-            image.encodeToData(EncodedImageFormat.PNG)?.bytes
+            // `Image` 与 `Data` 都是 Skia 的 `Managed`：靠 Cleaner 兜底而非 JVM 堆压力驱动
+            // （native 内存不计入 GC 阈值）。不显式关闭的话，每次粘贴 4K 截图都会让
+            // native RSS 留一份"图像副本 + PNG 编码结果"，连续粘贴可持续上涨几百 MB。
+            Image.makeFromBitmap(bitmap).use { image ->
+                image.encodeToData(EncodedImageFormat.PNG)?.use { data -> data.bytes }
+            }
         } finally {
             bitmap.close()
         }

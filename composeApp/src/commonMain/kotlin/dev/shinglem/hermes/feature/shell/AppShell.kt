@@ -299,7 +299,8 @@ fun AppShell(
 
     // `remind` / `remindApproval` 已搬到 ShellNotifier（判据可测）；这里只保留"实时值"读取。
     val notifier = ShellNotifier(
-        enabled = container.preferences.notificationsEnabled,
+        // 传 lambda 而不是取值：`LaunchedEffect` 不因偏好变化重启，捕获成字段会让开关失效。
+        enabled = { container.preferences.notificationsEnabled },
         supported = SystemNotifications.supported,
         gate = reminders,
         selectedSessionId = { sessionViewModel.state.value.selectedId },
@@ -331,7 +332,13 @@ fun AppShell(
     // 为什么合并成一个收集器：`effects` 是单条 `Flow`，多个 `LaunchedEffect` 各自
     // `collect` 会**抢事件**（每个消费者只拿到一部分）。迁移前的 5 个 `var` 之所以
     // 没出问题，是因为它们本来就是 5 条独立的回调槽。
-    LaunchedEffect(chatComponent, sessionViewModel) {
+    //
+    // **key 必须带 `shellState.activeProfile`**：`shellState` 是组合期读出的不可变快照
+    // （不是 `by collectAsStateWithLifecycle()` 委托），而本 effect 一旦启动就不会重启。
+    // 不加 key 的话 `SessionPersisted` / `Branched` 里的 `refresh(shellState.activeProfile)`
+    // 永远用**旧 profile** 刷新 —— `SessionListState.profile` 会被改回旧值、列表显示另一个
+    // 档案的会话、当前对话被下面那个 effect 踢掉（迁移前读的是实时值，没这问题）。
+    LaunchedEffect(chatComponent, sessionViewModel, shellState.activeProfile) {
         chatComponent.effects.collect { effect ->
             when (effect) {
                 // 新建会话在第一条 prompt 之前不在 session.list 里，等后端接受后再刷新。

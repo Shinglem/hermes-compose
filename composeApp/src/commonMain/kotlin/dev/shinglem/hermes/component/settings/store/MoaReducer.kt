@@ -52,6 +52,9 @@ internal class MoaReducer : Reducer<MoaState, MoaResult> {
             notice = null,
         )
 
+        // 只换"看哪个预设"：不置脏（`selected` 不参与保存）。
+        is MoaResult.Selected -> copy(selected = msg.name)
+
         is MoaResult.Invalid -> copy(error = msg.message)
 
         MoaResult.Saving -> copy(busyKey = "moa", error = null, notice = null)

@@ -231,38 +231,63 @@ fun rememberAppShellDeps(container: AppContainer, context: ComponentContext): Ap
     }
 
     // `remember` 而不是 `viewModel` —— Component 有自己的生命周期，不是 androidx ViewModel。
-    // profile 变化时按 key 重建：与旧 `setProfile` 的"彻底重置"语义一致，但不可能忘。
-    val securityComponent = remember(context, shellState.activeProfile) {
+    //
+    // **每个域必须走 `rememberPerProfileComponent`**：这些 Component 内部都是
+    // `instanceKeeper.getOrCreate(key = "<域常量>")`，而 `getOrCreate` 按 key 复用、
+    // **不校验 factory**。共用根 context 时 profile 变化只是换了外壳，取回的仍是旧
+    // profile 的 Store（Executor 的 `profile` 是 `val`）—— 表现为"切档案后设置页还在
+    // 读写上一个档案的配置"，静默串数据。子上下文有独立的 InstanceKeeper，且随父级销毁。
+    val securityComponent = rememberPerProfileComponent(
+        parent = context,
+        domain = "security",
+        profile = shellState.activeProfile,
+    ) { own ->
         DefaultSecurityComponent(
-            componentContext = context,
+            componentContext = own,
             repository = ConfigSecurityGateway(container.configRepository),
             profile = shellState.activeProfile,
         )
     }
-    val providerKeysComponent = remember(context, shellState.activeProfile) {
+    val providerKeysComponent = rememberPerProfileComponent(
+        parent = context,
+        domain = "provider-keys",
+        profile = shellState.activeProfile,
+    ) { own ->
         DefaultProviderKeysComponent(
-            componentContext = context,
+            componentContext = own,
             gateway = ConfigProviderKeysGateway(container.providerRepository),
             profile = shellState.activeProfile,
         )
     }
-    val customEndpointComponent = remember(context, shellState.activeProfile) {
+    val customEndpointComponent = rememberPerProfileComponent(
+        parent = context,
+        domain = "custom-endpoint",
+        profile = shellState.activeProfile,
+    ) { own ->
         DefaultCustomEndpointComponent(
-            componentContext = context,
+            componentContext = own,
             gateway = ConfigCustomEndpointGateway(container.customEndpointRepository),
             profile = shellState.activeProfile,
         )
     }
-    val moaComponent = remember(context, shellState.activeProfile) {
+    val moaComponent = rememberPerProfileComponent(
+        parent = context,
+        domain = "moa",
+        profile = shellState.activeProfile,
+    ) { own ->
         DefaultMoaComponent(
-            componentContext = context,
+            componentContext = own,
             gateway = ConfigMoaGateway(container.modelAdminRepository),
             profile = shellState.activeProfile,
         )
     }
-    val modelSettingsComponent = remember(context, shellState.activeProfile) {
+    val modelSettingsComponent = rememberPerProfileComponent(
+        parent = context,
+        domain = "model-settings",
+        profile = shellState.activeProfile,
+    ) { own ->
         DefaultModelSettingsComponent(
-            componentContext = context,
+            componentContext = own,
             gateway = ConfigModelSettingsGateway(
                 models = container.modelRepository,
                 admin = container.modelAdminRepository,

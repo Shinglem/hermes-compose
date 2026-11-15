@@ -130,7 +130,8 @@ internal class MoaExecutor(
 
     private fun select(name: String) {
         if (name !in state().presets) return
-        edit { it.copy(selected = name) }
+        // 只改"看哪个"：`selected` 不参与保存，置脏会让用户以为改坏了配置。
+        dispatch(MoaResult.Selected(name))
     }
 
     private fun addPreset() {

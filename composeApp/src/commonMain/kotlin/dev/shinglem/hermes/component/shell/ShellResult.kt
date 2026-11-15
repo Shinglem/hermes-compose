@@ -7,6 +7,7 @@ import dev.shinglem.hermes.core.backend.ProbeState
 import dev.shinglem.hermes.feature.shell.ProfileSummary
 import dev.shinglem.hermes.core.error.AppError
 import dev.shinglem.hermes.core.result.Loadable
+import dev.shinglem.hermes.core.transport.BackendHealth
 import dev.shinglem.hermes.core.transport.ConnectionState
 
 /** Reducer 的输入。外部流快照 + 本地动作的结果。 */
@@ -18,6 +19,8 @@ sealed interface ShellResult {
         val backend: BackendBootState,
         val backendLogs: List<BackendLogLine>,
         val gatewayProbe: ProbeState,
+        /** `/api/health` 的结果（后端版本等）。失败时为 `null`，不影响其它字段。 */
+        val health: BackendHealth? = null,
     ) : ShellResult
 
     data object ProfilesLoading : ShellResult

@@ -81,6 +81,50 @@ class DibImageTest {
         assertNull(DibImage.toPng(zeroHeight))
     }
 
+    /**
+     * S8 回归：极端尺寸必须被判掉，不能靠 Int 回绕"骗过"长度校验。
+     *
+     * `width * 4 * height` 在 Int 上会回绕成负数 —— 那时 `dib.size < 负数` 恒为假（守卫
+     * 失效），随后 `ByteArray(负数)` 抛 `NegativeArraySizeException`，或分配一个约 1–2 GB
+     * 的数组。这两个尺寸都来自**外部进程**写的字节，不能信。
+     */
+    @Test
+    fun `超大尺寸被拒绝而不是溢出去分配`() {
+        // 100000 x 100000 x 32 位 = 4e10 字节，远超 Int 范围。
+        val huge = dib(bitCount = 32, width = 100_000, height = 100_000) { }
+        assertNull(DibImage.toPng(huge), "超大尺寸必须返回 null")
+
+        // 24 位路径同样要防（`width * 3` 也会回绕）。
+        val huge24 = dib(bitCount = 24, width = 100_000, height = 100_000) { }
+        assertNull(DibImage.toPng(huge24))
+    }
+
+    /**
+     * S8 回归：`BI_BITFIELDS` + 40 字节头时，三个 DWORD 掩码紧跟在头**之后**，
+     * 像素起点要再往后 12 字节。不修正的话整幅图颜色/行序全错（"粘贴出来的图是花的"）。
+     */
+    @Test
+    fun `BITFIELDS 40 字节头时跳过 12 字节掩码`() {
+        // 1x1，BI_BITFIELDS(3) + 40 字节头：头之后是 3 个掩码，然后才是像素。
+        val mine = dib(bitCount = 32, width = 1, height = 1, compression = 3) {
+            int(0x00FF0000) // 红掩码
+            int(0x0000FF00) // 绿掩码
+            int(0x000000FF) // 蓝掩码
+            pixel(0xFF, 0x00, 0x00, 0xFF) // 蓝
+        }
+        assertNotNull(DibImage.toPng(mine), "40 字节头 + BITFIELDS 要能正确跳过掩码后转换")
+
+        // 若把掩码当像素读：总共只有 40+12+4=56 字节，扣掉 12 之后剩 4 字节正好够一个像素；
+        // 不扣时也可以"够"（56-40=16 ≥ 4），所以这个用例只能证明"不崩"，真正的差异由 24/32
+        // 位像素内容体现。这里再补一个"掩码之后没有像素"的形态：必须返回 null。
+        val noPixel = dib(bitCount = 32, width = 1, height = 1, compression = 3) {
+            int(0x00FF0000)
+            int(0x0000FF00)
+            int(0x000000FF)
+        }
+        assertNull(DibImage.toPng(noPixel), "掩码之后没有像素数据时必须返回 null，而不是把掩码当像素")
+    }
+
     // ---- 构造 DIB 的测试辅助 ----
 
     private class DibBuilder {

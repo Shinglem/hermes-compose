@@ -138,7 +138,14 @@ class DefaultNotificationComponent(
         gate.forget(dedupeId)
     }
 
-    /** 三条判据，与迁移前 `remind` 逐条对应（顺序也一样：开关 → 去重 → 场景）。 */
+    /**
+     * 三条判据，**顺序必须与迁移前一致：开关 → 场景 → 去重**。
+     *
+     * 去重（`gate.shouldRemind`）有副作用（把 id 记进 reminded 集合），所以它必须**最后**判。
+     * 反过来的话，用户正看着该会话时这条会被判"不必提醒"却已经占掉了去重名额，
+     * 之后切走会话 / 切 profile / 窗口切到后台触发重算时会因"已经提醒过"而跳过 ——
+     * 这条审批/提问**永远不会补提醒**，后端最终按超时拒绝。
+     */
     private fun shouldSend(
         dedupeId: String,
         target: SessionKey?,
@@ -147,12 +154,13 @@ class DefaultNotificationComponent(
         onScreen: Boolean,
     ): Boolean {
         if (!enabled || !supported) return false
-        if (!gate.shouldRemind(dedupeId)) return false
-        return shouldRemindForSession(
+        val inScene = shouldRemindForSession(
             target = target,
             foreground = foreground,
             selectedSessionId = selectedSessionId,
             onScreen = onScreen,
         )
+        if (!inScene) return false
+        return gate.shouldRemind(dedupeId)
     }
 }

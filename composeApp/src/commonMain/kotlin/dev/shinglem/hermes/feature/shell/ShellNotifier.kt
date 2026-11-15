@@ -20,7 +20,13 @@ import dev.shinglem.hermes.platform.SystemNotifications
  * 每帧重建也不会丢 [gate]（去重记录由调用方 `remember` 持有）。
  */
 internal class ShellNotifier(
-    private val enabled: Boolean,
+    /**
+     * 通知总开关。**调用时读**，不能用组合期快照 —— 这个对象每帧重建，但持有它的
+     * 两个 `LaunchedEffect` 不会因偏好变化而重启；捕获成字段会让"运行中切换开关"失效
+     * （关掉后审批仍弹、打开后本次会话仍不弹，要重启才生效）。迁移前是在 `remind()`
+     * 内部实时读 `container.preferences.notificationsEnabled`。
+     */
+    private val enabled: () -> Boolean,
     private val supported: Boolean,
     private val gate: ReminderGate,
     /** 当前选中的会话 id（**调用时**读，不能用组合期快照）。 */
@@ -41,8 +47,9 @@ internal class ShellNotifier(
         /** 这张卡片是不是已经渲染在用户眼前的会话里（判据见 [shouldRemindForSession]）。 */
         onScreen: Boolean = false,
     ) {
-        if (!enabled || !supported) {
-            Log.info("remind skipped id=$id (enabled=$enabled supported=$supported)")
+        val enabledNow = enabled()
+        if (!enabledNow || !supported) {
+            Log.info("remind skipped id=$id (enabled=$enabledNow supported=$supported)")
             return
         }
         val selected = selectedSessionId()

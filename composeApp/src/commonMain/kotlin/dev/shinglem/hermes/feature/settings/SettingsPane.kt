@@ -181,6 +181,15 @@ fun SettingsDetailPane(
     }
 
     Box(scope.modifier) {
+    // **SnackbarHost 必须放在最前面**：下面是 `when`/`if` 分支里的裸 `return`，而 `Box`
+    // 是 inline 的 —— 那些 `return` 是从 `SettingsDetailPane` **非局部返回**。宿主若放在
+    // 末尾，凡是从分支返回的页面（记忆 / 维护 / 用量 / 安全 / 模型 / MoA / 档案 / 提供方密钥 …）
+    // 都不会组合它，"已保存 / 已复制 / 校验通过"这些提示会静默消失。
+    // 放在最前面则提前返回时它已经在组合里了。
+    SnackbarHost(
+        hostState = snackbarHostState,
+        modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+    )
     when (scope.state.selected) {
         SettingsPage.Memory -> {
             MemoryPage(
@@ -434,12 +443,21 @@ fun SettingsDetailPane(
                 modifier = scope.modifier.padding(20.dp),
             )
         } else {
+            // 必须 `collectAsState` 而不是 `?.state?.value`：后者不是快照状态读取，
+            // 模型目录稍晚加载完**不会**触发重组 —— MoA 页的提供方/模型下拉会一直是空的
+            // （同文件 393 行其它域都用 collectAsState）。
             val catalog = scope.modelSettings
-        MoaContent(
-            component = subject,
-            modelState = catalog?.state?.value ?: dev.shinglem.hermes.component.settings.ModelSettingsState(),
-            modifier = scope.modifier,
-        )
+            val modelState = if (catalog == null) {
+                dev.shinglem.hermes.component.settings.ModelSettingsState()
+            } else {
+                val collected by catalog.state.collectAsState()
+                collected
+            }
+            MoaContent(
+                component = subject,
+                modelState = modelState,
+                modifier = scope.modifier,
+            )
         }
         return
     }
@@ -575,9 +593,5 @@ fun SettingsDetailPane(
             Button(onClick = scope.onSave, enabled = !scope.state.restarting) { Text("保存") }
         }
     }
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
-        )
     }
 }

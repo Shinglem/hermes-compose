@@ -135,21 +135,22 @@ fun main(args: Array<String>) {
     // "第二实例请求 → 拉出窗口"生效的地方，而配套的 `SingleInstanceRestoreBus` 是 internal。
     // 曾试过"配置解析前探测锁、判为第二实例就提前退出"，绕过了这条路径 → 已回退（ADR-066）。
     val home = startupHome()
-    when (val lock = SingleInstanceConfig.prepare(home)) {
+    val lockOutcome = SingleInstanceConfig.prepare(home)
+    when (lockOutcome) {
         is SingleInstanceConfig.Outcome.Ready -> {
             // 不设的话 Nucleus 用默认配置 —— 锁文件落在 `java.io.tmpdir` 下、名字按主类派生
             // （实测 `dev.shinglem.hermes.MainKt.lock`），提权/非提权会话的 TEMP 不同就会互相
             // 看不见（这正是 `LockDir` 要自定义目录的原因）。
-            SingleInstanceManager.configuration = lock.configuration
+            SingleInstanceManager.configuration = lockOutcome.configuration
             startup.info(
                 "instance",
-                "lock=${lock.configuration.lockFilePath} id=${lock.configuration.lockIdentifier}",
+                "lock=${lockOutcome.configuration.lockFilePath} id=${lockOutcome.configuration.lockIdentifier}",
             )
         }
 
         is SingleInstanceConfig.Outcome.Unavailable -> {
             // Nucleus 在拿不到锁时会 fail-open 返回 true（允许双开）。明确记错误但不阻断。
-            startup.error("instance", "单实例不可用：${lock.reason}（可能允许双开）")
+            startup.error("instance", "单实例不可用：${lockOutcome.reason}（可能允许双开）")
         }
     }
 
@@ -201,10 +202,24 @@ fun main(args: Array<String>) {
         }
     }
 
-    // 提权：第二实例已在上面退出，走到这里的必然是首实例。
+    // 提权：只在**没有别的实例在跑**时才重启自己。
+    //
+    // 为什么必须先探测：真正的单实例判定在 `nucleusApplication` 内部（ADR-066 要求
+    // 把判定交给 Nucleus，否则会绕过唯一的"拉出已有窗口"路径），但提权必须发生在它之前
+    // （要决定"这一进程要不要 runas 后退出"）。没有探测时，只要已有一份在跑，每次双击 /
+    // 每次计划任务触发都会先吃一个 UAC 弹窗，才被判为第二实例退出。
+    //
+    // 探测为"已占用"时**不提前退出**，只是跳过提权、继续往下 —— 让 Nucleus 判第二实例
+    // 并发 restore 请求（提前退出会绕过那条路径）。
     // 交接参数要剥掉：新旧进程之间已经交过一次，提权后的进程不该再等那个（已死的）PID，
     // 万一 PID 被复用还会白等一轮。
-    if (container.config.app.elevate == ElevateMode.ASK && !Elevation.isElevated()) {
+    val lockHeld = (lockOutcome as? SingleInstanceConfig.Outcome.Ready)
+        ?.let { SingleInstanceConfig.isHeldElsewhere(it.configuration) }
+        ?: false
+    if (lockHeld) {
+        startup.info("instance", "已有实例持有锁：跳过提权，交给 Nucleus 判第二实例")
+    }
+    if (!lockHeld && container.config.app.elevate == ElevateMode.ASK && !Elevation.isElevated()) {
         val relaunchArgs = RestartHandover.strip(args.toList()).toTypedArray()
         when (ElevationRelaunch.relaunch(relaunchArgs, System.getProperty("user.dir"))) {
             ElevationRelaunch.Outcome.STARTED -> {
@@ -225,11 +240,6 @@ fun main(args: Array<String>) {
 
     // 单实例锁由 `nucleusApplication` 内部的 `acquireSingleInstanceLock` 取得（上面只设了配置）。
     startup.info("instance", "home=${home.absolutePath}（单实例由 Nucleus 判定）")
-    // 公式引擎的 native dll 由 ratex 自己解压到 `%LOCALAPPDATA%\RaTeX\…`，解压是「先删后拷」：
-    // 目标被别的进程占用时整条公式渲染会**静默**退化成源码。这里提前触发一次并把结果写进日志，
-    // 否则「公式显示成源码」只能靠猜（实测踩过：上一个实例没退干净，新实例全篇公式都是源码）。
-    // 必须放在单实例获取**之后**：第二个实例只是去唤醒已有窗口，不该去碰那个 dll。
-    startup.info("formula", ratexStatus())
 
     // 开机自启：写计划任务需要管理员，所以放在提权之后再对账（07 篇 §3.6）。
     val autostartStatus = ScheduledAutostart.reconcile(
@@ -280,6 +290,14 @@ fun main(args: Array<String>) {
         // 后端必须与窗口是否可见无关：静默启动（--silent）时窗口不显示，
         // 若把 start() 放在 App() 里，托盘模式就永远没有后端。
         LaunchedEffect(Unit) { container.backend.start() }
+
+        // 公式引擎的 native dll 由 ratex 自己解压到 `%LOCALAPPDATA%\RaTeX\…`，解压是「先删后拷」：
+        // 目标被别的进程占用时整条公式渲染会**静默**退化成源码。这里提前触发一次并把结果写进日志，
+        // 否则「公式显示成源码」只能靠猜（实测踩过：上一个实例没退干净，新实例全篇公式都是源码）。
+        //
+        // **必须在单实例判定之后**：第二个实例只是去唤醒已有窗口，不该去碰那个 dll ——
+        // 那会让首实例正在使用的目录被半删。`nucleusApplication` 是判定通过后才进入的。
+        LaunchedEffect(Unit) { startup.info("formula", ratexStatus()) }
 
         // 托盘常驻：关窗只是隐藏，只有托盘菜单的「退出」才结束进程与后端子进程。
         var windowVisible by remember { mutableStateOf(!silent) }
