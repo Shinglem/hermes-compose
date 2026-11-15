@@ -2082,7 +2082,7 @@ Maintenance 是 60 个动作、6 块独立状态；Chat 是六条线交织的流
 
 `ChatViewModel` 仍在 `feature/chat/`，`SessionShadow` / `SessionSwitchPlan` 仍在。
 **S8 收尾时必须回来做**，否则这两处会一直是"设计稿说删了、实际还在"的技术债。
-[`09-refactor.md`](09-refactor.md) 的 S8 清单里已登记。
+[`09-refactor.md`](../归档/v0.6.0-重构/09-refactor.md) 的 S8 清单里已登记。
 
 **实测**：676 测试全绿（666 + `SessionRuntimeStoreTest` 10）。真机 UI 测试未做（本轮锁屏）。
 
@@ -2442,7 +2442,7 @@ FileKit 的 Windows 实现是挂起函数 + COM，不占用调用线程。
    用 0x11 时 `Ctrl+V` 一次都没进 `handleComposerKey`；换 0xA2 立刻生效。
 2. **中文 IME 布局（`0x8040804`）会吞掉注入的普通按键** —— 字母 `a` 打进去没反应。
    用 Win+Space 切到 `0x4090409` 后 `abc` 正常输入。这与技能
-   [`dev-desktop-gui-e2e-testing`](../../skill/dev-desktop-gui-e2e-testing/SKILL.md) §1 的记录一致。
+   [`dev-desktop-gui-e2e-testing`](../../.ai/skill/dev-desktop-gui-e2e-testing/SKILL.md) §1 的记录一致。
 3. **`SetWindowPos(HWND_TOPMOST)` 之后点击/按键会失效**。
    置顶只应用于截图，交互前必须复原（技能 §3.4 也是这么写的）。
 

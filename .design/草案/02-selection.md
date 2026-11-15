@@ -4,9 +4,34 @@
 > 每个候选项都经过：注册表可获取性 → 许可证 → 平台已知缺陷 三项检查。
 > 新增/更换依赖必须更新本文件。
 >
-> **具体版本号与 `libs.versions.toml` 骨架以
-> [`../详细设计/工程与代码/02-依赖与版本.md`](../详细设计/工程与代码/02-依赖与版本.md) 为准**；
-> 本篇只保留选型与坑，不重复维护精确版本。
+> **基线 v0.6.0（2026-11-15）。** 具体版本号以 `gradle/libs.versions.toml` 为准；
+> 本篇只保留**选型与坑**，不重复维护精确版本。
+> v0.6.0 的架构基座（Decompose / MVIKotlin / Koin / Nucleus）见 §9。
+
+---
+
+## 0. v0.6.0 依赖总表（速查）
+
+| 层 | 坐标 | 版本 | 引入版本 |
+|---|---|---|---|
+| 语言 | Kotlin | 2.4.21 | — |
+| UI | Compose Multiplatform | 1.12.2 | — |
+| 自适应布局 | `adaptive-layout` / `adaptive-navigation` | 1.3.0 | — |
+| **架构** | `com.arkivanov.decompose:decompose` + `extensions-compose` | 3.6.2 | v0.6.0 |
+| **架构** | `com.arkivanov.mvikotlin:mvikotlin` + `-main` + `-extensions-coroutines` | 4.4.0 | v0.6.0 |
+| **DI** | `io.insert-koin:koin-core` + `koin-compose` + `koin-test` | 4.2.2 | v0.6.0 |
+| **窗口壳** | `dev.nucleusframework:nucleus.nucleus-application` + `nucleus.decorated-window-tao` | 3.0.0-dev-* | v0.6.0 |
+| **托盘** | `dev.nucleusframework:composenativetray` | 2.1.7 | v0.6.0 |
+| **文件对话框** | `io.github.vinceglb:filekit-dialogs-compose` | 0.17.0 | v0.6.0 |
+| **不可变集合** | `kotlinx-collections-immutable` | 0.5.2 | v0.6.0 |
+| **测试** | `app.cash.turbine:turbine` | 1.2.1 | v0.6.0 |
+| 网络 | Ktor client（CIO）+ WebSockets | 3.6.1 | — |
+| 序列化 | kotlinx-serialization-json | 1.12.0 | — |
+| 偏好 | multiplatform-settings | 1.3.0 | — |
+| 日期 | kotlinx-datetime | 0.8.0-0.6.x-compat | — |
+| 通知 | `nucleus.notification.windows` | 2.5.18 | — |
+
+**v0.6.0 移除**：`coil-compose` / `coil-svg` / `coil-network-ktor3`（改由 `modules/markdown-one` 自己声明）。
 
 ---
 
@@ -64,7 +89,7 @@
 | Markdown 渲染 | **自建公共库 `markdown-one`**（git submodule，Apache-2.0） | `:modules:markdown-one`（解析/块路由/高亮/mermaid/视口） | 见其 CHANGELOG |
 | 流式 Markdown | markdown-one 解析层（未闭合栅栏补齐 + 流式跳过浏览器类适配器） | 同上 | — |
 | 代码高亮 | markdown-one 的 `builtin.code`（Highlights + 正则补丁） | 同上（库内自带） | — |
-| 图片 / SVG | Coil 3 | `io.coil-kt.coil3:coil-compose` `coil-svg` `coil-network-ktor3` | 3.6.x |
+| 图片 / SVG | Coil 3（**由 `modules/markdown-one` 声明**，v0.6.0 起 `composeApp` 不再重复声明） | `io.coil-kt.coil3:coil-compose` `coil-svg` `coil-network-ktor3` | 3.6.x |
 | 图标 | Material Icons | `org.jetbrains.compose.material:material-icons-extended` | 随 CMP |
 | 等宽字体 | 系统字体族（Consolas / JetBrains Mono） | — | — |
 
@@ -170,7 +195,7 @@
 > 同时新增：`kotlinx-collections-immutable` 0.5.2、`composewebview` 1.0.3（仅插件宿主骨架用）、
 > Nucleus Tao（仅 `shell/`）、FileKit 0.17.0、Turbine 1.2.1（test）；
 > 移除 `adaptive-layout` / `adaptive-navigation` 与 `coil-*` 三件套（重复声明）。
-> **完整依赖表以 [`09-refactor.md`](09-refactor.md) §2.7 为准。**
+> **完整依赖表以 [`09-refactor.md`](../归档/v0.6.0-重构/09-refactor.md) §2.7 为准。**
 
 ---
 
@@ -195,10 +220,93 @@
 | 代码签名 | 本期不做（自用） |
 | 自动更新 | 自研极简版：启动时查版本文件 → 下载 → 校验 → 提示替换 |
 | 崩溃/日志 | 本地日志文件 + 设置页"打开日志目录" |
+| 裁剪运行时 | jlink（13 模块 + 6 个反射/服务加载项，见 `composeApp/build.gradle.kts` 的 `runtimeModules`） |
+
+**运行时裁剪不需要随 v0.6.0 重做**（2026-11-15 实测）：
+
+- 新增的 decompose / mvikotlin / koin / nucleus / filekit / kotlinx-collections-immutable
+  **一个都没有引入新的 JDK 模块**（都用 `java.base`）；
+- 用真实 runtime classpath 跑 `jdeps --print-module-deps`，与声明集合的差集只有
+  `jdk.javadoc`（已豁免）与 `jdk.security.auth`（`jdk.javadoc` 的传递需求）；
+- 用同一清单重新 jlink，模块清单与现有 `rt/` 完全相同（16 个），体积 51.0 vs 50.1 MB。
 
 ---
 
-## 9. 版本管理
+## 9. 架构基座（v0.6.0 引入）
+
+### 9.1 Decompose 3.6.2 —— Component 生命周期与导航
+
+| 用途 | API |
+|---|---|
+| 每个域的 ComponentContext | `ComponentContext` / `DefaultComponentContext` |
+| 域隔离（**profile 切换必须**） | `childContext("<域>:<profile>")` → 独立 InstanceKeeper |
+| 顶层导航 | `ChildStack`（`RootComponent`，替换整栈语义） |
+| 状态保留 | `InstanceKeeper.getOrCreate` |
+
+**选它的理由**：`back stack` 里 Component 不销毁、继续推进 —— 这条语义直接消掉了
+v0.5.x 的 `SessionShadow`（切走会话要手工累积影子事件）。
+
+**已知坑**：
+
+- `MainThreadChecker` 在 Tao 下是**误报**（`Expected to be called on the main thread, but was main`），
+  已在 `Main.kt` 里 `DecomposeSettings.update { mainThreadCheckEnabled = false }` 关掉；
+- `ChildStack` 的 `navigate` 有**两个**参数（`transformer` + `onComplete`），Decompose 3.6.2 没有默认值；
+- `NavigableListDetailPaneScaffold` 只有 Android 侧有，CMP desktop 用 navigator 等价实现。
+
+### 9.2 MVIKotlin 4.4.0 —— Store
+
+`Store<Intent, State, Label>` = Reducer（纯函数）+ Executor（唯一做 suspend/取消）。
+
+**坑（都是实测的）**：
+
+| 坑 | 应对 |
+|---|---|
+| 核心 jar **只有接口**，`DefaultStore` 在 `mvikotlin-main` | 生产代码必须依赖 `-main`，不能只放 `commonTest` |
+| `Executor` 在 `init` 里不能 `dispatch`（`Value was not initialized`） | 用 `Intent.Observe` 懒订阅 |
+| `Store.labels` 不重放才对 | 用 `Channel` → `receiveAsFlow`，不用 `SharedFlow` |
+| `while(true) { delay() }` 放 Executor 会让 `runTest` 永不 idle | 轮询放 Gateway（实现方） |
+
+### 9.3 Koin 4.2.2 —— DI
+
+**只做查询**，装配仍在 `AppContainer`（`DesktopContainer.build()`）—— 这样才能纯 JVM 构造容器做测试。
+`ModuleVerificationTest.checkModules()` 钉住图完整性。
+
+### 9.4 Nucleus Tao 3.0（`3.0.0-dev-*`）—— 桌面壳
+
+3.0 已删除全部 AWT 后端，只剩 Tao。**接受 dev 版**：稳定版不存在，且接触面全部收在 `shell/`
+（架构测试 #4 钉死），必要时可 vendor/fork。
+
+**关键实证**：
+
+- `nucleusApplication(enableSingleInstance = …)` 是公开参数（可关）；
+- `Dispatchers.Main` 在 Tao 下 = `main` 线程，`Dispatchers.Swing` = 另一条 `AWT-EventQueue-0`
+  —— 这一条推翻了「用 Swing 当 UI 线程」的旧写法（ADR-072）；
+- `TaoMonitors.all(null)` 不需要窗口句柄（通知窗几何用它，去掉 AWT 兜底）。
+
+### 9.5 FileKit 0.17.0 —— 文件对话框
+
+替代 `java.awt.FileDialog`。Windows 上是 JNA + COM `IFileOpenDialog`，**挂起函数**不占用调用线程
+（AWT 的 `FileDialog` 模态且自己跑事件循环，会阻塞 Tao 的主线程）。
+
+**提权进程下可用**（2026-11-15 真机验证：`pid=15308 elevated=true`，对话框正常弹出）。
+5 个选择器统一到 `commonMain/platform/FileDialogs.kt`，不再有 `expect/actual`。
+
+### 9.6 kotlinx-collections-immutable 0.5.2 —— 不可变集合
+
+State 里的 `List` / `Map` 用 `PersistentList` / `PersistentMap`，否则每次 state 变更整树重组。
+
+**注意 0.5.x 的 API 改名**（KEEP-0459）：`add`→`adding`、`removeAt`→`removingAt`、
+`set`→`replacingAt`、`put`→`putting`、`clear`→`cleared`。旧名是 WARNING + `ReplaceWith`，
+按编译器提示逐个改即可。
+
+### 9.7 Turbine 1.2.1 —— 测试
+
+`Store.state` / `Store.labels` 的**发射序列**（"多发/少发"）只有 `awaitItem()` 能抓。
+每个含 Label 的 Store 至少 1 例。
+
+---
+
+## 10. 版本管理
 
 所有版本集中在 `gradle/libs.versions.toml`。引入新依赖的顺序：
 
