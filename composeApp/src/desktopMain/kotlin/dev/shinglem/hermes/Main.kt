@@ -241,36 +241,6 @@ fun main(args: Array<String>) {
     // 单实例锁由 `nucleusApplication` 内部的 `acquireSingleInstanceLock` 取得（上面只设了配置）。
     startup.info("instance", "home=${home.absolutePath}（单实例由 Nucleus 判定）")
 
-    // 开机自启：写计划任务需要管理员，所以放在提权之后再对账（07 篇 §3.6）。
-    val autostartStatus = ScheduledAutostart.reconcile(
-        mode = container.config.app.autostart,
-        home = home,
-        exe = launcherExe(home),
-        elevated = container.elevated,
-    )
-    container.autostart.value = AutostartInfo(
-        configured = container.config.app.autostart == AutostartMode.TASK,
-        taskName = autostartStatus.taskName,
-        installed = autostartStatus.installed,
-        pending = autostartStatus.pending,
-        elevated = container.elevated,
-    )
-    startup.info(
-        "autostart",
-        "task=${autostartStatus.taskName} installed=${autostartStatus.installed} " +
-            "exeArgsMatch=${autostartStatus.matchesExeAndArgs} pending=${autostartStatus.pending} " +
-            "configured=${container.config.app.autostart}",
-    )
-    // 便携包挪过位置会留下指向旧路径的任务：只读扫描，交给设置页逐条确认删除。
-    val orphans = ScheduledAutostart.scanOrphans(autostartStatus.taskName)
-    container.orphanTasks.value = orphans
-    if (orphans.isNotEmpty()) {
-        startup.warn(
-            "autostart",
-            "发现 ${orphans.size} 个失效的自启任务：" + orphans.joinToString("; ") { "${it.name} -> ${it.command}" },
-        )
-    }
-
     val windowConfig = container.config.app.window
     val closeToTray = container.config.app.closeToTray
     val savedBounds = container.preferences.windowBounds
@@ -298,6 +268,41 @@ fun main(args: Array<String>) {
         // **必须在单实例判定之后**：第二个实例只是去唤醒已有窗口，不该去碰那个 dll ——
         // 那会让首实例正在使用的目录被半删。`nucleusApplication` 是判定通过后才进入的。
         LaunchedEffect(Unit) { startup.info("formula", ratexStatus()) }
+
+        // 开机自启：写计划任务需要管理员（07 篇 §3.6）。同样**必须在单实例判定之后** ——
+        // 第二实例以管理员身份跑时，`reconcile` 在任务不健康时会真的执行 `schtasks /Create`，
+        // 与首实例对同一个任务名竞争；`scanOrphans` 还要跑一次约 1 MB 的 `schtasks /Query /XML`。
+        LaunchedEffect(Unit) {
+            val autostartStatus = ScheduledAutostart.reconcile(
+                mode = container.config.app.autostart,
+                home = home,
+                exe = launcherExe(home),
+                elevated = container.elevated,
+            )
+            container.autostart.value = AutostartInfo(
+                configured = container.config.app.autostart == AutostartMode.TASK,
+                taskName = autostartStatus.taskName,
+                installed = autostartStatus.installed,
+                pending = autostartStatus.pending,
+                elevated = container.elevated,
+            )
+            startup.info(
+                "autostart",
+                "task=${autostartStatus.taskName} installed=${autostartStatus.installed} " +
+                    "exeArgsMatch=${autostartStatus.matchesExeAndArgs} pending=${autostartStatus.pending} " +
+                    "configured=${container.config.app.autostart}",
+            )
+            // 便携包挪过位置会留下指向旧路径的任务：只读扫描，交给设置页逐条确认删除。
+            val orphans = ScheduledAutostart.scanOrphans(autostartStatus.taskName)
+            container.orphanTasks.value = orphans
+            if (orphans.isNotEmpty()) {
+                startup.warn(
+                    "autostart",
+                    "发现 ${orphans.size} 个失效的自启任务：" +
+                        orphans.joinToString("; ") { "${it.name} -> ${it.command}" },
+                )
+            }
+        }
 
         // 托盘常驻：关窗只是隐藏，只有托盘菜单的「退出」才结束进程与后端子进程。
         var windowVisible by remember { mutableStateOf(!silent) }
