@@ -207,16 +207,15 @@ git -c http.proxy=http://127.0.0.1:7890 submodule update --init --recursive
 | `.design/草案/06-roadmap.md` | 分期计划与阶段门槛 |
 | `.design/草案/07-decisions.md` | 决策记录（ADR） |
 | `.design/草案/08-data-contract.md` | REST + WebSocket 契约要点 |
-| `.design/草案/09-refactor.md` | **v0.6.0 结构性重构（活文档）**：现状实测问题、目标结构、阶段 S0–S8 与退出条件、验收口径 |
-| `.design/详细设计/工程与代码/13-重构落地设计（v0.6.0）.md` | **v0.6.0 怎么改**：逐文件的目标目录树、import 边界、Component+Store 模板、各域签名、S0–S8 文件级任务 |
-| `.design/详细设计/工程与代码/14-测试计划（v0.6.0）.md` | **v0.6.0 怎么证**：573 个现有测试的处置、新增测试、8 条回归红线、每阶段测试门、真机清单 |
+| `.design/归档/` | **只读**：已执行完的计划与历史版本（v0.6.0 重构计划 09/13/14、v0.5.x 架构与路线图） |
 | `.ai/README.md` | 技能清单、来源与同步方式（唯一处） |
 | `.ai/skill/` | 按需加载的技能包（目录名 = 技能 ID，必须一级） |
 | `.design/详细设计/` | 落地设计（工程结构、依赖、Compose 约定、功能域、UI 视觉稿） |
 | `modules/markdown-one/` | Markdown 渲染库本体（submodule，Apache-2.0）：`README.md` 与 `docs/` 是它自己的文档 |
 | `modules/markdown-one/docs/api.md` | 渲染库的 API（`MarkdownText` / `MarkdownConfig` / `BlockAdapter` / 视口） |
 
-**工作前先读**：`00` → `03` → 与你任务相关的专题文档。**v0.6.0 期间再加一篇 `09`**（重构活文档）。
+**工作前先读**：`00` → `03` → 与你任务相关的专题文档。
+若要理解「为什么是现在这个架构」，去 `.design/归档/v0.6.0-重构/` 查当时的计划与踩坑。
 
 `.design/` 分两层：**`草案/`** 写「做什么、为什么」，**`详细设计/`** 写「怎么做」（如
 `详细设计/UI设计/`）。索引与写作规则见 `.design/README.md`；两层不重复同一内容。
@@ -274,8 +273,8 @@ New-Item -ItemType SymbolicLink -Path .github\skills -Target '../.ai/skill'
 | 单实例 / 启动时序 / 早期日志 | `.design/详细设计/工程与代码/08-单实例与启动时序.md` |
 | 内置 Hermes 后端 / payload / 运行时绿色化 | `.design/详细设计/工程与代码/06-本地后端与双模式.md`（payload 契约与双模式）· [`Shinglem/hermes-bundle`](https://github.com/Shinglem/hermes-bundle)（CI 构建流程与已知坑） |
 | RPC / REST 契约字段 | `.design/草案/08-data-contract.md` |
-| **v0.6.0 重构 / 迁 Nucleus Tao** | `.design/草案/09-refactor.md`（活文档）+ [`13-重构落地设计`](.design/详细设计/工程与代码/13-重构落地设计（v0.6.0）.md) + [`14-测试计划`](.design/详细设计/工程与代码/14-测试计划（v0.6.0）.md) |
-| **v0.6.1 嵌入槽位（浏览器面板 / 插件宿主 / 编辑器）** | `.design/草案/09-refactor.md` S7 + ADR-063 / ADR-064 |
+| **理解「为什么是现在这个架构」（重构动机 / 放弃过的方案）** | `.design/归档/v0.6.0-重构/09-refactor.md`（只读） |
+| **v0.6.1 嵌入槽位（浏览器面板 / 插件宿主 / 编辑器）** | ADR-063 / ADR-064（`.design/草案/07-decisions.md`）+ `.design/归档/v0.6.0-重构/09-refactor.md` §2.11 |
 | **插件要在 WebView 里跑 / 不自研插件机制 / 不嵌 VSCode** | ADR-064（`.design/草案/07-decisions.md`） |
 
 ---
@@ -309,7 +308,9 @@ New-Item -ItemType SymbolicLink -Path .github\skills -Target '../.ai/skill'
    [`dev-desktop-gui-e2e-testing`](.ai/skill/dev-desktop-gui-e2e-testing/SKILL.md) §3.5。
 7. **改过用户环境就要还原**：临时改 `config_custom.json`（提权开关、主题）先备份、验完还原；
    临时脚本、临时截图、临时置顶窗口一并清理。报告里写清"被测环境动过什么"。
-8. **v0.6.0 在 `feature/v0.6.0-refactor` 分支上做，不直接动 `main`**：阶段与退出条件见
-   `09-refactor.md` §3，逐文件改法见 `13-重构落地设计`，测试门见 `14-测试计划` §5。
+8. **v0.6.0 重构已完成（2026-11-15）**，`feature/v0.6.0-refactor` 分支上是新基线：
+   Component + Store 架构、桌面壳 = Nucleus Tao、业务代码零 AWT、823 个测试全绿。
+   当前架构看 `.design/草案/03-architecture.md`；当时的计划与踩坑在
+   `.design/归档/v0.6.0-重构/`（只读，用于查"为什么"）。
    每次提交前本地跑 `./gradlew :composeApp:compileKotlinDesktop :composeApp:desktopTest`，
    并记录 `@Test` 总数变化（**只增不减**，减少必须说明是搬家）。

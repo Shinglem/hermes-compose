@@ -2,15 +2,23 @@
 
 用 **Kotlin + Compose Multiplatform** 重写的 Hermes 桌面客户端。后端完全不动，只换前端外壳。
 
-> **当前状态：v0.3.0 已验收，待发布。**
-> 已落地：会话列表 / 流式对话 / composer / 能力三页 / 应用设置 / 打包与启动器 / 单实例与托盘 /
-> 设置中心（配置档案 / 模型 / 安全 / 提供方）/ 终端 / 对话深度（分页、导出、分支、纠偏、子代理面板、命令面板、通知）。
-> 终端自 v0.3.0 起是 **Compose 原生渲染**（自维护的 BossTerm 裁剪版），模块化为
-> `modules/terminal` + `modules/terminal-bossterm` + `modules/markdown-one`。
-> 上一个里程碑 tag 是 `v0.2.0`；变更明细见 [CHANGELOG.md](CHANGELOG.md)，分期与剩余缺口见
-> [.design/草案/06-roadmap.md](.design/草案/06-roadmap.md)。
+> **当前状态：v0.6.0（2026-11-15）—— 结构性重构完成。**
 >
-> 已知缺口（未接线 / 口径限定）：文件拖入终端、终端文本回放、消息附件图片缩略、终端「回看行数」只对新标签生效。
+> v0.6.0 换掉了内部地基（功能对等）：
+> **Component + Store 架构**（Decompose / MVIKotlin / Koin）、**桌面壳迁 Nucleus Tao**、
+> **业务代码零 AWT**（剪贴板与弹窗改 Win32 FFM）、文件对话框换 FileKit、托盘换原生菜单。
+> 16 个 `androidx.lifecycle.ViewModel` 全部退役；测试从 573 涨到 **823**。
+>
+> 已落地：会话列表 / 流式对话（Markdown / 图表 / 公式）/ composer（chip / 补全 / 粘贴图片）/
+> 审批与澄清 / 终端（Compose 原生渲染）/ 能力三页 / 设置中心（12 个域）/ 子代理面板 /
+> 命令面板 / 单实例 / 提权 / 计划任务自启 / 托盘 / 原生通知。
+>
+> 变更明细见 [CHANGELOG.md](CHANGELOG.md)，架构与现状见
+> [.design/草案/03-architecture.md](.design/草案/03-architecture.md)，
+> 下一步见 [.design/草案/06-roadmap.md](.design/草案/06-roadmap.md)。
+>
+> **已知未验证**：触摸滚动（本机无设备）、中文输入法完整链路（脚本注入被 IME 吞）。
+> **已知偏差**：`ChatViewModel` 仍是单文件 1951 行（唯一 >600 行文件，需 per-session Component）。
 
 ---
 

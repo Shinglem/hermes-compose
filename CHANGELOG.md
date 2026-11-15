@@ -6,6 +6,113 @@
 ---
 
 
+## [0.6.0] · 2026-11-15（hermes 0.23.0）
+
+> **完整包版本**：tag `v0.6.0-0.23.0`，由 CI `desktop-release` 构建。
+> 纯桌面外壳（不含 payload）；payload 与工具链不变：hermes 0.23.0 / `toolchain-v1`。
+>
+> 这是**结构性重构版本**：功能对等，但内部架构、桌面壳与依赖基座全部换过。
+> 用户可见的行为变化集中在桌面集成（提权 / 自启 / 托盘 / 文件对话框），
+> 其余部分是「同样的功能跑在新地基上」。
+
+### 架构（用户不可见，影响后续维护）
+
+- **Component + Store 架构**（ADR-057 ~ ADR-059）：16 个 `androidx.lifecycle.ViewModel` 全部
+  换成 Component（生命周期）+ Store（MVIKotlin 的 Reducer / Executor）。
+  `rg 'viewModel \{'` 与 `rg 'androidx.lifecycle.viewmodel'` 归零。
+  - 每个功能域一个 `Component`：对外只有 `state` / `effects` / `onIntent` 三样；
+  - `Reducer` 是纯函数，流式状态机可脱离框架逐条断言；
+  - 一次性事件从「5 个 `var onXxx` 回调」改为 `Flow<Effect>`（Label → Channel，不重放）。
+- **Decompose 3.6.2** 提供 `ComponentContext` 与 `ChildStack` 导航。
+  back stack 里 Component 不销毁、继续推进 —— 这条语义直接删掉了 `SessionShadow`
+  整套「切走会话手工累积影子事件」的补丁。
+- **Koin 4.2.2** 只做依赖查询，装配仍在 `AppContainer`（保持纯 JVM 可测）。
+- **Chat 域四类平行簿记各自成类**：`SessionRuntimeStore`（5 个 map → 1 个值对象 + O(1) 反向索引）、
+  `PendingRequests`（4 张待决表 → 1 张）、`SessionSnapshotCache`、`SessionModelCache`。
+  另抽出三个纯函数：`ApprovalTarget` / `RewindAndBranch` / `StaleFence`。
+
+### 桌面壳（用户可见）
+
+- **窗口壳迁 Nucleus Tao**（ADR-062）：`application{}` → `nucleusApplication{}`，
+  `Window` → `DecoratedWindow`，自绘标题栏。
+  - `Dispatchers.Main` 在 Tao 下是 `main` 线程（不再是 Swing EDT），
+    `UiDispatcher.context` 随之修正（ADR-072）；
+  - 自研单实例（250 行 + 83 行测试）删除，改由 Nucleus 判定（ADR-066）。
+- **托盘换成 `composenativetray`** 的原生菜单：修掉中文菜单乱码（CMP-1936）。
+- **文件对话框换 FileKit**：替代 `java.awt.FileDialog`（后者模态且自己跑事件循环，
+  会阻塞 Tao 的主线程）。提权进程下实测可用。
+- **业务代码彻底脱离 AWT**（ADR-075）：`jdeps` 对发布 jar 的分析里 `java.desktop` 引用降到 0。
+  - 剪贴板 → Win32 FFM（`OpenClipboard` / `GetClipboardData` / `SetClipboardData`）；
+  - 剪贴板位图 → `DibImage`（`CF_DIB` / `DIBV5` → RGBA）→ Skiko 编码 PNG；
+  - 错误弹窗 → Win32 `MessageBoxW`；
+  - 通知窗屏幕几何 → `TaoMonitors`（不需要窗口句柄）。
+- **Markdown / 高亮 / 图表 / 公式** 全部收进 `modules/markdown-one`（git submodule），
+  本仓库只做主题与文案接线。`composeApp` 不再重复声明 Coil 三件套。
+
+### 修复
+
+- **第二个实例不再做首实例该做的事**：ratex 的 native dll 解压、`schtasks` 自启对账、
+  提权重启都移到单实例判定之后。此前第二实例会去删/拷首实例正在用的 ratex 目录
+  （表现为「公式全变源码」），`app.elevate=ask` 时还会每次启动都先弹一个 UAC。
+- **切换配置档案后设置页仍读写旧档案**（严重）：`InstanceKeeper.getOrCreate` 按常量 key 复用
+  且不校验 factory，于是换 profile 只是重建了外壳、取回上一个档案的 Store ——
+  页面显示旧档案的密钥/模型，保存也写进旧档案。改为每域按 `(域, profile)` 派生**子上下文**。
+- **心跳探活整条链路曾丢失**：状态栏网关 chip 恒显示 `—`，
+  且「WS 还活着但 HTTP 已死」这个唯一的半死检测消失。已补回 5s 一轮的 `/api/status`
+  与 30s 一轮的 `/api/health`。
+- **profile 列表加载失败后永不再重试**（`profilesLoaded` 在请求前就置位）→
+  移到成功分支；否则后端启动慢一次，profile rail 会空到重启。
+- **子代理面板每次刷新清空已读输出**（重建列表时丢了 `tail`）→ 按 id 回填。
+- **设置页「已保存」提示静默消失**：`Box` 是 inline，分支里的裸 `return` 是非局部返回，
+  放在末尾的 `SnackbarHost` 被跳过。移到内容最前。
+- **运行中切换「桌面通知」开关不生效**（`enabled` 被捕获成构造期字段）→ 改为调用时读。
+- **MoA 页只切换预设就被标记「有未保存改动」** → `selected` 不参与保存，不再置脏。
+- **MoA 页提供方/模型下拉恒为空**：`?.state?.value` 不是快照读取，模型目录晚到不会重组 →
+  改 `collectAsState`。
+- **通知去重名额被「正看着」的情况吃掉**，导致该审批永不补提醒 → 判据顺序改为
+  「开关 → 场景 → 去重」（去重有副作用，必须最后）。
+- **能力页模式重启后丢失**（`OpenCapabilities` 不再写偏好）→ 补回；
+  设置页仍不写（一次性去处，重启回会话）。
+- **`shellState` 在事件收集器里被冻结成首帧快照** → 收集器 key 补 `activeProfile`。
+- **粘贴超长文本/图片的边界**：`readText` 加 8 MB 上限（`GlobalSize` 由外部进程决定，
+  无上限时 `toInt()` 会截断成负数）；`DibImage` 用 Long 计算像素总量并加尺寸上限
+  （Int 回绕会让长度守卫失效）。
+
+### 依赖
+
+新增：`decompose` 3.6.2 / `mvikotlin` 4.4.0 / `koin` 4.2.2 /
+`nucleus-application` + `decorated-window-tao` 3.0.0-dev / `composenativetray` 2.1.7 /
+`filekit` 0.17.0 / `kotlinx-collections-immutable` 0.5.2 / `turbine` 1.2.1。
+
+移除：`coil-compose` / `coil-svg` / `coil-network-ktor3`（改由 `modules/markdown-one` 声明）。
+
+**裁剪运行时不需要重做**：新增依赖没有引入任何新的 JDK 模块（都用 `java.base`）；
+用真实 runtime classpath 跑 `jdeps` 与重新 `jlink` 验证，模块清单与体积均不变。
+
+### 测试
+
+`@Test` 从 **573 → 823**（净增 250）。新增重点：
+
+- 每个含 Label 的 Store 至少 1 个 Turbine `awaitItem()` 断言；
+- `IntentDispatchCoverageTest`：断言每个 Intent 都有分派分支（`when` 是语句，编译期不报）；
+- `StateImmutabilityTest`：全部域 State 标 `@Immutable`；
+- `ComponentContextIsolationTest`：钉住「共用根上下文会串数据」这个反例本身；
+- `ChatReducerTest` / `PendingRequestsTest` / `SessionSnapshotCacheTest` /
+  `SubagentReducerTest` / `RewindAndBranchTest` / `ApprovalTargetTest`。
+
+### 升级
+
+- 覆盖 `bin/App.jar` 与 `lib/`（本次 `lib/` **有变化**：新增 8 个依赖、移除 3 个 Coil 包）。
+- **不建议**只拷 `App.jar`：缺新依赖会在启动时 `NoClassDefFoundError`。
+- `config/`、`data/`、`hermes/` 不动。
+
+### 已知未验证
+
+- 触摸滚动：本机无触摸设备。
+- 中文输入法完整链路：脚本注入的按键会被 IME 在 AWT/TSF 层消费，只能人工验。
+
+---
+
 ## [0.5.8] · 2026-11-13（hermes 0.23.0）
 
 > **完整包版本**：tag `v0.5.8-0.23.0`，由 CI `desktop-release` 构建。
@@ -938,10 +1045,10 @@ jlink 裁剪运行时、原生启动器打包、单实例与自启任务清理�
 
 | 数字 | 在哪 | 谁生成 | 谁消费 |
 |---|---|---|---|
-| `appVersion = "0.5.8"` | `composeApp/build.gradle.kts` | 手工 | jpackage 的 `packageVersion` / `-Djpackage.app-version`、启动器 cfg、发布资产文件名 |
+| `appVersion = "0.6.0"` | `composeApp/build.gradle.kts` | 手工 | jpackage 的 `packageVersion` / `-Djpackage.app-version`、启动器 cfg、发布资产文件名 |
 | `v<桌面版本>-<hermes版本>` | GitHub Release tag | `desktop-release` 按输入拼 | 发布资产入口、`gh release download` |
 
-**tag 就是唯一版本号**，形如 `v0.5.8-0.23.0`：前半是桌面端版本（对应 `appVersion`），
+**tag 就是唯一版本号**，形如 `v0.6.0-0.23.0`：前半是桌面端版本（对应 `appVersion`），
 后半是配套的 Hermes payload 版本（`Shinglem/hermes-bundle` 的 tag）。
 `appVersion` 只影响 exe 的属性与 cfg，不回写 tag。
 
@@ -950,7 +1057,7 @@ jlink 裁剪运行时、原生启动器打包、单实例与自启任务清理�
 
 | Release | tag 形式 | 资产 |
 |---|---|---|
-| 桌面端 | `v0.5.8-0.23.0` | `hermes-desktop-compose-0.5.8-0.23.0-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
+| 桌面端 | `v0.6.0-0.23.0` | `hermes-desktop-compose-0.6.0-0.23.0-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
 | 工具链 | `toolchain-v1` | `launcher-windows-x64.zip` / `runtime-windows-x64.zip` / `SHA256SUMS.txt` |
 | payload | 另一个仓库 `Shinglem/hermes-bundle` 的 `v0.23.0` | payload 压缩分卷 |
 
