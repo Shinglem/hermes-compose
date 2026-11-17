@@ -13,12 +13,17 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.LocalScrollbarStyle
+import androidx.compose.foundation.VerticalScrollbar
+
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.geometry.Offset
 import kotlin.math.abs
@@ -39,6 +44,7 @@ import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.getValue
@@ -49,6 +55,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.pointer.onPointerEvent
 import org.jetbrains.compose.resources.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -103,6 +118,7 @@ import dev.shinglem.hermes.ui.component.ConfirmDialog
 import dev.shinglem.hermes.ui.component.ErrorBanner
 import dev.shinglem.hermes.ui.icon.AppIcons
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 
 /**
  * 会话模式的右栏：顶栏 + 消息列表 + 审批卡片 + composer。
@@ -168,6 +184,9 @@ fun ChatPane(
     }
 
     val listState = rememberLazyListState()
+    // 键盘滚动与滚动条要用到的两样东西（都在组合期取，不要放进 key 事件回调里 new）。
+    val density = LocalDensity.current
+    val scrollScope = rememberCoroutineScope()
     var followTail by remember { mutableStateOf(true) }
     // 用户「向下滚」之后才允许自动恢复跟随。否则补滚自己造成的「贴底」会被当成
     // 用户回到底部，于是形成「滚一格 → 被拉回 → 判成回底 → 恢复跟随」的来回闪。
@@ -282,6 +301,48 @@ fun ChatPane(
                         if (delta > 0f) userScrolledUp() else userScrolledDown()
                     },
                 )
+                // 键盘翻页 / 跳首尾。LazyColumn 默认只认滚轮和方向键（且方向键要先拿到焦点），
+                // PageUp/PageDown/Home/End 完全没接 —— 长对话只能靠拖滚动条（实测反馈）。
+                //
+                // 放在**容器**上而不是列表上：列表项里有可聚焦的文本/按钮，事件常常先被它们接走。
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown) {
+                        false
+                    } else {
+                        val pagePx = with(density) { PAGE_HEIGHT.dp.toPx() }
+                        when {
+                            event.isPageDown() -> {
+                                scrollScope.launch {
+                                    userScrolledDown()
+                                    listState.animateScrollBy(pagePx)
+                                }
+                                true
+                            }
+                            event.isPageUp() -> {
+                                scrollScope.launch {
+                                    userScrolledUp()
+                                    listState.animateScrollBy(-pagePx)
+                                }
+                                true
+                            }
+                            event.isEnd() -> {
+                                scrollScope.launch {
+                                    userScrolledDown()
+                                    if (totalItems > 0) listState.animateScrollToItem(totalItems - 1)
+                                }
+                                true
+                            }
+                            event.isHome() -> {
+                                scrollScope.launch {
+                                    userScrolledUp()
+                                    listState.animateScrollToItem(0)
+                                }
+                                true
+                            }
+                            else -> false
+                        }
+                    }
+                }
                 .onPointerEvent(PointerEventType.Scroll) { event ->
                     val delta = event.changes.firstOrNull()?.scrollDelta ?: Offset.Zero
                     // 只处理**垂直**滚动。Shift+滚轮 / 触摸板双指横划（以及公式块的横向滚动）
@@ -335,12 +396,13 @@ fun ChatPane(
                     )
                 }
 
-                else -> LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = sidePadding, vertical = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
+                else -> Box(Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = sidePadding, vertical = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
                     item(key = "older", contentType = "hint") {
                         OlderMessagesRow(
                             state = state,
@@ -374,6 +436,30 @@ fun ChatPane(
                                 onReconnect = onReconnect,
                             )
                         }
+                    }
+                    }
+
+                    // 垂直滚动条。CMP 的 desktop `VerticalScrollbar` 是 Material 之外的
+                    // foundation 组件（`androidx.compose.foundation.VerticalScrollbar`），
+                    // 与 `LazyListState` 直接适配。
+                    //
+                    // 只在能滚时显示（`canScrollForward || canScrollBackward`），
+                    // 否则短对话右侧会一直挂一条无意义的灰色竖线。
+                    val canScroll by remember(listState) {
+                        derivedStateOf { listState.canScrollForward || listState.canScrollBackward }
+                    }
+                    if (canScroll) {
+                        VerticalScrollbar(
+                            adapter = rememberScrollbarAdapter(listState),
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .fillMaxHeight()
+                                .padding(vertical = 4.dp),
+                            style = LocalScrollbarStyle.current.copy(
+                                unhoverColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+                                hoverColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.9f),
+                            ),
+                        )
                     }
                 }
             }
@@ -550,3 +636,27 @@ private fun followTweenMs(gapPx: Int): Int = (gapPx / 1.2f).toInt().coerceIn(40,
 
 private fun chatSidePadding(available: Dp): Dp =
     (available * 0.06f).coerceIn(ChatSidePaddingMin, ChatSidePaddingMax)
+
+/** 翻页步长：约一屏高度（dp），留一点上下文。 */
+private const val PAGE_HEIGHT = 700
+
+/**
+ * `PageDown` / `PageUp` / `Home` / `End` 的判定。
+ *
+ * 都要求**不带修饰键**：`Ctrl+Home` 之类的组合留给未来的快捷键（终端 / 光标移动），
+ * 抢掉会让那些语义失效。
+ */
+private fun KeyEvent.isPageDown(): Boolean =
+    type == KeyEventType.KeyDown && key == Key.PageDown && !isShiftPressed && !isCtrlDown()
+
+private fun KeyEvent.isPageUp(): Boolean =
+    type == KeyEventType.KeyDown && key == Key.PageUp && !isShiftPressed && !isCtrlDown()
+
+private fun KeyEvent.isHome(): Boolean =
+    type == KeyEventType.KeyDown && key == Key.MoveHome && !isShiftPressed && !isCtrlDown()
+
+private fun KeyEvent.isEnd(): Boolean =
+    type == KeyEventType.KeyDown && key == Key.MoveEnd && !isShiftPressed && !isCtrlDown()
+
+private fun KeyEvent.isCtrlDown(): Boolean =
+    (this.nativeKeyEvent as? java.awt.event.KeyEvent)?.isControlDown == true

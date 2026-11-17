@@ -188,6 +188,8 @@ object DesktopContainer {
             elevated = Elevation.isElevated(),
             elevateRequested = config.app.elevate == ElevateMode.ASK,
             deleteOrphanTask = { name -> ScheduledAutostart.deleteTask(name) },
+            // 浏览器侧栏（v0.6.1，ADR-082）：只发现，不拉起、不杀。
+            browserGateway = DesktopBrowserGateway(hermesHome = paths.hermesHomeDir(config)),
         )
     }
 

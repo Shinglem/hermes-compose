@@ -11,6 +11,7 @@ import dev.shinglem.hermes.core.log.AppLogger
 import dev.shinglem.hermes.core.prefs.AppPreferences
 import dev.shinglem.hermes.core.transport.GatewayClient
 import dev.shinglem.hermes.core.transport.RestClient
+import dev.shinglem.hermes.component.browser.BrowserGateway
 import dev.shinglem.hermes.feature.capabilities.CapabilityRepository
 import dev.shinglem.hermes.feature.chat.ChatRepository
 import dev.shinglem.hermes.feature.composer.ComposerRepository
@@ -94,6 +95,13 @@ class AppContainer(
     val orphanTasks: MutableStateFlow<List<OrphanTaskInfo>> = MutableStateFlow(emptyList()),
     /** 删除一条失效任务（需要管理员）。返回 false = 失败，UI 保留条目。 */
     val deleteOrphanTask: (String) -> Boolean = { false },
+    /**
+     * 浏览器侧栏的发现/查询端口（v0.6.1，ADR-082）。
+     *
+     * 平台相关（要读 launch record + 查 `HWND`），所以实现由 `desktopMain` 注入；
+     * 缺省是一个"永远找不到"的实现，让非桌面编译期与预览都不必关心它。
+     */
+    val browserGateway: BrowserGateway = BrowserGateway.Empty,
 ) {
     fun close() {
         // 顺序：先断 WS（避免后端写事件时对端消失），再停子进程，最后收尾。

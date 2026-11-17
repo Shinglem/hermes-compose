@@ -40,6 +40,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import dev.shinglem.hermes.core.app.ProductInfo
 import dev.shinglem.hermes.core.log.Log
 import dev.shinglem.hermes.core.transport.GatewayEventTypes
@@ -57,6 +59,13 @@ import dev.shinglem.hermes.component.sessionlist.DefaultSessionListComponent
 import dev.shinglem.hermes.component.root.DefaultRootComponent
 import dev.shinglem.hermes.component.sessionlist.SessionListComponent
 import dev.shinglem.hermes.component.capability.CapabilityComponent
+import dev.shinglem.hermes.component.browser.BrowserEffect
+import dev.shinglem.hermes.component.browser.BrowserIntent
+import dev.shinglem.hermes.component.browser.Phase
+import dev.shinglem.hermes.component.browser.store.isBrowserTool
+import dev.shinglem.hermes.feature.browser.BrowserSidePanel
+import dev.shinglem.hermes.feature.browser.BrowserSlot
+import dev.shinglem.hermes.platform.openExternalUrl
 import dev.shinglem.hermes.component.capability.DefaultCapabilityComponent
 import dev.shinglem.hermes.component.composer.ComposerComponent
 import dev.shinglem.hermes.component.composer.DefaultComposerComponent
@@ -103,6 +112,7 @@ import dev.shinglem.hermes.feature.settings.SettingsViewModel
 import dev.shinglem.hermes.component.updater.DefaultUpdaterComponent
 import dev.shinglem.hermes.component.updater.RestUpdaterGateway
 import dev.shinglem.hermes.component.updater.UpdaterIntent
+import kotlinx.coroutines.delay
 import dev.shinglem.hermes.feature.subagent.SubagentPanel
 import dev.shinglem.hermes.component.subagent.DefaultSubagentComponent
 import dev.shinglem.hermes.component.subagent.RpcSubagentGateway
@@ -186,6 +196,8 @@ fun AppShell(
     val moaComponent = deps.moaComponent
     val modelSettingsComponent = deps.modelSettingsComponent
     val profilesComponent = deps.profilesComponent
+    val browserState = deps.browserState
+    val browserComponent = deps.browserComponent
 
     // RootComponent 接管导航（S5）：mode 的事实源仍是 ShellComponent，这里只做投影。
     LaunchedEffect(deps.mode) { deps.rootComponent.syncFromMode(deps.mode) }
@@ -236,6 +248,25 @@ fun AppShell(
         container.gateway.events
             .filter { it.type == GatewayEventTypes.SESSIONS_CHANGED }
             .collect { sessionViewModel.onSessionsChanged() }
+    }
+
+    // agent 开始操作浏览器 → **纳管**那个窗口（收进本进程），但**不打开抽屉**。
+    // 用户要求：抽屉默认关闭，只有当用户点侧栏时才展示画面。
+    // 也**不要**改回"启动时就纳管"：那时浏览器通常还不存在，而且不该抢别的程序留下的浏览器。
+    LaunchedEffect(container) {
+        container.gateway.events
+            .filter { it.type == GatewayEventTypes.TOOL_START }
+            .collect { event ->
+                val name = event.payload
+                    ?.let { it as? JsonObject }
+                    ?.get("name")
+                    ?.let { (it as? JsonPrimitive)?.content }
+                    .orEmpty()
+                if (isBrowserTool(name)) {
+                    Log.info("browser: agent 开始操作浏览器（$name），纳管窗口")
+                    browserComponent.onIntent(BrowserIntent.TakeOver)
+                }
+            }
     }
 
     // profile 是全局上下文：切了就作废能力页的数据（跨域约定 §3.1）。
@@ -433,6 +464,31 @@ fun AppShell(
         TerminalQuoteBridge.quotes.collect { text -> composerViewModel.quote(text) }
     }
 
+    // 浏览器侧栏的一次性事件：目前只有「在系统浏览器打开」。
+    LaunchedEffect(deps.browserComponent) {
+        deps.browserComponent.effects.collect { effect ->
+            when (effect) {
+                is BrowserEffect.OpenExternal -> openExternalUrl(effect.url)
+            }
+        }
+    }
+
+    // 浏览器槽位的心跳：每 5s 跑一次完整发现。
+    //
+    // **不要**在这里加 `if (!takenOver) return` —— 那样"还没纳管"的时候就没有任何兜底了。
+    // 实测踩过：TakeOver 的重试窗口（5s）用完仍没找到（后端 daemon 故障时 Chrome 起来的
+    // 但窗口异常），之后心跳也不跑 → 用户看到任务栏有浏览器图标，抽屉里却一直找不到，
+    // 只能手动点「重新连接」。
+    //
+    // 现在心跳无条件下跑：discoverOnce 内部按 pid 去重（已纳管的不重复挂），
+    // 同时把已关闭的摘掉 —— 一趟扫描同时覆盖"发现新的"与"清掉死的"。
+    LaunchedEffect(deps.browserComponent) {
+        while (true) {
+            delay(BROWSER_HEARTBEAT_MS)
+            deps.browserComponent.onIntent(BrowserIntent.Heartbeat)
+        }
+    }
+
     // 分支出的新会话：刷新列表并选中它（分支结果是 live 的，列表里马上能看到）。
 
     // 运行态点：连上后端后每 5s 刷一次活跃会话集合（失败静默）。
@@ -616,9 +672,34 @@ fun AppShell(
 
                 ShellMode.CAPABILITIES -> CapabilitiesModeContent(deps = deps, modifier = Modifier.weight(1f))
             }
+
+            // 浏览器抽屉（v0.6.1，ADR-082）：挂在内容区右侧、与 rail 平级。
+            // 窄窗时自动收起（`railCompact` 同一个断点）——不给一个挤死对话区的抽屉。
+            if (!railCompact) {
+                BrowserSidePanel(
+                    state = browserState,
+                    onTogglePanel = { browserComponent.onIntent(BrowserIntent.TogglePanel) },
+                    onRefresh = { browserComponent.onIntent(BrowserIntent.Refresh) },
+                    onOpenInSystemBrowser = { browserComponent.onIntent(BrowserIntent.OpenInSystemBrowser) },
+                    onDismissError = { browserComponent.onIntent(BrowserIntent.DismissError) },
+                    onOpenBrowserSettings = {
+                        shellComponent.onIntent(dev.shinglem.hermes.component.shell.ShellIntent.OpenSettings)
+                        settingsViewModel.select(SettingsPage.About)
+                    },
+                    onResize = { widthDp -> browserComponent.onIntent(BrowserIntent.ResizePanel(widthDp)) },
+                    onSelectTarget = { pid -> browserComponent.onIntent(BrowserIntent.SelectTarget(pid)) },
+                    content = { pid, slotModifier ->
+                        val hwnd = browserState.targets.firstOrNull { it.pid == pid }?.hwnd ?: 0L
+                        BrowserSlot(hwnd = hwnd, modifier = slotModifier)
+                    },
+                )
+            }
         }
     }
 }
 
 /** rail 收成纯图标列的宽度分界。 */
 internal val RailCompactBreakpoint = 960.dp
+
+/** 浏览器抽屉的存活心跳间隔：只在抽屉展开期间跑。 */
+private const val BROWSER_HEARTBEAT_MS = 5_000L

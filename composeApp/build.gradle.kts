@@ -112,6 +112,10 @@ kotlin {
             implementation(libs.nucleus.decorated.window.tao)
             implementation(libs.composenativetray)
 
+            // WebView（ADR-078 的 S1/S2 spike）：Nucleus 官方 WebView 构件。
+            // 先放进 desktopMain classpath 只为探针；正式接入时移到 `:modules:editor-host`。
+            implementation(libs.composewebview)
+
             // ViewModel 的 viewModelScope 依赖 Dispatchers.Main.immediate，desktop 默认没有
             implementation(libs.kotlinx.coroutines.swing)
         }
@@ -285,7 +289,7 @@ val appMainClass = "dev.shinglem.hermes.MainKt"
  *
  * 从 0.5.1 起**小版本也发全量包**（CI `desktop-release`，产物是纯外壳、不含 payload）。
  */
-val appVersion = "0.6.0"
+val appVersion = "0.6.1"
 
 /**
  * 产物名：jpackage 的 `--name` / `packageName`，决定
@@ -885,12 +889,92 @@ tasks.register<JavaExec>("clipboardAcceptance") {
     hermesRtDir?.let { dir -> setExecutable("$dir\\bin\\java.exe") }
 }
 
+// WebView 探针（ADR-078 的 S1/S2 回归判据）：composewebview 在 Tao 3.0 下能否承载 Monaco。
+// 结论已定（见探针文件头部表格）；换 Nucleus 版本 / WebView2 运行时后重跑一次。
+tasks.register<JavaExec>("webViewProbe") {
+    group = "verification"
+    description = "探针：composewebview × Nucleus 3.0 可用性 + 真源下的 fetch/worker 能力矩阵"
+    mainClass.set("dev.shinglem.hermes.shell.spike.WebViewProbeMainKt")
+    dependsOn("desktopMainClasses")
+    val desktopMain = kotlin.targets.getByName("desktop").compilations.getByName("main")
+    classpath = files(desktopMain.output.classesDirs, desktopMain.runtimeDependencyFiles)
+    workingDir = layout.projectDirectory.asFile
+    systemProperty("java.awt.headless", "false")
+    jvmArgs("--enable-native-access=ALL-UNNAMED", "-Dfile.encoding=UTF-8")
+    hermesRtDir?.let { dir -> setExecutable("$dir\\bin\\java.exe") }
+}
 
+// WebView 探针第三轮（S3/S4）：真实 Monaco 资产 + 假 HermesFsProvider + diff editor。
+// 素材在 `.local/webview-probe/`（不入库），见 WebViewProbe3Main.kt 头部注释。
+tasks.register<JavaExec>("webViewProbe3") {
+    group = "verification"
+    description = "探针：真实 Monaco 在 loopback 服务下加载；假 provider 的 stat/readdir；createDiffEditor"
+    mainClass.set("dev.shinglem.hermes.shell.spike.WebViewProbe3MainKt")
+    dependsOn("desktopMainClasses")
+    val desktopMain = kotlin.targets.getByName("desktop").compilations.getByName("main")
+    classpath = files(desktopMain.output.classesDirs, desktopMain.runtimeDependencyFiles)
+    workingDir = layout.projectDirectory.asFile
+    systemProperty("java.awt.headless", "false")
+    systemProperty(
+        "hermes.probe.assets",
+        rootProject.layout.projectDirectory.dir(".local/webview-probe").asFile.absolutePath,
+    )
+    jvmArgs("--enable-native-access=ALL-UNNAMED", "-Dfile.encoding=UTF-8")
+    hermesRtDir?.let { dir -> setExecutable("$dir\\bin\\java.exe") }
+}
+
+// 浏览器 attach 探针（v0.6.1）：NativeView 能否嵌**后端 launcher 拉起的**跨进程 Chromium 窗口。
+// 前置：先用后端 launcher 起浏览器并取 HWND（见 BrowserAttachProbeMain.kt 头部）。
+//   ./gradlew :composeApp:browserAttachProbe -Phermes.probe.hwnd=<HWND>
+tasks.register<JavaExec>("browserAttachProbe") {
+    group = "verification"
+    description = "探针：NativeView 嵌外部进程顶层窗口（跨进程 + DComp overlay + resize）"
+    mainClass.set("dev.shinglem.hermes.shell.spike.BrowserAttachProbeMainKt")
+    dependsOn("desktopMainClasses")
+    val desktopMain = kotlin.targets.getByName("desktop").compilations.getByName("main")
+    classpath = files(desktopMain.output.classesDirs, desktopMain.runtimeDependencyFiles)
+    workingDir = layout.projectDirectory.asFile
+    systemProperty("java.awt.headless", "false")
+    providers.gradleProperty("hermes.probe.hwnd").orNull?.let { systemProperty("hermes.probe.hwnd", it) }
+    providers.gradleProperty("hermes.probe.pid").orNull?.let { systemProperty("hermes.probe.pid", it) }
+    providers.gradleProperty("hermes.probe.holdS").orNull?.let { systemProperty("hermes.probe.holdS", it) }
+    jvmArgs("--enable-native-access=ALL-UNNAMED", "-Dfile.encoding=UTF-8")
+    hermesRtDir?.let { dir -> setExecutable("$dir\\bin\\java.exe") }
+}
+
+// 浏览器发现探针（v0.6.1）：BrowserDiscovery 能否在真实后端 launcher 的浏览器上走到 Found。
+//   ./gradlew :composeApp:browserDiscoveryProbe -Phermes.probe.home=<HERMES_HOME>
+tasks.register<JavaExec>("browserDiscoveryProbe") {
+    group = "verification"
+    description = "探针：record → pid → HWND → 端口 的完整发现链路（无窗口）"
+    mainClass.set("dev.shinglem.hermes.shell.spike.BrowserDiscoveryProbeMainKt")
+    dependsOn("desktopMainClasses")
+    val desktopMain = kotlin.targets.getByName("desktop").compilations.getByName("main")
+    classpath = files(desktopMain.output.classesDirs, desktopMain.runtimeDependencyFiles)
+    workingDir = layout.projectDirectory.asFile
+    providers.gradleProperty("hermes.probe.home").orNull?.let { systemProperty("hermes.probe.home", it) }
+    jvmArgs("--enable-native-access=ALL-UNNAMED", "-Dfile.encoding=UTF-8")
+    hermesRtDir?.let { dir -> setExecutable("$dir\\bin\\java.exe") }
+}
+
+// 浏览器布局探针（v0.6.1）：纳管与展示是否独立 —— 收起状态下纳管是否保持。
+//   ./gradlew :composeApp:browserLayoutProbe -Phermes.probe.home=<HERMES_HOME>
+tasks.register<JavaExec>("browserLayoutProbe") {
+    group = "verification"
+    description = "探针：TakeOver 后抽屉仍关闭、窗口不跳回独立窗口、展开后有画面"
+    mainClass.set("dev.shinglem.hermes.shell.spike.BrowserLayoutProbeMainKt")
+    dependsOn("desktopMainClasses")
+    val desktopMain = kotlin.targets.getByName("desktop").compilations.getByName("main")
+    classpath = files(desktopMain.output.classesDirs, desktopMain.runtimeDependencyFiles)
+    workingDir = layout.projectDirectory.asFile
+    systemProperty("java.awt.headless", "false")
+    providers.gradleProperty("hermes.probe.home").orNull?.let { systemProperty("hermes.probe.home", it) }
+    jvmArgs("--enable-native-access=ALL-UNNAMED", "-Dfile.encoding=UTF-8")
+    hermesRtDir?.let { dir -> setExecutable("$dir\\bin\\java.exe") }
+}
 
 /**
  * 把 desktop runtime classpath 的 jar 路径逐行打出来（供 jdeps / 本地核查）。
- *
- * 为什么需要它：`jdeps --print-module-deps` 必须喂**真实**的运行时 classpath 才有意义。
  * 拿 `release-test/lib` 当 classpath 会漏掉新加的依赖（那份是上一次打包的快照），
  * 于是"模块闭包没变"这种结论是假的 —— 实测踩过：用旧 lib 得到的结果里连
  * decompose / mvikotlin / koin / nucleus 都不在。

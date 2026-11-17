@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.arkivanov.decompose.ComponentContext
+import dev.shinglem.hermes.component.browser.DefaultBrowserComponent
 import dev.shinglem.hermes.component.backend.DefaultBackendComponent
 import dev.shinglem.hermes.component.backend.ProviderBackendGateway
 import dev.shinglem.hermes.component.capability.CapabilityComponent
@@ -94,6 +95,9 @@ class AppShellDeps(
     val moaComponent: dev.shinglem.hermes.component.settings.DefaultMoaComponent,
     val modelSettingsComponent: dev.shinglem.hermes.component.settings.DefaultModelSettingsComponent,
     val profilesComponent: dev.shinglem.hermes.component.settings.DefaultProfilesComponent,
+    /** 浏览器侧栏（v0.6.1，ADR-082）。 */
+    val browserComponent: dev.shinglem.hermes.component.browser.BrowserComponent,
+    val browserState: dev.shinglem.hermes.component.browser.BrowserState,
     /** 当前 mode 的名字（`NewShellState.mode.name`）：`AppShell` 用它做导航投影的 key。 */
     val mode: String,
 )
@@ -304,6 +308,15 @@ fun rememberAppShellDeps(container: AppContainer, context: ComponentContext): Ap
         )
     }
 
+    // 浏览器侧栏（v0.6.1，ADR-082）：只**显示** agent 已拉起的浏览器，不拥有它。
+    // gateway 是平台相关的（commonMain 不认识 HWND），由 container 注入。
+    val browserComponent = remember(context) {
+        DefaultBrowserComponent(
+            componentContext = context,
+            gateway = container.browserGateway,
+        )
+    }
+
     // 派生状态。`collectAsStateWithLifecycle` 是唯一必须在组合期做的部分。
     val sessionState by sessionViewModel.state.collectAsStateWithLifecycle()
     val chatState by chatComponent.state.collectAsStateWithLifecycle()
@@ -312,6 +325,7 @@ fun rememberAppShellDeps(container: AppContainer, context: ComponentContext): Ap
     val settingsState by settingsViewModel.state.collectAsStateWithLifecycle()
     val subagentState by subagentComponent.state.collectAsStateWithLifecycle()
     val updateState by updaterComponent.state.collectAsStateWithLifecycle()
+    val browserState by browserComponent.state.collectAsStateWithLifecycle()
     val maintenanceScopeKey by maintenance.profileKey.collectAsStateWithLifecycle()
 
     val maintenanceProfileChoices = remember(shellState.profilesOrEmpty) {
@@ -361,6 +375,8 @@ fun rememberAppShellDeps(container: AppContainer, context: ComponentContext): Ap
         moaComponent = moaComponent,
         modelSettingsComponent = modelSettingsComponent,
         profilesComponent = profilesComponent,
+        browserComponent = browserComponent,
+        browserState = browserState,
         mode = newShellState.mode.name,
     )
 }

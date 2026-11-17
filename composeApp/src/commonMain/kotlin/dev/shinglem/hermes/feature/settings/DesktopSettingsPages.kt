@@ -124,7 +124,11 @@ fun NotificationsPage(
 /**
  * 「桌面 → 浏览器」：让 agent 操作的浏览器可见。
  *
- * `headed` 最终变成后端子进程的 `AGENT_BROWSER_HEADED` 环境变量，所以**改完要重启后端**。
+ * ⚠️ 这一页的 `headed` 开关目前**只是兼容老后端**：它注入 `AGENT_BROWSER_HEADED` 环境变量，
+ * 而后端自 config 52 起**运行期不再读这个变量**（只在 51→52 的迁移里用过一次）。
+ * 真正生效的是后端 `config.yaml` 的 `browser.headed`（`browser_session_cloud.is_headed_mode`）。
+ * 见 ADR-082 的「纠正两条与实测不符的旧结论」。
+ *
  * `args` 走的是后端 `browser.chromium_args`（`PUT /api/config` 深合并），**改完即时生效**。
  * 后端的浏览器可执行文件不用配：payload 里已随包带 PM 管理的 Chromium
  * （`hermes/tools/chromium-1208/`）。
@@ -158,8 +162,7 @@ fun BrowserPage(
                     text = if (headed) "当前：开启（可在任务栏看到浏览器）" else "当前：关闭（后台运行）",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+                )            }
             Switch(checked = headed, onCheckedChange = onHeadedToggle)
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -167,7 +170,7 @@ fun BrowserPage(
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Text(
             text = buildString {
-                append("「显示浏览器窗口」需要**重启后端**才生效（走环境变量注入）；")
+                append("「显示浏览器窗口」需要后端以 headed 模式启动浏览器；")
                 append("下面的启动参数是写进后端配置的，**即时生效**。")
                 append("\n\n")
                 append("浏览器用的是随包附带的 Chromium，不需要单独安装，也不会往用户目录写文件。")

@@ -72,6 +72,11 @@ nucleus-app = "3.0.0-dev-202611061347"
 # 托盘：2.1.0 起与 `-app` 拆分，只引本体。与 Tao 3.0 的兼容性待 S6 实测。
 composenativetray = "2.1.7"
 
+# WebView（ADR-078）：**Nucleus 官方 WebView 构件**，独立发版，MIT。
+# 内部 = Windows 上 WebView2 CompositionController + Tao `NativeView`。
+# 与 nucleus-app 3.0.0-dev 的符号兼容性已用 javap 核对（只引用 4 个 tao 符号，全部存在）。
+composewebview = "1.0.3"
+
 # 不可变集合：State 里的 List/Map 换成 Immutable*，否则每次 state 变更整树重组
 # （现状 @Immutable 全仓仅 1 处）。0.5.x 有 copy 类方法重命名（add→adding 等，KEEP-0459），
 # 见技能 kotlin-tooling-immutable-collections-0-5-x-migration。
@@ -151,6 +156,8 @@ turbine                    = { module = "app.cash.turbine:turbine", version.ref 
 nucleus-application        = { module = "dev.nucleusframework:nucleus.nucleus-application", version.ref = "nucleus-app" }
 nucleus-decorated-window-tao = { module = "dev.nucleusframework:nucleus.decorated-window-tao", version.ref = "nucleus-app" }
 composenativetray          = { module = "dev.nucleusframework:composenativetray", version.ref = "composenativetray" }
+# WebView（ADR-078）：Nucleus 官方 WebView，独立发版号；Windows 上是 WebView2 + NativeView。
+composewebview             = { module = "dev.nucleusframework:composewebview", version.ref = "composewebview" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
