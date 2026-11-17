@@ -304,7 +304,7 @@ S6 迁 Nucleus Tao 后，`Dispatchers.Main` 的提供者变了：Nucleus 注册�
 | 不做 | 原因 |
 |---|---|
 | 自研插件机制 / JS 插件宿主 | 前端插件返回 `ReactNode`，保留生态 = 自造 WebView（ADR-003、ADR-064） |
-| 文件树 / 内置代码编辑器 / diff 视图 | 跳转外部 VSCode / IDEA（ADR-005） |
+| 文件树 / 内置代码编辑器 / diff 视图 | 跳转外部 VSCode / IDEA（ADR-005，**现行实现不变**）。**2026-11-16 起三条调研线**：① WebView + Monaco；② 自研 + 对标开源（aardink 内核 + auto-dev 文件系统/diff）；③ md-one 分工。**均未选型**，见 ADR-078~081 |
 | 远程屏幕（noVNC / RFB） | 用 ToDesk / AweSun |
 | 机器人聊天窗口 / 群聊窗口 | 本期只做「会话」主窗口 |
 | 视觉 1:1 复刻 | 用 M3 原生组件；稿子是参考稿 |

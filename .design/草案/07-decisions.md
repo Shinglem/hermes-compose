@@ -84,6 +84,14 @@
 > 若将来要内嵌，只选**单进程原生轻量编辑器**（几 MB、纯 Win32 窗口），
 > 机制走 `NativeView`（ADR-063 的同一套），届时单独开 ADR。
 
+> **2026-11-16 修订（ADR-078）**：本条**待重审** —— 已有一条调研线
+> （文件树 + 多类型预览 + Monaco 跑在 Nucleus WebView 上，文件全走 `/api/fs/*`，不接 LSP / git），
+> 并完成 S1–S5 实测（S5 体积 2026-11-16 复核后**已达标**：裁剪后 4.41 MiB < 8 MB）。
+> **但方向未定**：与 `@codingame/monaco-vscode-api`、纯 Compose、code-server、Kortex 等尚未比较完。
+> 定稿之前，本条**按现行实现执行**（跳外部编辑器，`feature/editors/` 原样不动）。
+> 上面「单进程原生轻量编辑器 + `NativeView`」这条路线，在"文件全走接口"的前提下不成立
+> （没有现成编辑器支持 HTTP 文件系统），换前提需重新评估。详见 ADR-078。
+
 ---
 
 ## ADR-006 · chip 用"预处理 + annotator"
@@ -1559,6 +1567,12 @@ Decompose `ChildPanels`（`Main` / `Details`，`mode = SINGLE | DUAL | TRIPLE`�
 
 ## ADR-063 · 浏览器面板用 `NativeView` 嵌自有 Chromium（不用像素流、不用 WebView）
 
+> **2026-11-16 修订（ADR-082）："谁拉起这只浏览器"改成 attach agent 已经拉起的那一只。**
+> 面板形态（`NativeView` + `nucleusHwndPlatformView`）、DComp 覆盖层、安全边界、
+> `--do-not-de-elevate` 全部沿用本条；变的只有归属：**客户端不再自己拉起、不再写
+> `browser.cdp_url`、不再杀进程**。原因与四项实测见 ADR-082。
+> 下文「我们自己拉起」的表述按此修订理解。
+
 **决策**：hermes 浏览器面板 = **我们自己拉起** payload 自带的 Chromium（headed）→ 拿顶层
 `HWND` → `NativeView` + `nucleusHwndPlatformView` 嵌进 Compose 面板；
 **同时**带 `--remote-debugging-port=0`，把 `cdp_url` 写后端，让 agent 操作的就是这一块。
@@ -1625,7 +1639,7 @@ resize / 最小化 / DPI 切换 / 提权下可用性是 S7 的硬验点，不过
 Notepad-- 一类，几 MB、纯 Win32 窗口），机制已就绪（同样是 `HWND` → `NativeView` 一个槽位），
 不需要新架构。ADR-005「不做文件树 / 自研编辑器内核」不变。
 
-**后果**：`composewebview 1.0.3`（MIT，Tao-only）或自写 WebView2 controller 二选一
+**后果**：`composewebview 1.0.3`（MIT，Tao-only；**Nucleus 官方 WebView 构件**，独立发版）或自写 WebView2 controller 二选一
 （S7 spike 定）；本机 WebView2 Runtime 157.0.4341.46 已装，发布时需检测并引导安装；
 ADR-002 / ADR-003 的**结论仍有效**（不自造 WebView、不做 JS 引擎宿主），
 只是现在有了"官方机制 + 隔离容器"这条可行路径。
@@ -2605,3 +2619,441 @@ Component 化达成：现在 `AppShell` 里没有任何状态管理逻辑，只�
 **"迁移完成"不等于"每个域都用同一套模板"。** 模板的价值在于让**有分支**的状态机可测；
 对"调接口 → 更新状态"的域，套模板只增加代码量，不增加可验证性。
 判断依据应该是"这个域有没有会出错的决策"，而不是"别人都拆了"。'
+
+---
+
+## ADR-078 · 内嵌编辑器调研：Monaco on Nucleus WebView + HTTP 文件 provider
+
+> **状态：Spike / 调研记录，未选型（2026-11-16，S5 已复核修正）。**
+> 本条记录「Nucleus WebView（`composewebview`）+ Monaco + 文件全走 `/api/fs/*`」这条调研线的
+> 形态与实测结论（S1–S5 全部通过；S5 体积裁剪后 4.41 MiB）。
+> **它不是对「文件与编辑器该怎么做」的最终决策** —— 与纯 Compose 预览器、
+> `@codingame/monaco-vscode-api`、code-server、Kortex 等方向的横向比较尚未做完。
+> ADR-005 因此仍处于**待重审**状态，现行实现（跳外部编辑器）不变。
+> 域级调研记录见 [`详细设计/功能/07-文件与编辑器.md`](../详细设计/功能/07-文件与编辑器.md)。
+
+**这条调研线的形态**：
+
+1. **所有文件内容只走 Hermes 的 `/api/fs/*`**，客户端（含 `desktopMain`）**不直接读盘**；
+2. 编辑器宿主是 **Nucleus 的 WebView 构件 `dev.nucleusframework:composewebview`**
+   里跑的 **`@codingame/monaco-vscode-api`**（MIT），文件系统能力由我们注册的
+   **`HermesFsProvider`** 提供；
+3. **不接 LSP、不接 git**。预览 + 编辑保存即可，diff 只做「两个文件对比」与「当前 vs 快照」；
+4. **外部编辑器跳转保留**，仍是聊天里点路径的默认动作。
+
+**替代方案（本调研线内的取舍）**：
+
+| 候选 | 情况 |
+|---|---|
+| **纯 Compose 预览器**（`highlightCode` + 自绘树） | 文件树、高亮、diff、折叠、多光标全部自维护；语言覆盖 39+6 种（SyntaxMP）；无现成 diff 组件。**代价最小但工作量最大** |
+| **`@codingame/monaco-vscode-api`（ESM）** | **本调研线内最有希望的一档**：5–10 MB 可裁剪，且**唯一提供 explorer / `IFileSystemProvider`**。尚未实测 |
+| **Kortex**（约 640 KB，Compose 原生） | 最轻、架构面最小，走官方 `TextInputService`（IME 通路正确）；阻塞点是 skiko 依赖 0.9.37.4 vs 本项目 0.150.x，跨度极大 |
+| **Zed**（62.1 MB / GPL-3.0） | 远程 = SSH 到同一台机器再起自己的 server，与后端托管 workspace 是两套路径；D3D11 硬要求；GPL 分发需合规 |
+| **Lapce**（19.7 MB / Apache-2.0） | 同 Zed 的路径问题；发版极慢（v0.4.5 → v0.4.6 隔 9 个月） |
+| **code-server / openvscode-server**（MIT） | 零 provider 代码、功能最全，但要额外跑 Node 服务（包约 187 MB）。**保留为退路** |
+| **Scintilla + 自绘外壳 / Aardink** | 外壳自己画 = 维护面最重；无远程能力 |
+
+### 为什么宿主考虑 `composewebview`（而不是别的 WebView 库或自建 controller）
+
+**它是 Nucleus 自己的 WebView 能力，不是第三方库** —— 只是独立仓库、独立版本号：
+
+- Nucleus 官方文档站 `nucleusframework.dev/en/docs/webview` 明写
+  «The artifact is `dev.nucleusframework:composewebview`»；
+- 源码仓库 `NucleusFramework/ComposeNativeWebview`，与 Nucleus 同组织、同一套 `NativeView` 机制；
+- Nucleus 主线 `settings.gradle.kts`（3.0 分支，103 个 `include`）**没有** webview 模块 ——
+  它一直是"独立发版"，与 system tray / PDF reader 同类；
+- Windows 上它内部就是 **WebView2 `CompositionController` + Tao `NativeView`**
+  （反编译 `WindowsWebView2NativeWebView.asPlatformView()` 返回 `NucleusPlatformView$HWnd`）。
+
+**与 Nucleus 3.0 的兼容性已用字节码核对**（不是估计）：`composewebview 1.0.3` 只引用 4 个 tao 符号，
+`3.0.0-dev-202611150604` 全部提供 —— `NativeView-hGBTI10`（旧 4 参重载，3.0 保留了）、
+`DecoratedWindowKt.getLocalTaoWindow`、`TaoWindow.getNativeHandle()`、
+`NucleusPlatformView$HWnd` 及其 `getHwndHandle / resize / setBounds / clearFocus / setCornerRadius / dispose`。
+风险因此从「链接期 `NoSuchMethodError`」降为「运行期行为需实测」（焦点 / DPI / DComp 合成）。
+依赖冲突用 `resolutionStrategy` 强制到项目统一的 Nucleus 版本。
+
+**理由**：
+
+1. **不需要自研编辑器 UI**。纯 Compose 方案（`highlightCode` + 自绘树 + 自绘 diff）能跑，
+   但语言覆盖、diff 渲染、折叠、多光标、选区全部要长期自己维护。`monaco-vscode-api`
+   把 VS Code 的服务层抽成可嵌入模块，explorer / 编辑器 / diff 都是上游代码，
+   我们只维护一个 provider（约 200–400 行）。
+2. **"文件全走接口"与"用 WebView 装 Monaco"是同一件事的两半**。一旦文件只能经 HTTP 取，
+   内嵌外部编辑器（Zed / Lapce）就失去意义 —— 它们读的是本地磁盘或自己的 SSH 通道，
+   与本项目「后端托管 workspace（`SshWorkspaceFs`）」是两套路径，git / 内容会对不上。
+3. **不嵌入外部程序的原生窗口**。`NativeView` 的 DComp 覆盖层、单实例抓窗口、DPI、UIPI
+   这一整串风险（ADR-063 在 Chromium 上踩过的）都不需要重新趟一遍 ——
+   WebView 构件已把「WebView2 → `NucleusPlatformView.HWnd`」封装好。
+4. **取舍可量化**：Monaco 的 `min/vs` 完整集 **24.38 MB**（138 文件），删掉非中文语言包后
+   **22.04 MB**；**再按本 ADR 的裁剪规则删掉四个语言服务 worker 与 `toggleHighContrast`
+   后实测 4.41 MiB（4,623,470 B）**，低于原定 8 MB 目标（2026-11-16 复核，见 07 §11.1.1）。
+   早期记的「22.04 MB 是最小可用集、无法按 worker 裁剪」**是错的** —— 见下方 S5 行。
+
+**两条硬限制（已核实后端，不是估算）**：
+
+| 项 | 事实 | 我们的做法 |
+|---|---|---|
+| `stat` | `/api/fs/list` 只返回 `{name, path, isDirectory}`；`size` 可由 `HEAD /api/fs/download` 的 `Content-Length` 补；**`mtime` 无任何端点提供** | provider 一律 `mtime = 0`、`size = undefined`；**不做逐条 HEAD**（100 文件的目录 = 100 个请求） |
+| `watch` | 后端 `hermes_cli/` 无任何文件监听；WebSocket 端点全表（`/api/events` `/api/pty` `/api/host-terminal` `/api/display/ws` `/api/console` `/api/pub` `/api/ws` + 两条 audio）**没有文件通道**；`/api/events` 只承载会话事件 | **方案 3（agent 工具事件启发式刷新）**：监听 `tool_use`，工具名命中 `write_file` / `patch` / `edit` 等时按路径失效缓存并重拉；配手动刷新。**已知覆盖缺口**：外部编辑器改的、agent 用终端命令改的都不触发 |
+
+`mtime = 0` 的连带效应：Monaco 内部基于 `mtime` 的缓存判断会失效 → 每次重新读。
+对我们反而安全（不会读到陈旧内容），但要在 `readFile` 里加一层短期缓存（同路径 2 秒内复用）。
+
+**后果**：
+
+1. **ADR-005 的"跳外部编辑器"降级为默认动作之一**，不再是非目标的替代品；
+   它的实现（`feature/editors/` 五动作 + 模板占位符）**原样保留**。
+2. **新增依赖**：`dev.nucleusframework:composewebview:1.0.3`（MIT；Nucleus 官方 WebView，
+   独立发版；与本项目 Nucleus `3.0.0-dev-*` 的符号兼容性**已用 `javap` 核对通过**，运行期仍需 spike）、
+   Monaco 前端资产（打包进资源）。`libs.versions.toml` 与 `02-selection.md` 需同步。
+3. **宿主页方案（已实测确定）**：**自起 loopback http 服务**（Ktor CIO，绑 `127.0.0.1`、端口 `0`），
+   页面走 `WebContent.Url("http://127.0.0.1:<port>/index.html")`，`/api/fs/*` 由该服务**反向代理**到后端。
+   原因（2026-11-16 三探针实测，`./gradlew :composeApp:webViewProbe`）：
+   - `data:` 源（`WebContent.Data` / `loadHtml`）`origin = null` → `fetch` 失败、
+     `new Worker(httpUrl)` 抛异常，只有 blob worker 能用；
+   - `loadHtml(baseUrl=…)` 的 `baseUrl` **被忽略**，且 `loadHtml` 行为依赖上下文（三次不导航、一次生效）；
+   - `http://127.0.0.1:<port>` 真源下 `fetch` 同源 ok、blob worker ok、8 并发 worker 全 ok；
+   - **不能直连后端**：CORS 是白名单制（`_LocalOriginCORSMiddleware` 只放行 bound_port /
+     `dashboard.public_url` / `HERMES_DESKTOP_DEV_SERVER`），随机端口不在内 → 必须反代。
+   附带结论：`composewebview` 没暴露 `SetVirtualHostNameToFolderMapping`，但**也不再需要**
+   （本地 http 服务本身就是真源）。
+4. **URI scheme 不能用 `file:`**：统一 `hermes-fs:/<绝对路径>`，否则 Monaco 会走内置本地 provider
+   去读本机磁盘（远程读不到，本机绕过全部后端安全检查）。
+5. **`/api/fs/list` 的错误是 200 + `error` 字段**：客户端必须检查，否则表现为"空目录"。
+6. **`read-text` 超 512 KiB 截断**、**`write-text` 无版本比对**：UI 要显式提示截断，
+   保存前必须重读比对。
+7. **桥用构件自带的 `WebViewJsBridge`**，不另造 `window.hermes.*`：页面侧
+   `window.kmpJsBridge.callNative("editorEvent", json, cb)`，Kotlin 侧注册 `IJsMessageHandler`；
+   反方向用 `navigator.evaluateJavaScript(script)`。
+8. 域级设计见 [`详细设计/功能/07-文件与编辑器.md`](../详细设计/功能/07-文件与编辑器.md)。
+
+**spike 五条判据**（S1–S5 全部通过，S5 于 2026-11-16 复核修正）：
+
+| # | 判据 | 状态 / 结论 |
+|---|---|---|
+| **S1** | **宿主页走本地 http 真源**（`data:` 源下 fetch / `new Worker(http)` 均失败，已实测） | ✅ Ktor CIO loopback 服务 + 反代 `/api/fs` |
+| **S2** | `composewebview 1.0.3` 与 Nucleus 3.0 **运行期**共存（窗口能开、WebView 能显示、JS 桥正常） | ✅ 通过 |
+| **S3** | 真实 Monaco 在真源下可用（91 种语言、`colorize` 出 26 span、`editor.worker` 可构造） | ✅ 通过（`webViewProbe3`） |
+| **S4** | `createDiffEditor` 正常（改动 2 行 → `getLineChanges()` 返回 1 条） | ✅ 通过 |
+| **S5** | 包增量 ≤ 8 MB | ✅ **通过（2026-11-16 复核）**：裁剪后 **4.41 MiB** |
+
+**S5 的原结论是错的（已修正）**。此前记「22.04 MB 是最小可用集、AMD 依赖链导致无法按 worker 裁剪」，
+实际是**把未裁剪量当成了裁剪后量**。复核过程：
+
+- `.local/webview-probe/vs` 全量 = **22.05 MiB / 126 文件 / 23,115,314 B**（这就是那个 22.04）；
+- 按「删 `vs/language/{typescript,css,html,json}` + `vs/assets/{ts,css,html,json}.worker-*`
+  + `vs/toggleHighContrast*`」实删后 = **4.41 MiB / 4,623,470 B**；
+- **注意素材目录有 `vs/language/language/…` 的双层嵌套**（准备素材时多拷了一层）。
+  按 `vs/language/typescript` 删是删不到的，会得到一个虚假的中间值 12.03 MiB。
+  裁剪脚本必须对**实际层级**操作，或先把嵌套拍平。
+
+也就是说 `editor.main.js` 的 AMD `define` **并不**硬依赖那四个语言服务 worker ——
+探针3 的记录能佐证：`langs=count=91;hasKotlin=true`、`colorize` 出 26 span、`editor.worker` 可构造、
+`createDiffEditor` 正常，而它加载的资产里 `vs/language/language/*` 那四个 worker 与 `editor.main`
+是**不同的加载路径**（`editor.main` 在 `vs/editor/`，语言着色在 `vs/*.js` 的 basic-languages 里）。
+
+**仍需注意的边界**：删掉 ts/css/html/json worker 之后，**这四个语言没有智能补全/诊断**
+（只保留着色）—— 与「不接 LSP」的既定边界一致，不是回归。
+
+**S3 附带的重要修正**：纯 `monaco-editor` **没有** explorer / `IFileSystemProvider`
+（`monaco.FileType` 不存在）。也就是说「文件树 UI 交给 Monaco」这个设想**只有 C 能实现**；
+选 A/B 就必须自己用 Compose 画文件树。
+
+> S1/S2 的探针保留在 `composeApp/src/desktopMain/.../shell/spike/WebViewProbeMain.kt`，
+> 任务名 `webViewProbe`，结果写 `composeApp/build/webview-probe.txt`。
+> **换 Nucleus 版本或 WebView2 运行时后重跑一次。**
+
+### 后续（不进本期，留作备选/演进）
+
+| 项 | 说明 |
+|---|---|
+| **Kortex fork** | 最轻的纯 Compose 编辑器内核（约 640 KB），且走官方 `TextInputService`（IME 通路正确）。若将来要摆脱 WebView，它是最优起点；阻塞点是 skiko `0.9.37.4` → 本项目 `0.150.x` 的跨度 |
+| **code-server 回退** | 若 `composewebview` 或 Monaco 侧被证伪，退到服务端方案（零 provider 代码，代价是额外 Node 服务） |
+| **Markdown 专用编辑器（L1）** | `markdown-one` 已有完整渲染（6,188 行 / 24 个测试文件）。块级 Live Preview 只需 ~40 行改动（稳定 key + 单块解析入口）+ 独立编辑层；渲染层原地编辑（L2）因 `InlineWalker` 的有损变换不可行 |
+
+---
+
+## ADR-079 · 自研编辑器线：对标 `phodal/auto-dev` 照抄实现
+
+> **状态：调研记录，未选型（2026-11-16）。**
+> 本条记录与 ADR-078（WebView 线）**并列的第二条候选**：纯 Compose 自研，
+> 但照抄 [`phodal/auto-dev`](https://github.com/phodal/auto-dev) 里两块成熟实现作为起点。
+> 域级记录见 [`详细设计/功能/07-文件与编辑器.md`](../详细设计/功能/07-文件与编辑器.md) §14。
+
+**背景**：auto-dev 3.0（Xiuper）是 Kotlin Multiplatform 的 AI 开发平台，**11 万+ 行**，
+和我们面对同一类问题（文件浏览 / 代码展示 / diff / 终端 / agent 协作）。
+其中 `xiuper-fs`（5,510 行）与 `mpp-core` 的 diff（约 1,245 行）与我们要做的几乎一一对应。
+
+**值得照抄的两块**：
+
+| 来源 | 内容 | 与本项目的对应 |
+|---|---|---|
+| `xiuper-fs` 的 `XiuperFileSystem` | `stat / list / read / write / delete / mkdir / commit` + `FsErrorCode`（9 个码）+ `Mount`（多后端挂载：memory / db / github / **http** / mcp） | 与 `/api/fs/*` **一一对应**；local/remote 天然是两个 mount；`FsStat.size/mime/modifiedAt` **全是 nullable**，印证「`mtime` 拿不到」是常态 |
+| `xiuper-fs` 的 `RestFsBackend` | 486 行，Ktor + `RestSchema`（路径→URL 映射）+ 错误码映射 | 与我们的 `HermesFsBackend` / `HermesFsProvider` **同构**，可作实现参照 |
+| `mpp-core/.../agent/diff/` | `DiffUtils.kt`(232) + `DiffModels.kt`(347) + `DiffProvider.kt`(144) + `DiffFormatter.kt`(223) + `DiffContextCompressor.kt`(299) + 3 个测试 | 自实现 **LCS 逐行 diff**，无第三方依赖；我们自研 diff 时可照抄 |
+| `mpp-ui/.../codereview/diff/` | `DiffFileTreeView.kt`(510) + `DiffCenterView.kt`(775) + `VerticalResizableSplitPane` | 「文件树 + diff 双栏」的成熟布局参照 |
+
+**它的短板（正好印证我们的判断）**：`FsRepository` 只有手动 `refreshDir()`；
+全仓库搜 `WatchService` / `FileSystemWatcher` / `inotify` **零命中**。
+→ 与我们的**方案 3（agent 工具事件 + 手动刷新）**是同一个答案，「无原生 watch」不是妥协而是行业做法。
+
+**注意它没有我们要的编辑器**：`DevInEditorInput`（958 行）是**聊天输入框**（`BasicTextField` +
+DevIn 语法高亮 + `@` 补全）；`DiffCenterView` 是**只读** `Text` 渲染。**代码编辑器仍需自研。**
+
+**三条路径与取舍**：
+
+| 路径 | 做法 | 结论 |
+|---|---|---|
+| **A. 照接口重写** | 按 `XiuperFileSystem` 的形状设计 `HermesFileSystem`（`stat/list/read/write` + `FsErrorCode` + `Mount`），实现指向 `/api/fs/*` | ✅ **首选**。思想/接口形状不受版权保护，无许可风险 |
+| **B. 单文件引用** | 直接引用 `DiffUtils.kt`（232 行，独立无依赖） | ⚠️ 需保留 MPL-2.0 声明；后续修改该文件要开源 |
+| **C. 整仓 fork 精简** | — | ❌ **不做**：11 万行、要的部分仅占 6%、MPL 传染、深度耦合（抽一个组件要连带 6 个子系统）、Alpha、版本基线差一代（`kotlin 2.3.20`/`compose 1.11.1`/JVM 17 vs 本项目 `2.4.21`/`1.12.2`/JVM 25） |
+
+**「作为一个模块」的形态**：做成 `:modules:files`（类比 `:modules:terminal`），对外只暴露
+`HermesFileSystem`（`stat/list/read/write`）与 `DiffEngine`（`diff(old, new): List<DiffLine>`）。
+
+**后果**：
+
+1. 这条线与 ADR-078 的 WebView 线**在数据层可合流**：共用同一份 `HermesFileSystem` / Repository，
+   只在渲染层分叉（Markdown 用 `markdown-one`、代码可 Monaco 或自绘、diff 可内置或自绘）。
+2. **许可纪律**：不许把 auto-dev 的源码文件直接拷进本仓库（除 B 路径那一个文件并保留 MPL 头）；
+   照形状重写时也不要逐行翻译，按我们自己的命名与错误模型实现。
+3. 与 `待修复问题 #2` 的关系：本条只是**增加一个候选**，不改变 #2 的「调研中，未选型」状态。
+
+---
+
+## ADR-080 · 调研对象总账：哪个库抄哪一部分
+
+> **状态：调研记录（2026-11-16）。** 汇总 ADR-078 / ADR-079 与后续几轮调研（aardink、Kortex、ReqLab），
+> 给出**可抄清单**与**许可红线**。详细表格见
+> [`详细设计/功能/07-文件与编辑器.md`](../详细设计/功能/07-文件与编辑器.md) §15 / §16。
+
+### 总览
+
+| 项目 | 许可 | 规模 | 可抄什么 | 结论 |
+|---|---|---|---|---|
+| **aardink** 1.1.0 | **Apache-2.0** | 24,187 行 / 2.3 MB | **编辑内核四件套**：GapBuffer(111) + LineIndex(139) + CodeDocument(307) + TokenStore(326)；IME 桥（`EditorInputNode` 236 + `EditorImeAdapter` 400 + `ImeWindowBuffer` 267）；虚拟化（`VirtualizedEditorBody` 496 + `EditorDrawing` 461）；多光标（`SelectionSet` 87 + `SelectionExpander` 188）；撤销（`UndoHistory` 144） | ★★★ **唯一架构级可抄** |
+| **auto-dev** | **MPL-2.0** | 110,000+ 行 | `XiuperFileSystem` 接口**形状**（163 行）+ `FsTypes`（92）+ `FsRepository`（171）；`DiffUtils`（232，LCS）；`DiffFileTreeView`(510) / `DiffCenterView`(775) 的 UI 结构 | ★★★ 概念可抄，**代码慎用** |
+| **Kortex** 1.1.0 | Apache-2.0 | ~640 KB | IME 桥思路（与 aardink 独立同构）、Rope 文本模型、`EditorOptions` 默认值 | ★★ 备选参照；阻塞点 skiko 0.9 vs 0.150 |
+| **ReqLab** | Apache-2.0 | `editor-ui` ~3k 行 | **只借模块划分**与高亮注册表模式；**编辑器本身不可用**（`utf16CodePoint` 路径 → 中文打不出） | ✗ IME 硬伤 |
+| **monaco-editor** | MIT | 22 MB | 整体用，无法拆；**无 explorer**（`monaco.FileType` 不存在） | 见 ADR-078 |
+| **@codingame/monaco-vscode-api** | MIT | 5–10 MB（估） | explorer / `IFileSystemProvider` | 未实测 |
+| **code-server** | MIT | 187 MB | 零代码可抄，整体部署 | 退路 |
+| **Zed** | **GPL-3.0** | 62.1 MB | ❌ 仅功能参照（不能链接进代码） | — |
+| **Lapce** | Apache-2.0 | 19.7 MB | ❌ Rust 跨语言，仅功能参照 | — |
+
+### 按需求反查（关键几条）
+
+| 要做 | 首选参照 |
+|---|---|
+| 文件系统抽象 / HTTP 后端 | auto-dev `XiuperFileSystem` + `RestFsBackend`（**照形状重写**） |
+| 文本缓冲 | aardink `GapBuffer`（简单）或 Kortex `Krope`（Rope，极大文件） |
+| 增量高亮 | aardink `TokenStore`（移位而非重算） |
+| **IME 桥** | **aardink `EditorInputNode` + `EditorImeAdapter`**（`PlatformTextInputModifierNode` + 窗口化） |
+| 虚拟化绘制 | aardink `VirtualizedEditorBody` + `EditorDrawing` |
+| diff 算法 | auto-dev `DiffUtils`（MPL）或 `io.github.petertrr:kotlin-multiplatform-diff`（MIT） |
+| Markdown 块渲染 | **本仓库 `markdown-one`**（无需外部参照） |
+
+### 三条必须带走的踩坑经验（来自 aardink 注释）
+
+1. **每行独立 Paragraph** —— 整篇一个 paragraph 会让首尾行行高不一致。
+2. **TokenStore 的 lines 列表整体替换，绝不清空再填** —— 并发下的编辑会丢。
+3. **IME 上屏与硬件按键同一出口** —— 打字规则、撤销分组、多光标镜像才能一致。
+
+### 许可红线
+
+| 许可 | 允许 | 必须 |
+|---|---|---|
+| Apache-2.0 / MIT | 复制、修改、闭源分发 | 保留许可与版权声明 |
+| **MPL-2.0**（auto-dev） | 复制、修改、可与闭源代码链接 | **被修改的 MPL 文件必须以 MPL 开源**（文件级传染）——要么只借形状，要么整文件复制并保留头 |
+| **GPL-3.0**（Zed） | 原样分发二进制 | **不能链接进我们的代码** |
+
+---
+
+## ADR-081 · Markdown 编辑方案：md-one + 编辑器分工
+
+> **状态：调研记录，未选型（2026-11-16）。**
+> 这是「自研 Markdown 编辑器」讨论出的方案，与 ADR-078（WebView 线）、ADR-079（对标开源）。
+> 设计细节见 [`详细设计/功能/07-文件与编辑器.md`](../详细设计/功能/07-文件与编辑器.md) §16。
+
+**决策方向**：**md-one 不废弃**，作为**预览器**；编辑态放在上层模块，两者分工。
+
+```
+:modules:markdown-one        渲染 + onBlockClick + activeBlockKey（~55 行加性改动）
+:modules:md-editor           块编辑态、光标、splice、脏块重解析、IME
+composeApp                   只看到 MdEditorPane
+```
+
+**md-one 需要的改动（实测约 55 行，全部是加性）**：
+
+| # | 改动 | 规模 |
+|---|---|---|
+| ① | `MarkdownConfig` 加 `onBlockClick: (MdBlock) -> Unit` | ~20 行 |
+| ② | 加 `activeBlockKey: String?` 做当前块高亮 | ~15 行 |
+| ③ | 块 → 源码 offset | **已有**（`node.startOffset/endOffset`） |
+| ④ | **稳定块 key**（`b$index` → 内容哈希 + 结构路径） | ~20 行（**必须先做**） |
+| ⑤ | 「源码态」`BlockAdapter`（L1 才需要） | ~60 行 |
+
+**两种模式**：分栏（源码 ｜ 预览，**低风险**，3–5 天）／ L1 块级编辑（光标块显源码，2–4 周）。
+
+**为什么不是「废弃 md-one、编辑器统一」**（该方案已否决）：
+
+| 能力 | 废弃 md-one 后 |
+|---|---|
+| 表格 / mermaid / 公式 / 图片 / HTML | ❌ 全部只能显示源码 |
+| 渲染模式原地编辑（L2） | 仍需重写块渲染 + 标记可见性；`InlineWalker` 的有损变换无解 |
+
+**与 aardink 的关系：从「互斥」变「分工」** —— aardink 架构只用于**源码编辑区**，
+md-one 只用于**预览区**，两者在**不同的 Composable 子树**里，互不冲突。
+
+**后果**：
+
+1. md-one 只增加性改动，24 个测试文件不受影响。
+2. 源码区可以先用 `BasicTextField`（约 300 行 + md 高亮），性能不够再换 aardink 式内核。
+3. **块 key 稳定性（④）必须先做** —— 否则编辑时中间插入会让后续所有块 key 变化，
+   导致整屏重组、图片重载、图表重建。
+4. 与 ADR-078/079 不冲突：Monaco 管代码文件、md-one + 编辑器管 Markdown，可并存。
+
+
+---
+
+## ADR-082 · 浏览器面板：attach agent 自己的 Chromium（`NativeView` 嵌外部进程窗口）
+
+> **状态：已决（2026-11-16），四项前置实测全部通过。** v0.6.1 的落地依据。
+> 取代 ADR-063 中「客户端自己拉起 Chromium」的那一半 —— 面板形态、`NativeView` 机制、
+> 安全边界全部沿用 ADR-063；**只有"谁拉起这只浏览器"变了**。
+
+### 决策
+
+浏览器面板**不自己拉起 Chromium**，而是**嵌入 agent 已经拉起的那一只**：
+
+1. **发现**：读后端 launch record（`<HERMES_HOME>/cache/browser/chromium-records/*.json`）
+   拿 `pid` / `user_data_dir` / `devtools`；端口从该 profile 的 `DevToolsActivePort` 读。
+   **不需要 `browser.cdp_url`** —— 那只在用户手配或 `/browser connect` 时才有值，
+   agent 默认的临时实例不写它。
+2. **取窗口**：`pid` → 顶层 `HWND`（`MainWindowHandle` 等价物）。
+3. **嵌入**：`NativeView(factory = { nucleusHwndPlatformView(handle = { hwnd }) })`，
+   与 ADR-063 完全一致。
+4. **只读显示**：槽位**不拥有**进程。面板关闭 / 销毁槽位**不杀**浏览器；杀不杀是 agent 的事。
+
+### 为什么改主意（ADR-063 原方案的三个问题）
+
+| 原方案（自己拉起） | 实测问题 |
+|---|---|
+| 自己 `Start-Process chrome.exe` 再嵌 | 起了**第二只**浏览器，与 agent 操作的不是同一个 —— 「所见即所操作」直接失效，而这是面板存在的理由 |
+| 写 `browser.cdp_url` 让 agent 连过来 | `cdp_url` 优先级高于自动拉起，用户手配过的地址会被我们覆盖；且 agent 侧还有 `/browser connect` 这条独立链路，两处真相源互相打架 |
+| 关面板杀进程树 | 会把 agent 正在用的浏览器一起杀掉，下一轮 `browser_exec` 重新冷启（数秒） |
+
+### 实测记录（2026-11-16，Windows 11 / JDK 27 / Chromium 145.0.7632.6）
+
+被测对象由**后端自己的 launcher** 拉起（不是 `Start-Process`）：
+`launch_chromium(key, user_data_dir=…, ephemeral=False, headed=True)` → `owned=True`。
+
+| # | 判据 | 结果 | 证据 |
+|---|---|---|---|
+| A0 | `cdp_url` 端口 → 监听 pid | ✅ | 端口 `57349` 的监听者 = launcher 报的主 pid `24644`（唯一一致） |
+| A0 | pid → 顶层 HWND | ✅ | `HWND=530110`，标题 `about:blank - Google Chrome for Testing` |
+| A1 | 跨进程窗口能被 `NativeView` 嵌进来且画面完整 | ✅ | 截图：Chromium 全界面（标签栏 / 地址栏 / 内容区）完整合成 |
+| A2 | Compose 能画在子窗口**之上**（DComp overlay） | ✅ | 同截图：蓝色工具栏稳压在页面之上，未被 Win32 子窗口盖住 |
+| A3 | resize 后子窗口跟随、不裂 | ✅ | 缩到 700×520：布局跟随、工具栏仍在上层、内容无撕裂 |
+| A4 | 槽位销毁**不杀**外部进程 | ✅ | `IsWindow(595646)=true`、`pid 21692` 存活 |
+| A5 | **端到端**：真实应用里展开抽屉能看到那只浏览器 | ✅ | 截图确认：应用右侧 360dp 抽屉内是 Chromium 的标签栏 + 地址栏 + 页面 |
+| A6 | **纳管与展示独立**：`TakeOver` 后抽屉仍关着 | ✅ | `browserLayoutProbe`：`panelOpen=false` 且 `takenOver=true` |
+| A7 | **收起抽屉不解挂**（不跳回独立窗口） | ✅ | 15 秒 × 30 次采样，解挂 **0 次**；窗口 `MainWindowHandle` 恒为 0 |
+
+**A6/A7 是 2026-11-17 用户反馈后补的设计**：第一版实现里"收起抽屉"会把槽位从组合树摘掉
+→ `NativeView` 销毁 → 窗口 `SetParent(NULL)` 恢复独立 → 下次展开再收进来，表现为
+「一会儿被纳管、一会儿又成了独立窗口」。同时心跳用 `discover()` 判活也会造成同一现象
+（见下方坑 ④）。现在**槽位常驻**、**判活只问 `isSlotAlive`**，两处都修了。
+
+**A5 的验证方式**（记录备查，避免下次以为自己测了其实没测）：让后端 launcher 在本程序
+实际使用的 `HERMES_HOME` 下拉起一只浏览器 → 在应用里点抽屉的「重新连接」→ 画面出现在抽屉里。
+
+尚未验（受环境限制，留真机手验）：**DPI 100·150·200% 切换**（要把窗口拖到不同缩放率的屏）、
+**最小化/还原**、**提权进程下的跨完整性级别嵌入**（UIPI 可能拒绝，见下）。
+
+### 实施中踩到的两个坑（都会"看起来能用其实不能"）
+
+**① Win32 的 `BOOL` 是 4 字节，不是 1 字节。**
+FFM 里把 `IsWindowVisible` / `IsWindow` 的返回声明成 `ValueLayout.JAVA_BOOLEAN` 会读错位，
+表现为**所有窗口都判为不可见** → 永远走 `Headless`，界面上说"agent 还没打开浏览器"。
+正确写法是 `ValueLayout.JAVA_INT` 然后 `!= 0`。这个 bug 不报错、不崩，只是静默地永远找不到。
+
+**② 不要用 `EnumWindows` + upcall stub 去找窗口。**
+回调跑在另一个栈上，把 `pid`/结果槽塞进 `lParam` 或线程局部都不可靠。改用
+`GetTopWindow(NULL)` + `GetWindow(GW_HWNDNEXT)` 显式遍历，纯同步 downcall，没有回调。
+
+**③ 用「最小化浏览器」来给应用腾出前台是个坏主意。**
+`IsWindowVisible` 对最小化窗口返回 false，发现逻辑会判定为 `Headless`。
+验证时要么把浏览器挪到副屏，要么接受它压在应用上面。
+
+**④ 已纳管后判活**不能再调** `discover()`。**
+`NativeView` 把窗口收成 child window 后，`GetTopWindow` 的枚举链里就没有它了，
+`discover()` 返回"没找到" → 误判浏览器消失 → 销毁槽位 → 窗口恢复独立 → 下一轮又找到
+→ **无限重挂**。这就是用户看到的"一会儿被纳管一会儿又成独立窗口"。
+判活只问 `isSlotAlive(hwnd, pid)` = `IsWindow` + `GetWindowThreadProcessId` 归属一致。
+
+**⑤ 收起抽屉不能销毁槽位，也不能给 0 尺寸。**
+销毁 → 同上，窗口被还原。给 0 尺寸 → `setBounds(0,0,0,0)`，而 Chromium 窗口带边框，
+会在窗口左上角露出一条竖线（实测）。正确做法是留在树里、1dp + 大负偏移挪出可视区。
+
+### 发现机制：为什么读 launch record 而不是 `cdp_url`
+
+ephemeral 形态（agent 默认路径，不传 `user_data_dir`）**同样写 record**，实测内容：
+
+```json
+{"owner_pid": 27900, "owner_start_time": 179483178320, "pid": 24976,
+ "start_time": 179483178395,
+ "user_data_dir": "…/home/cache/browser/chromium/<digest>",
+ "home_key": "…/home", "ephemeral": true, "ns": null,
+ "devtools": "/devtools/browser/97e2d58d-…"}
+```
+
+端口不直接在 record 里，但 `user_data_dir/DevToolsActivePort` 第一行就是（实测 `50619`）。
+两条加起来等价于 `cdp_url`，且**对 ephemeral 与持久 profile 都成立**。
+
+**不直接扫进程**（`Get-Process chrome | Where Path -like *payload*`）的原因：用户可能同时开着
+自己的 Chrome、也可能同时有多只 agent 浏览器（每个 launcher key 一只）。record 里有
+`owner_pid` + `start_time`，能精确判断「这只还活着且是哪个 home 的」。
+
+### 与 ADR-063 的关系
+
+**没有推翻的部分**（全部沿用）：
+
+- 面板 = `NativeView` + `nucleusHwndPlatformView`，不是 WebView、不是像素流；
+- DComp 覆盖层是"能用"与"好用"的分界（自写 `SetParent` 压不住工具栏）；
+- 只绑 `127.0.0.1`、随机端口、`--do-not-de-elevate`（提权时）；
+- `BrowserArgsReconciler` 的 `cdp_url` 自愈逻辑**保持不变**（它处理的是另一种故障）。
+
+**新增的约束**：
+
+1. **面板不写 `browser.cdp_url`**。原方案要写，现在不写 —— 我们只显示，不改 agent 的连接方式。
+2. **面板不杀进程**。`BrowserProcess` 这个类**不应存在**；只需要 `BrowserDiscovery`（发现）+
+   `BrowserAttachView`（显示）。
+3. **`browser.headed` 必须为 true 才有窗口可嵌**。headless 实例没有 HWND，面板只能显示提示卡片。
+   注意这个开关读的是**后端 `config.yaml` 的 `browser.headed`**，不是客户端
+   `config_custom.json` 的 `app.browser.headed` —— 后者注入的 `AGENT_BROWSER_HEADED`
+   后端只在 config 51→52 迁移里读过一次（实测仅 1 处命中），运行期不读（见下方"纠正"）。
+
+### 风险
+
+| 风险 | 判据 / 处置 |
+|---|---|
+| **UIPI**：提权进程（`app.elevate=ask` 且已提权）嵌入非提权的 Chromium 可能失败 | 失败时降级为「提示 + 外部打开」；另测「本进程未提权 + 浏览器提权」这一向（也可能拒绝） |
+| DPI 切换 | 真机手验；`NativeView` 内部有 `setCornerRadius`/`setBounds`，DPI 由 Nucleus 处理 |
+| 浏览器被 agent 中途换掉（新轮次新实例） | 面板订阅 record 变化，pid 变了就重挂槽位 |
+| 用户关掉了那只浏览器窗口 | 槽位变为空；显示「浏览器已关闭」+ 重新发现按钮 |
+
+### 纠正两条与实测不符的旧结论
+
+**① `06-roadmap.md` / 本条上文的「S5 体积未达 8 MB（22.04 MB）」是错的。**
+22.04 MiB 是 `.local/webview-probe/vs` **未裁剪**的体积。按我自己写的裁剪规则
+（删 `language/{typescript,css,html,json}` + 对应 `assets/*.worker-*` + `toggleHighContrast`）
+**实测裁完是 4.41 MiB（4,623,470 B）**，低于 8 MB 门槛。原结论把"未裁剪量"当成了"裁剪后量"。
+
+**② 客户端 `app.browser.headed` → `AGENT_BROWSER_HEADED` 这条注入是死代码。**
+后端 0 处读客户端 `config_custom.json`；`AGENT_BROWSER_HEADED` 在后端全仓仅 1 处命中
+（`hermes_cli/config_migrations_browser.py`，config 51→52 的一次性迁移）。
+运行期真正生效的是后端 `config.yaml` 的 `browser.headed`
+（`tools/browser_session_cloud.py::is_headed_mode`）。
+本机 `config.yaml` 已经是 `headed: true`，所以 attach 有窗口可嵌。
+**客户端那个开关要么改造成直接 `PUT /api/config` 写后端 `browser.headed`，要么明确标注为"仅老后端兼容"。**

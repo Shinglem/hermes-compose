@@ -26,7 +26,7 @@
 |---|---|
 | 修改后端（`C:\ai\hermes\app` 下的 Python / gateway / dashboard） | 契约只读，改了会与官方客户端分叉 |
 | JS 插件宿主（QuickJS / J2V8 / 内嵌 React） | 前端插件返回 `ReactNode`，保留生态 = 自造 WebView；详见 `.design/草案/07-decisions.md` ADR-003 |
-| 文件树 / 内置代码编辑器 / diff 视图 | 跳转外部 VSCode / IDEA 打开，见 ADR-005（**不内嵌 VSCode**，理由见 ADR-064） |
+| 文件树 / 内置代码编辑器 / diff 视图 | 跳转外部 VSCode / IDEA 打开（ADR-005，现行实现不变）。**2026-11-16 起三条调研线**：① WebView + Monaco；② 自研 + 对标开源（aardink 内核 + auto-dev 文件系统/diff）；③ md-one 分工（md-one 作预览器）。**均未选型**，见 ADR-078~081 |
 | 远程屏幕（noVNC / RFB） | 用 ToDesk / AweSun 等外部工具 |
 | 机器人聊天窗口 / 群聊窗口 | 本期只做"会话"主窗口；IM 风格聊天留作后续独立窗口 |
 | 视觉 1:1 复刻 | 用 Material 3 原生组件与配色，功能对等即可 |

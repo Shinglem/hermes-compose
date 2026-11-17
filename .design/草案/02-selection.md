@@ -192,7 +192,7 @@
 > ③ 15 个 `viewModel {}` 手工 lambda 是 `AppShell.kt` 1,059 行的根因之一。
 > `AppContainer` 保留，但降级为「非 Composable 侧门面」，内部从 Koin 解析。
 >
-> 同时新增：`kotlinx-collections-immutable` 0.5.2、`composewebview` 1.0.3（仅插件宿主骨架用）、
+> 同时新增：`kotlinx-collections-immutable` 0.5.2、`composewebview` 1.0.3（**Nucleus 官方 WebView 构件**，仅插件宿主骨架与文件编辑器用）、
 > Nucleus Tao（仅 `shell/`）、FileKit 0.17.0、Turbine 1.2.1（test）；
 > 移除 `adaptive-layout` / `adaptive-navigation` 与 `coil-*` 三件套（重复声明）。
 > **完整依赖表以 [`09-refactor.md`](../归档/v0.6.0-重构/09-refactor.md) §2.7 为准。**

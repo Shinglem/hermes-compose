@@ -279,6 +279,50 @@
 
 > 完整端点约 60 个（含 audio / local-models / mcp / webhooks / ops）。本期只接上表。
 
+### 3.3 文件系统（`/api/fs/*`）
+
+**文件与编辑器域的唯一数据源**：客户端（含 `desktopMain`）不直接读盘，`local` 与 `remote` 走同一套代码。
+`profile` 配了 `terminal.ssh_*` 时由后端 `SshWorkspaceFs` 转 SSH，客户端无感。
+
+| 端点 | 参数 | 返回 / 说明 |
+|---|---|---|
+| `GET /api/fs/list` | `path`, `profile` | `{entries:[{name, path, isDirectory}], error?}`。**失败是 HTTP 200 + `error` 字符串**（`ENOENT` / `EACCES` / `read-error`），不是异常 |
+| `GET /api/fs/read-text` | `path`, `session_id`, `profile` | `{text, language, binary, byteSize, mimeType, path, truncated}`。`language` 可直接喂给高亮器/Monaco |
+| `GET /api/fs/read-data-url` | `path`, `profile`, `session_id` | `{dataUrl}`；带 `ETag` + `Cache-Control: private, no-cache`，命中返回 **304**（**图片预览用这个**） |
+| `GET\|HEAD /api/fs/download` | `path`, `profile`, `session_id` | 附件下载；`HEAD` 只返回头（可用 `Content-Length` 补 `size`） |
+| `GET /api/fs/stream` | 同上 | Range 友好的流 |
+| `POST /api/fs/write-text` | body `{path, content, session_id?}` | `{ok, path, byteSize}`；**整体覆盖、无版本比对**（stale 检测是客户端责任） |
+| `GET /api/fs/git-root` | `path` | `{root}`；向上最多 50 层找 `.git` |
+| `GET /api/fs/default-cwd` | `profile` | workspace 默认浏览起点 |
+
+**阈值（客户端行为必须对齐，不要自己定）**：
+
+| 常量 | 值 | 表现 |
+|---|---|---|
+| `_FS_TEXT_PREVIEW_MAX_BYTES` | 512 KiB | `read-text` 超出即截断，返回 `truncated: true`（**UI 必须提示**） |
+| `_FS_TEXT_SOURCE_MAX_BYTES` | 64 MiB | 源文件超过直接 `413 File too large` |
+| `_FS_TEXT_WRITE_MAX_BYTES` | 8 MiB | 保存超过 `413 Content too large` |
+
+**隐藏与安全由后端承担**（客户端不重复实现）：`.git` `.hg` `.svn` `.cache` `.next` `.turbo`
+`.venv` `__pycache__` `build` `dist` `node_modules` `target` `venv`；
+敏感名 `.env` / `.env.*` / `.envrc` / `auth.json` / `credentials` 与目录 `mcp-tokens/` / `pairing/`
+在**出列阶段**就被剔除。
+
+**没有的能力（不要在客户端假设存在）**：
+
+- ❌ **文件监听**：后端无任何文件系统监听，WebSocket 端点上也没有文件通道。
+  刷新只能靠「agent 工具事件」启发式 + 手动刷新（见 ADR-078、`07-文件与编辑器.md` §3.2）。
+- ❌ **`mtime`**：任何端点都不返回，只能补 0。
+- ❌ **LSP**：`/api/` 全表无 LSP 端点；`agent/lsp/` 是给 agent 自己诊断用的，不对外。
+- ❌ 目录创建 / 删除 / 重命名：`/api/fs/*` 只有文本写入。
+
+> **旁路**：`/api/files`（managed files，`GET /api/files` 与 `/api/files/read`）返回
+> `size` + `mtime` + `mime_type`，但**只读本机、不走 SSH workspace**，与 `/api/fs/*` 语义不同。
+> 文件与编辑器域**不使用它**。
+>
+> **`/api/git/*`**：存在（`status` / `review/{list,diff,stage,unstage,revert,commit,push,create-pr}` /
+> `branches` / `branch/switch` / `worktrees` / `file-diff`），但本域**明确不接**。
+
 ---
 
 ## 4. 实现优先级

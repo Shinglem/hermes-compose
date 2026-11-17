@@ -87,6 +87,8 @@
 | [04-终端](详细设计/功能/04-终端.md) | `terminal` |
 | [05-能力](详细设计/功能/05-能力与设置.md) | `capabilities` |
 | [06-设置中心](详细设计/功能/06-设置中心.md) | `settings` |
+| [07-文件与编辑器](详细设计/功能/07-文件与编辑器.md) | `files`：**三条调研线**（WebView+Monaco / 对标开源自研 / md-one 分工）；**§15 可抄清单总账**、§16 Markdown 编辑方案 |
+| [08-浏览器侧栏](详细设计/功能/08-浏览器侧栏.md) | `browser`：右侧可收起抽屉，**attach agent 的 Chromium**（ADR-082） |
 
 ### UI设计/
 
@@ -149,7 +151,7 @@
 | 架构 | Component + Store（Decompose / MVIKotlin / Koin），桌面壳 = Nucleus Tao，业务代码零 AWT |
 | 已知偏差 | `ChatViewModel` 1951 行（唯一 >600 行文件，需 per-session Component） |
 | 未验证 | 触摸滚动（无设备）、中文 IME 完整链路（注入限制） |
-| 下一步 | v0.6.1 浏览器面板与插件宿主，见 [`草案/06-roadmap.md`](草案/06-roadmap.md) |
+| 下一步 | v0.6.1 浏览器侧栏（attach agent 的 Chromium，右侧抽屉），见 [`草案/06-roadmap.md`](草案/06-roadmap.md) 与 [`详细设计/功能/08-浏览器侧栏.md`](详细设计/功能/08-浏览器侧栏.md) |
 
 ## 实现态缺陷
 
