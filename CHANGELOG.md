@@ -6,6 +6,106 @@
 ---
 
 
+## [0.6.1] · 2026-11-17（hermes 0.23.0）
+
+> **完整包版本**：tag `v0.6.1-0.23.0`，由 CI `desktop-release` 构建。
+> 纯桌面外壳（不含 payload）；payload 与工具链不变：hermes 0.23.0 / `toolchain-v1`。
+
+> **v0.6.1 = 浏览器侧栏。** 只做浏览器；插件宿主骨架（原 S7.2）推后。
+
+### 新增
+
+- **浏览器侧栏（右侧可收起抽屉）**：在应用里**实时看 agent 正在操作的浏览器**。
+  - 形态是详情区右侧 360dp 抽屉（默认收起，可拖宽，窄窗 < 960dp 自动收起）；
+  - **纳管与展示分离**：agent 调 `browser_*` 工具时把浏览器窗口**收进本进程**
+    （`SetParent`，此后它不再是独立窗口），但**抽屉保持关闭**；用户点右侧竖条才展开看画面；
+  - **attach agent 已经拉起的那只 Chromium**，不自己起第二只（ADR-082 修订 ADR-063）——
+    所以「所见即所操作」成立；
+  - 发现走后端 launch record（`<HERMES_HOME>/cache/browser/chromium-records/`）+ `DevToolsActivePort`，
+    **不依赖 `browser.cdp_url`**（ephemeral 实例不写它）；
+  - `pid` → 顶层 `HWND` 用 FFM 遍历（`GetTopWindow` + `GW_HWNDNEXT`），不引 AWT / JNA；
+  - 嵌入式槽位用 `NativeView` + `nucleusHwndPlatformView`；**收起时槽位常驻**（挪出可视区，不销毁）；
+  - **多实例**：后端每个会话一只浏览器，同时开多个会话时会纳管多只；
+    标题行的 `浏览器1` / `浏览器2` 页签可切换，槽位各自常驻、只切换哪只在可视区内；
+  - 抽屉里不放地址栏：面板是观察窗，不是第二个浏览器（要自己浏览用「在系统浏览器打开」）。
+- **会话区滚动条 + 键盘翻页**：消息列表右侧加垂直滚动条（仅在可滚时显示）；
+  `PageUp` / `PageDown` / `Home` / `End` 可翻页 / 跳首尾（长会话不再只能靠拖滚动条）。
+
+### 修复
+
+- **浏览器窗口反复跳变**（一会儿被纳管、一会儿又成独立窗口）：三处根因——
+  ① 心跳用顶层窗口枚举判活（嵌入后枚举不到 → 误判消失）；
+  ② 收起抽屉销毁槽位（`SetParent(NULL)` 还原窗口）；
+  ③ 抽屉收起/展开时槽位的**父链变了**（两棵不同子树 → Compose 销毁重建 `NativeView`）。
+  改为 `isSlotAlive(hwnd, pid)` 判活 + 槽位常驻 + **父链恒定**（只有 modifier 随状态变）。
+  实测 15s × 30 次采样解挂 0 次。
+- **纳管要等约 5 秒**：`tool.start` 在 t≈1s 到达，但 Chrome 窗口 t≈4–5s 才出现，
+  首次发现必然扑空，之后只能等 5s 心跳。改为 `TakeOver` 走 250ms × 20 次短间隔重试，
+  窗口一出现就纳管（实测约 1 秒内）。
+- **心跳没有兜底**：`targets` 为空时心跳直接 return，导致"TakeOver 重试窗口用完就再也没人发现"。
+  改为心跳始终跑完整发现（内部按 pid 去重，不会重复挂）。
+- **`Searching` 态没有出口**：`refreshAll` 先置 `Searching`，而"没发现新实例"那条路径什么都不
+  dispatch，界面会永远停在"正在查找…"的转圈上（即使已经纳管成功）。加 `SearchFinished` 收尾。
+- **页签看不见**：页签行被 Chrome 原生子窗口盖住（`NativeView` 永远画在 Compose 之上，
+  槽位顶部内缩没算页签行高度）。改为 `SLOT_TOP_INSET` 覆盖标题行 + 错误条。
+- **空态文字"残缺"**：`Searching → NoBrowser` 时转圈消失导致整块文字垂直位移，
+  Skiko 只重绘新区域、旧文字像素残留叠成重影。转为圈区域始终占位 + 内容区铺不透明底色。
+- **抽屉宽度不能调整**：补上左边缘拖拽手柄。两个坑：`pointerInput` 的 key 若用 `widthDp`
+  会在拖动中重建手势识别器（一次只能拖一点）；光标用 `expect/actual` 包一层
+  （`PointerIcon` 需要 `java.awt.Cursor`，业务代码不直接 import AWT）。
+- **`browser.headed` 开关此前是死代码**：客户端把它注入成 `AGENT_BROWSER_HEADED` 环境变量，
+  但后端只在 config 51→52 迁移里读过一次，运行期读的是 `config.yaml` 的 `browser.headed`。
+  已改正设置页注释与文案。
+
+### 文档
+
+- **ADR-082**：浏览器面板改为 attach agent 的浏览器；含五项实测（跨进程嵌入 / DComp 覆盖 /
+  resize / 不杀进程 / 真实应用端到端）与三个实施坑（`BOOL` 4 字节、别用 upcall stub、
+  最小化会让 `IsWindowVisible` 为 false）。
+- **ADR-063** 加修订说明；**ADR-078 / 06-roadmap** 修正 Monaco 体积结论：
+  此前记的「22.04 MB、未达 8 MB 目标」是**未裁剪**体积，按裁剪规则实删后是 **4.41 MiB**，
+  S5 实际是**通过**的。
+- 新增 [`详细设计/功能/08-浏览器侧栏.md`](.design/详细设计/功能/08-浏览器侧栏.md)。
+
+### 测试
+
+`@Test` 从 **823 → 856**（净增 33）：`BrowserReducerTest` 27 条 + `ChromiumRecordTest` 6 条。
+
+**端到端真机验证（2026-11-17，通过）**：应用里 `Ctrl+N` 新建会话 → 发 prompt 让 agent 执行
+`browser_exec` → Chrome 短暂出现后被纳管（20 秒 × 40 次采样，可见顶层窗口恒为 0）→
+抽屉默认保持关闭 → 点右侧竖条后能看到那只浏览器的真实画面。
+
+> 测试方法的三个坑记在
+> [`08-浏览器侧栏.md`](.design/详细设计/功能/08-浏览器侧栏.md) §10.2：事件只推给 resume 过的会话、
+> `browser.headed` 要改后端配置（不是客户端配置）、往 Compose 输入框送文本要用剪贴板。
+
+### 升级
+
+**覆盖 `bin/App.jar` 即可，不用动 `config/`、`data/`、`hermes/`。**
+
+```powershell
+# 1) 先停进程（jar 被占用会写坏）
+Get-Process -Name hermes-desktop-compose -ErrorAction SilentlyContinue | Stop-Process -Force
+# 2) 只覆盖 jar
+Copy-Item <新版本>\bin\App.jar <安装目录>\bin\App.jar -Force
+# 3) 核对 hash
+(Get-FileHash <安装目录>\bin\App.jar).Hash -eq (Get-FileHash <新版本>\bin\App.jar).Hash
+# 4) 用计划任务以托盘态拉起
+schtasks /Run /TN 'HermesCompose-<id>'
+```
+
+**唯一需要留意的配置项**：要让抽屉里能看到浏览器画面，后端 `config.yaml` 的
+`browser.headed` 必须是 `true`（headless 实例没有窗口可嵌，面板会显示「headless 模式」提示）。
+这一项**不是**客户端 `config_custom.json` 里的 `app.browser.headed` —— 后者注入的
+`AGENT_BROWSER_HEADED` 环境变量后端运行期已不再读取。改法：
+
+```powershell
+Invoke-WebRequest -Uri "http://127.0.0.1:<port>/api/config?profile=default" -Method PUT `
+  -Headers @{ Authorization = "Bearer <token>"; 'Content-Type' = 'application/json' } `
+  -Body '{"config":{"browser":{"headed":true}}}'
+```
+
+---
 ## [0.6.0] · 2026-11-15（hermes 0.23.0）
 
 > **完整包版本**：tag `v0.6.0-0.23.0`，由 CI `desktop-release` 构建。
@@ -1057,7 +1157,7 @@ jlink 裁剪运行时、原生启动器打包、单实例与自启任务清理�
 
 | Release | tag 形式 | 资产 |
 |---|---|---|
-| 桌面端 | `v0.6.0-0.23.0` | `hermes-desktop-compose-0.6.0-0.23.0-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
+| 桌面端 | `v0.6.1-0.23.0` | `hermes-desktop-compose-0.6.1-0.23.0-windows-x64.7z.001`（+ 后续卷）+ `SHA256SUMS.txt` |
 | 工具链 | `toolchain-v1` | `launcher-windows-x64.zip` / `runtime-windows-x64.zip` / `SHA256SUMS.txt` |
 | payload | 另一个仓库 `Shinglem/hermes-bundle` 的 `v0.23.0` | payload 压缩分卷 |
 
